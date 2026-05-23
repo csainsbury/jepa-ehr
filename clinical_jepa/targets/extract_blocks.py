@@ -41,11 +41,22 @@ def _limit_for_split(args: argparse.Namespace, split: str) -> int:
     return int({"train": args.max_real_train, "dev": args.max_real_dev, "test": args.max_real_test}[split])
 
 
-def _source_paths(split_manifest: dict[str, Any], split: str) -> tuple[str, str]:
-    index_paths = split_manifest.get("source_index_paths", {})
-    h5_paths = split_manifest.get("source_h5_paths", {})
+def _source_spec(split_manifest: dict[str, Any], source_role: str) -> dict[str, Any]:
+    if source_role == "primary":
+        return split_manifest
+    if source_role == "external_validation":
+        spec = split_manifest.get("external_validation") or {}
+        if not spec:
+            raise ValueError("split manifest lacks external_validation source metadata")
+        return spec
+    raise ValueError(f"unsupported source role: {source_role}")
+
+
+def _source_paths(source_spec: dict[str, Any], split: str) -> tuple[str, str]:
+    index_paths = source_spec.get("source_index_paths", {})
+    h5_paths = source_spec.get("source_h5_paths", {})
     if split not in index_paths or split not in h5_paths:
-        raise ValueError(f"split manifest lacks source paths for split={split}")
+        raise ValueError(f"source metadata lacks source paths for split={split}")
     return str(index_paths[split]), str(h5_paths[split])
 
 
@@ -117,13 +128,14 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
 
     blocks: list[dict[str, Any]] = []
     counts: dict[str, dict[str, int]] = {}
-    source_dataset = split_manifest.get("dataset", "flatascend-b1a-rekeyed")
+    source_spec = _source_spec(split_manifest, args.source_role)
+    source_dataset = source_spec.get("dataset") or source_spec.get("name") or split_manifest.get("dataset", "flatascend-b1a-rekeyed")
     processed = {"train": 0, "dev": 0, "test": 0}
     skipped_short = {"train": 0, "dev": 0, "test": 0}
     t1_no_anchor = {"train": 0, "dev": 0, "test": 0}
 
     for split in ["train", "dev", "test"]:
-        index_path, h5_path = _source_paths(split_manifest, split)
+        index_path, h5_path = _source_paths(source_spec, split)
         limit = _limit_for_split(args, split)
         with h5py.File(h5_path, "r") as h5:
             for row in _iter_jsonl(index_path):
@@ -169,6 +181,8 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
         "targets": args.targets,
         "caps": {"train": args.max_real_train, "dev": args.max_real_dev, "test": args.max_real_test},
         "t0_gap_events": int(args.t0_gap_events),
+        "source_role": args.source_role,
+        "source_dataset": source_dataset,
         "aggregate_only": True,
     }
     return blocks, {"counts": counts, "report": report}
@@ -210,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-real-test", type=int, default=0, help="0 means no cap")
     ap.add_argument("--t1-anchors-per-sequence", type=int, default=1)
     ap.add_argument("--t0-gap-events", type=int, default=0, help="Number of events to skip between context end and T0 target start")
+    ap.add_argument("--source-role", default="primary", choices=["primary", "external_validation"], help="Source to extract from when the split manifest includes external validation metadata")
     args = ap.parse_args(argv)
 
     dataset_cfg = load_yaml(args.dataset_config)
@@ -231,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
         "created_utc": now_utc(),
         "dry_run": dry_run,
         "source_split_manifest": str(Path(args.split_manifest)),
+        "source_role": args.source_role,
         "targets": args.targets,
         "counts": details["counts"],
         "blocks": blocks,
