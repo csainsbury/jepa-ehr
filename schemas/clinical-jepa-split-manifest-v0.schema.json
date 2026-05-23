@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-split-manifest-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "dataset", "split_policy", "seed", "hash_method", "salt_exported", "counts", "locked_stress_tests"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-split-manifest-v0"]},
+    "created_utc": {"type": "string"},
+    "dataset": {"type": "string"},
+    "split_policy": {"type": "string"},
+    "seed": {"type": "integer"},
+    "hash_method": {"type": "string"},
+    "salt_exported": {"type": "boolean"},
+    "counts": {
+      "type": "object",
+      "required": ["patients_train", "patients_dev", "patients_test"],
+      "properties": {
+        "patients_train": {"type": "integer", "minimum": 0},
+        "patients_dev": {"type": "integer", "minimum": 0},
+        "patients_test": {"type": "integer", "minimum": 0}
+      }
+    },
+    "locked_stress_tests": {"type": "array", "items": {"type": "string"}}
+  }
+}

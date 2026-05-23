@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-query-descriptors-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "queries"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-query-descriptors-v0"]},
+    "created_utc": {"type": "string"},
+    "queries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["query_id", "target_type", "horizon", "label_source", "task_type"],
+        "properties": {
+          "query_id": {"type": "string"},
+          "target_type": {"type": "string", "enum": ["T0", "T1", "T2"]},
+          "horizon": {"type": "string"},
+          "label_source": {"type": "string"},
+          "task_type": {"type": "string"},
+          "leakage_notes": {"type": "string"}
+        }
+      }
+    }
+  }
+}

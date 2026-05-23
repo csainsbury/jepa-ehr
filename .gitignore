@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editors / OS
+.DS_Store
+._*
+.vscode/
+.idea/
+
+# Secrets / credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.pass
+*credential*
+*secret*
+*oauth*
+*token.json
+
+# Clinical data / patient-level artifacts
+raw/
+data/
+datasets/
+bundles/
+sequences/
+index/
+run-workspace/
+outputs/
+checkpoints/
+embeddings/
+*.h5
+*.hdf5
+*.parquet
+*.feather
+*.arrow
+*.csv
+*.tsv
+*.jsonl
+
+# Model/checkpoint/embedding artifacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.npy
+*.npz
+*.tar
+*.tar.gz
+*.tar.zst
+*.enc
+*.sha256
+
+# Logs / generated reports that may contain paths
+*.log
+latest*.txt

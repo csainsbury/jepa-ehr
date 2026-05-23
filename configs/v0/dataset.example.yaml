@@ -1,0 +1,57 @@
+# Clinical-JEPA v0 dataset config example
+# Copy to dataset.yaml and replace placeholders only after human approval.
+# Do not put real patient identifiers, credentials, or raw-data paths in this file.
+
+schema_version: clinical-jepa-dataset-config-v0
+
+run:
+  seed: 20260523
+  artifact_root: run-workspace/state/task-work/clinical-jepa-pilot
+  dry_run_default: true
+
+data_tier:
+  selected: tokenised_placeholder # one of: safe_planning, tokenised_placeholder, raw_lite_placeholder
+  requires_human_approval_before_execution: true
+  governance_status: placeholder-confirm-before-use
+
+sources:
+  primary:
+    name: mimic-iv-tokenised-placeholder
+    role: train_dev_test
+    tokenised_index_path: /PLACEHOLDER/approved/tokenised/index.jsonl
+    tokenised_sequence_root: /PLACEHOLDER/approved/tokenised/sequences
+    schema_metadata_path: /PLACEHOLDER/approved/tokenised/schema.json
+    patient_key_column: PLACEHOLDER_PERSON_KEY_LOCAL_ONLY
+    time_order_column: PLACEHOLDER_RELATIVE_TIME_OR_EVENT_INDEX
+  secondary:
+    name: inspect-placeholder
+    role: external_validation_optional
+    tokenised_index_path: /PLACEHOLDER/approved/inspect/index.jsonl
+  locked_stress:
+    name: eicu-crd-placeholder
+    role: locked_stress_no_tuning
+    tokenised_index_path: /PLACEHOLDER/approved/eicu/index.jsonl
+
+split:
+  policy: patient-level-before-windowing
+  train_fraction: 0.70
+  dev_fraction: 0.15
+  test_fraction: 0.15
+  temporal_holdout:
+    enabled: false
+    policy: placeholder-later-period-if-available
+  hash_method: salted-hmac-sha256-local-salt-not-exported
+  write_hashed_lists: false
+  salt_env_var: CLINICAL_JEPA_SPLIT_SALT_PLACEHOLDER
+
+logging:
+  aggregate_only: true
+  log_patient_examples: false
+  log_raw_tokens: false
+  log_direct_identifiers: false
+
+safety:
+  no_external_upload: true
+  stop_if_disk_free_gb_below: 100
+  stop_if_governance_unclear: true
+  stop_if_patient_linkage_missing: true

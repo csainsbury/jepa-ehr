@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-v0a-embedding-cache-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "flatascend_checkpoint_alias", "tokenizer_version", "prefix_only", "target_layers", "pooling", "counts", "leakage_audit_status"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-v0a-embedding-cache-v0"]},
+    "created_utc": {"type": "string"},
+    "flatascend_checkpoint_alias": {"type": "string"},
+    "tokenizer_version": {"type": "string"},
+    "prefix_only": {"type": "boolean", "const": true},
+    "target_layers": {"type": "array", "items": {"type": "string"}},
+    "pooling": {"type": "array", "items": {"type": "string"}},
+    "counts": {"type": "object"},
+    "leakage_audit_status": {"type": "string", "enum": ["pass"]}
+  }
+}

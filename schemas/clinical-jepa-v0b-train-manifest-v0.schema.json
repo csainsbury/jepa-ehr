@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-v0b-train-manifest-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "architecture", "n_synthetic_examples", "trained_steps", "leakage_audit_status"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-v0b-train-manifest-v0"]},
+    "created_utc": {"type": "string"},
+    "architecture": {"type": "object"},
+    "n_synthetic_examples": {"type": "integer", "minimum": 0},
+    "trained_steps": {"type": "integer", "minimum": 0},
+    "leakage_audit_status": {"type": "string", "enum": ["pass"]}
+  }
+}

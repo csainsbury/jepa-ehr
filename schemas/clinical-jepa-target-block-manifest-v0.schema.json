@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-target-block-manifest-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "targets", "counts", "blocks"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-target-block-manifest-v0"]},
+    "created_utc": {"type": "string"},
+    "targets": {"type": "array", "items": {"type": "string", "enum": ["T0", "T1", "T2"]}},
+    "counts": {"type": "object"},
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["block_id", "patient_hash", "split", "target_type", "context_start_ref", "context_end_ref", "target_start_ref", "target_end_ref", "horizon_descriptor", "source_dataset"],
+        "properties": {
+          "block_id": {"type": "string"},
+          "patient_hash": {"type": "string"},
+          "split": {"type": "string", "enum": ["train", "dev", "test", "stress"]},
+          "target_type": {"type": "string", "enum": ["T0", "T1", "T2"]},
+          "context_start_ref": {"type": "integer"},
+          "context_end_ref": {"type": "integer"},
+          "target_start_ref": {"type": "integer"},
+          "target_end_ref": {"type": "integer"},
+          "horizon_descriptor": {"type": "string"},
+          "source_dataset": {"type": "string"}
+        }
+      }
+    }
+  }
+}

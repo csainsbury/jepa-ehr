@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-metrics-bundle-v0",
+  "type": "object",
+  "required": ["created_utc", "metrics"],
+  "properties": {
+    "created_utc": {"type": "string"},
+    "metrics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["arm", "metric", "target_type", "split", "horizon", "distractor_policy", "leakage_audit_status", "value", "confidence_interval"],
+        "properties": {
+          "arm": {"type": "string"},
+          "metric": {"type": "string"},
+          "target_type": {"type": "string"},
+          "split": {"type": "string"},
+          "horizon": {"type": "string"},
+          "distractor_policy": {"type": "string"},
+          "leakage_audit_status": {"type": "string", "enum": ["pass"]},
+          "value": {"type": "number"},
+          "confidence_interval": {"type": "array", "items": {"type": "number"}}
+        }
+      }
+    }
+  }
+}

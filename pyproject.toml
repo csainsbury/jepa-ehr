@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jepa-ehr"
+version = "0.0.1"
+description = "Leakage-aware Clinical-JEPA scaffolding for tokenised EHR sequences"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+data = ["h5py>=3.10"]
+torch = ["torch>=2.0"]
+dev = ["h5py>=3.10"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["clinical_jepa*"]

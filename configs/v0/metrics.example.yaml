@@ -1,0 +1,91 @@
+# Clinical-JEPA v0 metrics config example
+# Copy to metrics.yaml after implementation choices are approved.
+# Contains no real patient paths, credentials, or patient-level examples.
+
+schema_version: clinical-jepa-metrics-config-v0
+
+requirements:
+  require_passing_leakage_audit: true
+  aggregate_only_outputs: true
+  patient_level_aggregation: true
+  confidence_intervals: bootstrap_by_patient_if_available
+
+splits:
+  tune_on: dev
+  final_report_on: test
+  locked_stress_no_tuning: eICU-CRD-placeholder
+
+retrieval:
+  enabled: true
+  metrics: [recall_at_1, recall_at_5, recall_at_10, mrr, true_target_percentile]
+  distractor_policies:
+    - random_same_split
+    - matched_by_horizon_site_utilisation
+  report_by_target_type: [T0, T1, T2]
+  require_horizon_in_metric_record: true
+
+clinical_probes:
+  enabled: true
+  tasks:
+    - name: next_medication_family
+      target_type: T0
+      metrics: [top_k_accuracy, macro_f1]
+    - name: next_lab_direction
+      target_type: T0
+      metrics: [macro_f1, calibration]
+    - name: medication_lab_preservation
+      target_type: T1
+      metrics: [top_k_accuracy, macro_f1]
+    - name: mortality_or_shock_onset
+      target_type: T2
+      enabled: false
+      reason: prefix-safe labels not confirmed
+      metrics: [auroc, auprc, calibration]
+
+collapse_diagnostics:
+  enabled: true
+  metrics:
+    - effective_rank
+    - per_dimension_variance
+    - covariance_spectrum
+    - nearest_neighbour_patient_diversity
+    - average_target_predictor_delta
+  stop_if_average_target_competitive: true
+
+utilisation_diagnostics:
+  enabled: true
+  features:
+    - prefix_sequence_length
+    - visit_or_admission_count
+    - lab_count
+    - medication_count
+    - diagnosis_or_procedure_count
+    - measurement_density
+    - observed_time_span
+  analyses:
+    - utilisation_only_baseline
+    - stratified_by_utilisation_quantile
+    - matched_distractor_delta
+    - residual_after_utilisation_control
+
+baselines:
+  empirical_prior:
+    enabled: true
+  bag_count_time:
+    enabled: true
+  utilisation_intensity:
+    enabled: true
+  frozen_flatascend_context_probe:
+    enabled: false
+    reason: requires v0A assets
+  direct_query_conditioned:
+    enabled: true
+  average_target_predictor:
+    enabled: true
+
+reporting:
+  output_dir: run-workspace/state/task-work/clinical-jepa-pilot/v0/results
+  write_markdown_summary: true
+  write_json_records: true
+  log_patient_level_predictions: false
+  log_nearest_neighbour_examples: false

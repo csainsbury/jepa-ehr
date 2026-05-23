@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-leakage-audit-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "target_blocks", "audits", "overall_status"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-leakage-audit-v0"]},
+    "created_utc": {"type": "string"},
+    "dataset": {"type": ["string", "null"]},
+    "target_blocks": {"type": "array", "items": {"type": "string"}},
+    "overall_status": {"type": "string", "enum": ["pass", "fail"]},
+    "audits": {
+      "type": "object",
+      "required": ["patient_overlap", "window_inheritance", "horizon_boundary", "forbidden_tokens", "cached_embeddings", "duplicate_windows", "label_feature_separation"],
+      "properties": {
+        "patient_overlap": {"$ref": "#/definitions/audit_result"},
+        "window_inheritance": {"$ref": "#/definitions/audit_result"},
+        "horizon_boundary": {"$ref": "#/definitions/audit_result"},
+        "forbidden_tokens": {"$ref": "#/definitions/audit_result"},
+        "cached_embeddings": {"$ref": "#/definitions/audit_result"},
+        "duplicate_windows": {"$ref": "#/definitions/audit_result"},
+        "label_feature_separation": {"$ref": "#/definitions/audit_result"}
+      }
+    }
+  },
+  "definitions": {
+    "audit_result": {
+      "type": "object",
+      "required": ["status", "violations"],
+      "properties": {
+        "status": {"type": "string", "enum": ["pass", "fail", "not_configured", "not_applicable"]},
+        "violations": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}
