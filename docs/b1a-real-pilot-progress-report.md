@@ -213,9 +213,11 @@ A fairer MIMIC-trained v0A transfer ridge was then fitted on MIMIC train embeddi
 
 Interpretation: within-INSPECT v0A can fit strong gap-0 source-specific mappings, but MIMIC-trained v0A transfer to INSPECT is much weaker than the MIMIC-trained v0B checkpoint under this retrieval framing.
 
-## v0B scaled 256d / 25k follow-up
+## v0B scaled mean-token follow-ups
 
-Queued and ran a scaled mean-token v0B follow-up with 256-dimensional embeddings, 25k steps, larger context/target caps, and utilisation/sequence/context-count matched retrieval.
+Queued and ran scaled mean-token v0B follow-ups with larger context/target caps and utilisation/sequence/context-count matched retrieval.
+
+### 256d / 25k
 
 Training diagnostics:
 
@@ -233,7 +235,58 @@ Retrieval results:
 | INSPECT gap 16 | `0.6688` | `0.4479` | `3` | `17,598` |
 | INSPECT gap 64 | `0.5779` | `0.3687` | `6` | `16,496` |
 
-Interpretation caution: this is still the mean-token scaffold, not a true EMA/transformer JEPA architecture. The retrieval jump is large and useful, but should be checked against the scaled-model query/time-shift controls now queued before over-interpreting.
+Scaled-model query/time-shift controls are no longer near zero under the very fine utilisation/context-count policy, but remain far below the observed scores:
+
+| Evaluation source/gap | observed R@10 | target-shuffle R@10 | query-shuffle R@10 | time-shift R@10 |
+|---|---:|---:|---:|---:|
+| MIMIC gap 0 | `0.8597` | `0.0767` | `0.0775` | `0.0754` |
+| MIMIC gap 16 | `0.7666` | `0.0814` | `0.0815` | `0.0794` |
+| MIMIC gap 64 | `0.7251` | `0.1074` | `0.1075` | `0.1035` |
+| INSPECT gap 0 | `0.7181` | `0.1462` | `0.1461` | `0.1438` |
+| INSPECT gap 16 | `0.6688` | `0.1452` | `0.1461` | `0.1421` |
+| INSPECT gap 64 | `0.5779` | `0.1400` | `0.1418` | `0.1379` |
+
+### 512d / 20k
+
+A 512-dimensional, 20k-step sweep improved MIMIC retrieval further but underperformed the 256d/25k run on INSPECT transfer.
+
+Training diagnostics:
+
+- dev cosine: `0.3889`
+- dev effective rank: `196.23`
+
+Retrieval results:
+
+| Evaluation source/gap | Recall@10 | MRR | median rank | evaluated blocks |
+|---|---:|---:|---:|---:|
+| MIMIC gap 0 | `0.9319` | `0.7996` | `1` | `58,058` |
+| MIMIC gap 16 | `0.8199` | `0.6188` | `1` | `51,344` |
+| MIMIC gap 64 | `0.7265` | `0.5097` | `2` | `34,025` |
+| INSPECT gap 0 | `0.7004` | `0.4842` | `3` | `18,004` |
+| INSPECT gap 16 | `0.6430` | `0.4238` | `4` | `17,598` |
+| INSPECT gap 64 | `0.5540` | `0.3458` | `7` | `16,496` |
+
+Candidate-normalized retrieval with only groups containing at least 128 candidates and at most 512 sampled candidates preserved the ordering: 512d best on MIMIC, 256d best on INSPECT transfer.
+
+| Model / source-gap | Recall@10 | MRR | evaluated blocks | skipped small-group queries |
+|---|---:|---:|---:|---:|
+| 10k / MIMIC gap 0 | `0.7774` | `0.5700` | `47,253` | `10,943` |
+| 10k / MIMIC gap 16 | `0.7284` | `0.5133` | `41,246` | `10,232` |
+| 10k / MIMIC gap 64 | `0.6711` | `0.4473` | `24,950` | `9,200` |
+| 256d/25k / MIMIC gap 0 | `0.8723` | `0.6891` | `47,253` | `10,943` |
+| 256d/25k / MIMIC gap 16 | `0.7791` | `0.5692` | `41,246` | `10,232` |
+| 256d/25k / MIMIC gap 64 | `0.7064` | `0.4837` | `24,950` | `9,200` |
+| 256d/25k / INSPECT gap 0 | `0.6427` | `0.4340` | `11,421` | `6,762` |
+| 256d/25k / INSPECT gap 16 | `0.5891` | `0.3820` | `11,285` | `6,497` |
+| 256d/25k / INSPECT gap 64 | `0.4845` | `0.2982` | `10,691` | `5,978` |
+| 512d/20k / MIMIC gap 0 | `0.9412` | `0.8171` | `47,253` | `10,943` |
+| 512d/20k / MIMIC gap 16 | `0.8349` | `0.6345` | `41,246` | `10,232` |
+| 512d/20k / MIMIC gap 64 | `0.7102` | `0.4881` | `24,950` | `9,200` |
+| 512d/20k / INSPECT gap 0 | `0.6232` | `0.4175` | `11,421` | `6,762` |
+| 512d/20k / INSPECT gap 16 | `0.5605` | `0.3621` | `11,285` | `6,497` |
+| 512d/20k / INSPECT gap 64 | `0.4596` | `0.2775` | `10,691` | `5,978` |
+
+Interpretation caution: these are still mean-token scaffolds, not true EMA/transformer JEPA architectures. Scaling improves retrieval substantially, but candidate-set/group-size effects and source-transfer differences must be reported explicitly. A 256d/50k follow-up is now running to test whether the 256d external-transfer advantage improves with longer training.
 
 Sanitized aggregate snapshots:
 
@@ -245,6 +298,9 @@ state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness
 state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/inspect-external/
 state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/v0a-inspect-transfer/
 state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/v0b-scaled-256d-25k/
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/scaled-query-time-controls/
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/v0b-scaled-512d-20k/
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/candidate-normalized/
 ```
 
 ## Current outputs of interest
@@ -268,7 +324,6 @@ v0/real-b1a-pilot-70k/controls/context-family/summary.md
 
 ## Recommended next atoms
 
-1. Finish the scaled v0B 256d/25k query/time-shift controls now running/queued on Vast.
-2. Finish the queued v0B 512d/20k scale sweep and compare against 256d/25k.
-3. Run controls against the 512d/20k model if it improves or matches 256d/25k.
-4. Then consider a true larger v0B encoder/EMA target architecture beyond the mean-token scaffold.
+1. Finish the running v0B 256d/50k follow-up and compare against 256d/25k and 512d/20k.
+2. Run query/time-shift and candidate-normalized controls for 256d/50k if it improves or matches 256d/25k.
+3. Then consider a true larger v0B encoder/EMA target architecture beyond the mean-token scaffold.
