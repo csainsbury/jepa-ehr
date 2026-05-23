@@ -189,7 +189,7 @@ def _evaluate_task(x: np.ndarray, rows: list[dict[str, Any]], labels: dict[str, 
     return metrics
 
 
-def _train_target_predictor_and_retrieve(files: dict[str, str], rows: list[dict[str, Any]], outdir: Path, *, max_candidates: int, lam: float) -> dict[str, Any] | None:
+def _train_target_predictor_and_retrieve(files: dict[str, str], rows: list[dict[str, Any]], outdir: Path, *, max_candidates: int, lam: float, distractor_policy: str) -> dict[str, Any] | None:
     retrievals: dict[str, Any] = {}
     pairs = [
         ("mean_to_mean", "final_mean_fp16", "target_final_mean_fp16"),
@@ -213,7 +213,7 @@ def _train_target_predictor_and_retrieve(files: dict[str, str], rows: list[dict[
             rows,
             y.astype(np.float16),
             rows,
-            distractor_policy="same_split_target_type",
+            distractor_policy=distractor_policy,
             max_candidates_per_group=max_candidates,
         )
         report["predictor"] = {"name": name, "context_embedding": context_key, "target_embedding": target_key, "ridge_lambda": lam, "predicted_embedding_file": str(pred_path)}
@@ -230,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dataset-config")
     ap.add_argument("--target-blocks")
     ap.add_argument("--retrieval-max-candidates", type=int, default=4096)
+    ap.add_argument("--retrieval-policy", default="same_split_target_type", choices=["same_split", "same_split_target_type", "same_split_target_type_len_bin"])
     ap.add_argument("--ridge-lambda", type=float, default=10.0)
     args = ap.parse_args(argv)
     emb = read_json(args.embedding_manifest)
@@ -263,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         all_metrics.extend(_evaluate_task(x, rows, labels, "next_lab_family", "lab", pooling_name))
         all_metrics.extend(_evaluate_task(x, rows, labels, "next_state_family", "state", pooling_name))
 
-    retrievals = _train_target_predictor_and_retrieve(files, rows, outdir, max_candidates=args.retrieval_max_candidates, lam=args.ridge_lambda)
+    retrievals = _train_target_predictor_and_retrieve(files, rows, outdir, max_candidates=args.retrieval_max_candidates, lam=args.ridge_lambda, distractor_policy=args.retrieval_policy)
     manifest = {"schema_version": "clinical-jepa-v0a-train-manifest-v0", "created_utc": now_utc(), "dry_run": False, "variants": ["ridge_linear_probe", "nearest_centroid_probe", "ridge_target_embedding_predictor"], "embedding_manifest": args.embedding_manifest, "trained": True, "aggregate_only": True, "n_embedding_rows": len(rows), "n_labeled_blocks": len(labels), "retrieval_predictors": list(retrievals or {})}
     write_json(outdir / "train-manifest.json", manifest)
     write_json(outdir / "prediction-manifest.json", {"created_utc": now_utc(), "dry_run": False, "aggregate_only": True, "metrics": all_metrics, "retrieval": retrievals})

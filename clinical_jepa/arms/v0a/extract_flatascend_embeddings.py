@@ -150,6 +150,8 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
                         "target_type": b.get("target_type"),
                         "horizon_descriptor": b.get("horizon_descriptor"),
                         "gap_events": b.get("gap_events"),
+                        "context_len": int(len(c_ids[j])),
+                        "target_len": int(len(t_ids[j])) if args.include_target_embeddings else int(int(b.get("target_end_ref", 0)) - int(b.get("target_start_ref", 0)) + 1),
                         "source_dataset": b.get("source_dataset"),
                     }
                     idx_f.write(json.dumps(rec, separators=(",", ":")) + "\n")

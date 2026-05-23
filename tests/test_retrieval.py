@@ -34,6 +34,19 @@ class RetrievalMetricTests(unittest.TestCase):
         self.assertEqual(set(report["groups"]), {"train|T0", "dev|T0"})
         self.assertEqual(report["overall"]["n"], 4)
 
+    def test_length_binned_policy_uses_context_and_target_lengths(self) -> None:
+        target = np.eye(4, dtype=np.float32)
+        query = target.copy()
+        index = [
+            {"block_id": "a", "split": "dev", "target_type": "T0", "context_len": 12, "target_len": 32},
+            {"block_id": "b", "split": "dev", "target_type": "T0", "context_len": 14, "target_len": 32},
+            {"block_id": "c", "split": "dev", "target_type": "T0", "context_len": 80, "target_len": 32},
+            {"block_id": "d", "split": "dev", "target_type": "T0", "context_len": 90, "target_len": 32},
+        ]
+        report = compute_retrieval_metrics(query, index, target, index, distractor_policy="same_split_target_type_len_bin")
+        self.assertEqual(report["n_candidate_groups"], 2)
+        self.assertEqual(report["overall"]["n"], 4)
+
 
 
 class TargetBlockGapTests(unittest.TestCase):

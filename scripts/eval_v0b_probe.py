@@ -49,6 +49,7 @@ def main() -> None:
     ap.add_argument("--max-context-tokens", type=int, default=128)
     ap.add_argument("--max-target-tokens", type=int, default=32)
     ap.add_argument("--retrieval-max-candidates", type=int, default=4096)
+    ap.add_argument("--retrieval-policy", default="same_split_target_type", choices=["same_split", "same_split_target_type", "same_split_target_type_len_bin"])
     args = ap.parse_args()
 
     # YAML is only needed for the vocabulary path; avoid logging config contents.
@@ -105,6 +106,10 @@ def main() -> None:
                             "block_id": block.get("block_id"),
                             "split": block.get("split"),
                             "target_type": block.get("target_type"),
+                            "horizon_descriptor": block.get("horizon_descriptor"),
+                            "gap_events": block.get("gap_events"),
+                            "context_len": int(len(ctx_ids[j])),
+                            "target_len": int(len(tgt_ids[j])),
                         }
                     )
     finally:
@@ -128,7 +133,7 @@ def main() -> None:
         rows,
         target_mean,
         rows,
-        distractor_policy="same_split_target_type",
+        distractor_policy=args.retrieval_policy,
         max_candidates_per_group=args.retrieval_max_candidates,
     )
 
@@ -148,6 +153,7 @@ def main() -> None:
             [
                 "# v0B target retrieval",
                 "",
+                f"Distractor policy: {retrieval['distractor_policy']}",
                 f"Queries: {retrieval['overall']['n']}",
                 f"Recall@1: {retrieval['overall']['recall_at_1']:.4f}",
                 f"Recall@5: {retrieval['overall']['recall_at_5']:.4f}",
@@ -164,7 +170,7 @@ def main() -> None:
             lines.append(
                 f"- {metric['task']} / {metric['split']}: top1={metric['top1_accuracy']:.3f}, n={metric['n_evaluated']}, classes={metric['n_classes_train']}"
             )
-    lines.extend(["", "## Retrieval", "", f"- Recall@10: {retrieval['overall']['recall_at_10']:.4f}", f"- MRR: {retrieval['overall']['mrr']:.4f}"])
+    lines.extend(["", "## Retrieval", "", f"- Policy: {retrieval['distractor_policy']}", f"- Recall@10: {retrieval['overall']['recall_at_10']:.4f}", f"- MRR: {retrieval['overall']['mrr']:.4f}"])
     (out / "summary.md").write_text("\n".join(lines) + "\n")
     print(json.dumps({"output": str(out / "v0b-probe-results.json"), "n_metrics": len(metrics), "retrieval_queries": retrieval["overall"]["n"]}, indent=2))
 

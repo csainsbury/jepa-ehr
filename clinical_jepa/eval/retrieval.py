@@ -11,6 +11,12 @@ import numpy as np
 
 from clinical_jepa.utils import ensure_dir, now_utc, write_json
 
+POLICIES = [
+    "same_split",
+    "same_split_target_type",
+    "same_split_target_type_len_bin",
+]
+
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -29,11 +35,40 @@ def normalize(x: np.ndarray) -> np.ndarray:
     return x / denom
 
 
+def length_bin(value: Any) -> str:
+    if value is None:
+        return "missing"
+    try:
+        v = int(value)
+    except Exception:
+        return "missing"
+    if v <= 8:
+        return "001-008"
+    if v <= 16:
+        return "009-016"
+    if v <= 32:
+        return "017-032"
+    if v <= 64:
+        return "033-064"
+    if v <= 128:
+        return "065-128"
+    if v <= 256:
+        return "129-256"
+    return "257-plus"
+
+
 def group_key(row: dict[str, Any], policy: str) -> tuple[Any, ...]:
     if policy == "same_split":
         return (row.get("split"),)
     if policy == "same_split_target_type":
         return (row.get("split"), row.get("target_type"))
+    if policy == "same_split_target_type_len_bin":
+        return (
+            row.get("split"),
+            row.get("target_type"),
+            length_bin(row.get("context_len")),
+            length_bin(row.get("target_len")),
+        )
     raise ValueError(f"Unsupported distractor policy: {policy}")
 
 
@@ -130,6 +165,7 @@ def compute_retrieval_metrics(
         all_ranks.extend(group_ranks)
         per_group[group_name] = group_ranks
 
+    group_sizes = [len(v) for v in target_groups.values()]
     return {
         "created_utc": now_utc(),
         "distractor_policy": distractor_policy,
@@ -137,6 +173,12 @@ def compute_retrieval_metrics(
         "batch_size": batch_size,
         "query_rows": int(len(query_index)),
         "target_rows": int(len(target_index)),
+        "n_candidate_groups": len(target_groups),
+        "candidate_group_size_summary": {
+            "min": int(min(group_sizes)) if group_sizes else 0,
+            "median": float(np.median(group_sizes)) if group_sizes else 0,
+            "max": int(max(group_sizes)) if group_sizes else 0,
+        },
         "skipped_no_target": skipped_no_target,
         "skipped_no_candidates": skipped_no_candidates,
         "sampled_candidate_counts": sampled_candidate_counts,
@@ -153,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--target-embeddings", required=True)
     ap.add_argument("--target-index", required=True)
     ap.add_argument("--output-dir", required=True)
-    ap.add_argument("--distractor-policy", default="same_split_target_type", choices=["same_split", "same_split_target_type"])
+    ap.add_argument("--distractor-policy", default="same_split_target_type", choices=POLICIES)
     ap.add_argument("--max-candidates-per-group", type=int, default=0)
     ap.add_argument("--batch-size", type=int, default=512)
     ap.add_argument("--seed", type=int, default=20260523)
@@ -176,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         "",
         f"Distractor policy: `{report['distractor_policy']}`",
         f"Queries evaluated: {report['overall']['n']}",
+        f"Candidate groups: {report['n_candidate_groups']}",
         "",
         "## Overall",
         "",
