@@ -152,6 +152,101 @@ Added v0A target-block FlatASCEND embeddings and trained ridge predictors from v
 
 Interpretation: in this first retrieval framing, the 10k-step v0B minimal JEPA scaffold substantially outperforms the v0A frozen-FlatASCEND target-embedding predictor on retrieval, despite v0A remaining much stronger on immediate lab/state classification probes. This is promising for v0B as a non-teacher-circular latent-prediction line, but the comparison still needs matched utilisation/sequence-length distractors before promotion.
 
+## Matched retrieval and shuffle controls
+
+Added matched-distractor retrieval using same split, target type, context-length bin, and target-length bin.
+
+| Gap between context and T0 target | v0B Recall@10 | v0B MRR | best v0A predictor | v0A Recall@10 | v0A MRR |
+|---:|---:|---:|---|---:|---:|
+| 0 events | `0.5557` | `0.3695` | final-token context → target-mean | `0.3290` | `0.1867` |
+| 16 events | `0.4850` | `0.3156` | context-mean → target-mean | `0.2256` | `0.1239` |
+| 64 events | `0.4180` | `0.2549` | context-mean → target-mean | `0.1352` | `0.0709` |
+
+Target-embedding shuffle controls stayed near chance:
+
+| Gap | v0B observed R@10 | v0B shuffle R@10 | v0A observed R@10 | v0A shuffle R@10 |
+|---:|---:|---:|---:|---:|
+| 0 events | `0.5557` | `0.0031` | `0.3290` | `0.0091` |
+| 16 events | `0.4850` | `0.0035` | `0.2256` | `0.0036` |
+| 64 events | `0.4180` | `0.0045` | `0.1352` | `0.0054` |
+
+A stricter utilisation/sequence-length/context-count matched policy increased the number of candidate groups and still favored v0B:
+
+| Gap | v0B Recall@10 | v0B MRR | best v0A predictor | v0A Recall@10 | v0A MRR | candidate groups, v0B/v0A |
+|---:|---:|---:|---|---:|---:|---:|
+| 0 events | `0.7622` | `0.5592` | final-token context → target-mean | `0.5787` | `0.3732` | `721 / 2005` |
+| 16 events | `0.7167` | `0.5084` | context-mean → target-mean | `0.4313` | `0.2522` | `676 / 674` |
+| 64 events | `0.6927` | `0.4744` | context-mean → target-mean | `0.3722` | `0.2036` | `614 / 612` |
+
+Query-shuffle and within-group time-shift controls for the length-matched setting stayed near chance:
+
+| Gap | arm | observed R@10 | target-shuffle R@10 | query-shuffle R@10 | time-shift R@10 |
+|---:|---|---:|---:|---:|---:|
+| 0 events | v0B | `0.5557` | `0.0031` | `0.0030` | `0.0034` |
+| 0 events | v0A | `0.3290` | `0.0091` | `0.0093` | `0.0099` |
+| 16 events | v0B | `0.4850` | `0.0035` | `0.0031` | `0.0034` |
+| 16 events | v0A | `0.2256` | `0.0036` | `0.0037` | `0.0045` |
+| 64 events | v0B | `0.4180` | `0.0045` | `0.0041` | `0.0046` |
+| 64 events | v0A | `0.1352` | `0.0054` | `0.0050` | `0.0047` |
+
+Interpretation: the v0B retrieval advantage survives length and utilisation/context-count matched distractors. Target-row shuffle, query-row shuffle, and within-group time-shift controls argue against trivial row-order, target-distribution, or nearby-time indexing artifacts.
+
+## INSPECT external validation
+
+Added INSPECT as a separate external-validation source from the staged B1a bundle. Target extraction and leakage audits passed for INSPECT T0 blocks:
+
+| Gap | INSPECT T0 blocks | v0B Recall@10 | v0B MRR | exploratory v0A Recall@10 | exploratory v0A MRR |
+|---:|---:|---:|---:|---:|---:|
+| 0 events | `18,183` | `0.3469` | `0.2079` | `0.6580` | `0.4381` |
+| 16 events | `17,782` | `0.3088` | `0.1825` | `0.2923` | `0.1735` |
+| 64 events | `16,669` | `0.2319` | `0.1338` | `0.2086` | `0.1177` |
+
+Important caveat: the v0A comparison above is **exploratory within-INSPECT ridge**, not a MIMIC-trained v0A transfer predictor. The v0B checkpoint is the existing MIMIC-trained 10k-step checkpoint evaluated on INSPECT blocks.
+
+A fairer MIMIC-trained v0A transfer ridge was then fitted on MIMIC train embeddings and applied to INSPECT embeddings:
+
+| Gap | MIMIC-trained v0A transfer best predictor | v0A transfer Recall@10 | v0A transfer MRR | v0B INSPECT Recall@10 | v0B INSPECT MRR |
+|---:|---|---:|---:|---:|---:|
+| 0 events | final-token context → target-mean | `0.1385` | `0.0730` | `0.3469` | `0.2079` |
+| 16 events | context-mean → target-mean | `0.0373` | `0.0208` | `0.3088` | `0.1825` |
+| 64 events | context-mean → target-mean | `0.0313` | `0.0164` | `0.2319` | `0.1338` |
+
+Interpretation: within-INSPECT v0A can fit strong gap-0 source-specific mappings, but MIMIC-trained v0A transfer to INSPECT is much weaker than the MIMIC-trained v0B checkpoint under this retrieval framing.
+
+## v0B scaled 256d / 25k follow-up
+
+Queued and ran a scaled mean-token v0B follow-up with 256-dimensional embeddings, 25k steps, larger context/target caps, and utilisation/sequence/context-count matched retrieval.
+
+Training diagnostics:
+
+- dev cosine: `0.4538`
+- dev effective rank: `131.39`
+
+Retrieval results:
+
+| Evaluation source/gap | Recall@10 | MRR | median rank | evaluated blocks |
+|---|---:|---:|---:|---:|
+| MIMIC gap 0 | `0.8597` | `0.6748` | `1` | `58,058` |
+| MIMIC gap 16 | `0.7666` | `0.5621` | `2` | `51,344` |
+| MIMIC gap 64 | `0.7251` | `0.5064` | `3` | `34,025` |
+| INSPECT gap 0 | `0.7181` | `0.5015` | `3` | `18,004` |
+| INSPECT gap 16 | `0.6688` | `0.4479` | `3` | `17,598` |
+| INSPECT gap 64 | `0.5779` | `0.3687` | `6` | `16,496` |
+
+Interpretation caution: this is still the mean-token scaffold, not a true EMA/transformer JEPA architecture. The retrieval jump is large and useful, but should be checked against the scaled-model query/time-shift controls now queued before over-interpreting.
+
+Sanitized aggregate snapshots:
+
+```text
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/matched-retrieval/
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/shuffle-controls/
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/util-matched/
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/query-time-controls/
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/inspect-external/
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/v0a-inspect-transfer/
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/v0b-scaled-256d-25k/
+```
+
 ## Current outputs of interest
 
 ```text
@@ -173,7 +268,7 @@ v0/real-b1a-pilot-70k/controls/context-family/summary.md
 
 ## Recommended next atoms
 
-1. Add matched-distractor retrieval policies using utilisation/sequence-length strata, not only same split/target type.
-2. Add INSPECT-as-external-validation rather than only using the staged MIMIC primary split.
-3. Add patient/time shuffle retrieval controls for v0B and v0A predictor outputs.
-4. Only then consider a larger v0B encoder/EMA target architecture beyond the current mean-token scaffold.
+1. Finish the scaled v0B 256d/25k query/time-shift controls now running/queued on Vast.
+2. Finish the queued v0B 512d/20k scale sweep and compare against 256d/25k.
+3. Run controls against the 512d/20k model if it improves or matches 256d/25k.
+4. Then consider a true larger v0B encoder/EMA target architecture beyond the mean-token scaffold.
