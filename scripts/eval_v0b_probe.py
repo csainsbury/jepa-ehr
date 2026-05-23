@@ -38,6 +38,19 @@ def pad(batch: list[np.ndarray], device: torch.device) -> torch.Tensor:
     return out
 
 
+def token_family_counts(ids: np.ndarray, id_to_token: dict[int, str]) -> dict[str, int]:
+    counts = {"med": 0, "lab": 0, "state": 0}
+    for tid in ids:
+        tok = id_to_token.get(int(tid), "")
+        if tok.startswith("MED:"):
+            counts["med"] += 1
+        elif tok.startswith("LAB:"):
+            counts["lab"] += 1
+        elif tok.startswith("STATE:"):
+            counts["state"] += 1
+    return counts
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Evaluate v0B learned prediction embeddings with aggregate probes/retrieval")
     ap.add_argument("--checkpoint", required=True)
@@ -49,7 +62,7 @@ def main() -> None:
     ap.add_argument("--max-context-tokens", type=int, default=128)
     ap.add_argument("--max-target-tokens", type=int, default=32)
     ap.add_argument("--retrieval-max-candidates", type=int, default=4096)
-    ap.add_argument("--retrieval-policy", default="same_split_target_type", choices=["same_split", "same_split_target_type", "same_split_target_type_len_bin"])
+    ap.add_argument("--retrieval-policy", default="same_split_target_type", choices=["same_split", "same_split_target_type", "same_split_target_type_len_bin", "same_split_target_type_len_seq_util_bin"])
     args = ap.parse_args()
 
     # YAML is only needed for the vocabulary path; avoid logging config contents.
@@ -75,7 +88,7 @@ def main() -> None:
     target_mean = np.zeros((len(blocks), dim), dtype=np.float16)
     cache: dict[str, h5py.File] = {}
 
-    def read_pair(block: dict) -> tuple[np.ndarray, np.ndarray]:
+    def read_pair(block: dict) -> tuple[np.ndarray, np.ndarray, int]:
         path = str(block["sequence_file"])
         if path not in cache:
             cache[path] = h5py.File(path, "r")
@@ -88,7 +101,7 @@ def main() -> None:
         t1 = min(len(arr) - 1, int(block["target_end_ref"]))
         context = np.asarray(arr[c0 : c1 + 1][-args.max_context_tokens :], dtype=np.int64)
         target = np.asarray(arr[t0 : t1 + 1][: args.max_target_tokens], dtype=np.int64)
-        return context, target
+        return context, target, int(len(arr))
 
     try:
         with torch.no_grad():
@@ -97,9 +110,12 @@ def main() -> None:
                 pairs = [read_pair(b) for b in batch_blocks]
                 ctx_ids = [p[0] for p in pairs]
                 tgt_ids = [p[1] for p in pairs]
+                seq_lens = [p[2] for p in pairs]
                 context_pred[start : start + len(batch_blocks)] = model(pad(ctx_ids, device)).detach().cpu().numpy().astype(np.float16)
                 target_mean[start : start + len(batch_blocks)] = model.mean_embed(pad(tgt_ids, device)).detach().cpu().numpy().astype(np.float16)
                 for j, block in enumerate(batch_blocks):
+                    context_counts = token_family_counts(ctx_ids[j], id_to_token)
+                    target_counts = token_family_counts(tgt_ids[j], id_to_token)
                     rows.append(
                         {
                             "row": start + j,
@@ -110,6 +126,14 @@ def main() -> None:
                             "gap_events": block.get("gap_events"),
                             "context_len": int(len(ctx_ids[j])),
                             "target_len": int(len(tgt_ids[j])),
+                            "sequence_len": int(seq_lens[j]),
+                            "context_med_count": int(context_counts["med"]),
+                            "context_lab_count": int(context_counts["lab"]),
+                            "context_state_count": int(context_counts["state"]),
+                            "target_med_count": int(target_counts["med"]),
+                            "target_lab_count": int(target_counts["lab"]),
+                            "target_state_count": int(target_counts["state"]),
+                            "source_dataset": block.get("source_dataset"),
                         }
                     )
     finally:

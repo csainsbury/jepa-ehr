@@ -46,6 +46,37 @@ def _load_blocks(targets: dict[str, Any], max_blocks: int) -> list[dict[str, Any
     return blocks
 
 
+def _load_id_to_token_from_dataset_config(path: str | None) -> dict[int, str]:
+    if not path:
+        return {}
+    cfg = load_yaml(path)
+    vocab_path = cfg.get("vocabulary", {}).get("vocab_json_path")
+    if not vocab_path:
+        return {}
+    p = Path(vocab_path)
+    if not p.exists():
+        return {}
+    raw = json.loads(p.read_text())
+    if "id_to_token" in raw:
+        return {int(k): str(v) for k, v in raw["id_to_token"].items()}
+    if "token_to_id" in raw:
+        return {int(v): str(k) for k, v in raw["token_to_id"].items()}
+    return {int(k): str(v) for k, v in raw.items() if str(k).isdigit()}
+
+
+def _token_family_counts(ids: np.ndarray, id_to_token: dict[int, str]) -> dict[str, int]:
+    counts = {"med": 0, "lab": 0, "state": 0}
+    for tid in ids:
+        tok = id_to_token.get(int(tid), "")
+        if tok.startswith("MED:"):
+            counts["med"] += 1
+        elif tok.startswith("LAB:"):
+            counts["lab"] += 1
+        elif tok.startswith("STATE:"):
+            counts["state"] += 1
+    return counts
+
+
 def _pad(ids: list[np.ndarray], dts: list[np.ndarray], device: Any):
     import torch
 
@@ -102,8 +133,9 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
     target_final = np.zeros((len(blocks), hidden), dtype=np.float16) if args.include_target_embeddings else None
     index_path = outdir / "embedding-index.jsonl"
     file_cache: dict[str, Any] = {}
+    id_to_token = _load_id_to_token_from_dataset_config(args.dataset_config)
 
-    def read_span(block: dict[str, Any], start_ref: str, end_ref: str, max_tokens: int, from_end: bool) -> tuple[np.ndarray, np.ndarray]:
+    def read_span(block: dict[str, Any], start_ref: str, end_ref: str, max_tokens: int, from_end: bool) -> tuple[np.ndarray, np.ndarray, int]:
         path = str(block["sequence_file"])
         if path not in file_cache:
             file_cache[path] = h5py.File(path, "r")
@@ -125,24 +157,32 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
             else:
                 ids = ids[:max_tokens]
                 dts = dts[:max_tokens]
-        return ids, dts
+        return ids, dts, int(len(arr))
 
     try:
         with torch.no_grad(), index_path.open("w") as idx_f:
             for start in range(0, len(blocks), args.batch_size):
                 batch_blocks = blocks[start : start + args.batch_size]
-                c_ids, c_dts = zip(*(read_span(b, "context_start_ref", "context_end_ref", args.max_context_tokens, True) for b in batch_blocks))
+                c_spans = [read_span(b, "context_start_ref", "context_end_ref", args.max_context_tokens, True) for b in batch_blocks]
+                c_ids = [x[0] for x in c_spans]
+                c_dts = [x[1] for x in c_spans]
+                seq_lens = [x[2] for x in c_spans]
                 pooled, final = _pool_hidden(model, list(c_ids), list(c_dts), device)
                 context_mean[start : start + len(batch_blocks)] = pooled
                 context_final[start : start + len(batch_blocks)] = final
 
                 if args.include_target_embeddings and target_mean is not None and target_final is not None:
-                    t_ids, t_dts = zip(*(read_span(b, "target_start_ref", "target_end_ref", args.max_target_tokens, False) for b in batch_blocks))
+                    t_spans = [read_span(b, "target_start_ref", "target_end_ref", args.max_target_tokens, False) for b in batch_blocks]
+                    t_ids = [x[0] for x in t_spans]
+                    t_dts = [x[1] for x in t_spans]
                     t_pooled, t_final = _pool_hidden(model, list(t_ids), list(t_dts), device)
                     target_mean[start : start + len(batch_blocks)] = t_pooled
                     target_final[start : start + len(batch_blocks)] = t_final
 
                 for j, b in enumerate(batch_blocks):
+                    context_counts = _token_family_counts(c_ids[j], id_to_token)
+                    target_ids = t_ids[j] if args.include_target_embeddings else np.asarray([], dtype=np.int64)
+                    target_counts = _token_family_counts(target_ids, id_to_token)
                     rec = {
                         "row": start + j,
                         "block_id": b.get("block_id"),
@@ -151,7 +191,14 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
                         "horizon_descriptor": b.get("horizon_descriptor"),
                         "gap_events": b.get("gap_events"),
                         "context_len": int(len(c_ids[j])),
-                        "target_len": int(len(t_ids[j])) if args.include_target_embeddings else int(int(b.get("target_end_ref", 0)) - int(b.get("target_start_ref", 0)) + 1),
+                        "target_len": int(len(target_ids)) if args.include_target_embeddings else int(int(b.get("target_end_ref", 0)) - int(b.get("target_start_ref", 0)) + 1),
+                        "sequence_len": int(seq_lens[j]),
+                        "context_med_count": int(context_counts["med"]),
+                        "context_lab_count": int(context_counts["lab"]),
+                        "context_state_count": int(context_counts["state"]),
+                        "target_med_count": int(target_counts["med"]),
+                        "target_lab_count": int(target_counts["lab"]),
+                        "target_state_count": int(target_counts["state"]),
                         "source_dataset": b.get("source_dataset"),
                     }
                     idx_f.write(json.dumps(rec, separators=(",", ":")) + "\n")
@@ -209,6 +256,7 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="v0A FlatASCEND embedding scaffold / extractor")
     ap.add_argument("--arms-config", required=True)
+    ap.add_argument("--dataset-config")
     ap.add_argument("--target-blocks", required=True)
     ap.add_argument("--leakage-report", required=True)
     ap.add_argument("--output-dir", required=True)

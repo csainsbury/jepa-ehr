@@ -230,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dataset-config")
     ap.add_argument("--target-blocks")
     ap.add_argument("--retrieval-max-candidates", type=int, default=4096)
-    ap.add_argument("--retrieval-policy", default="same_split_target_type", choices=["same_split", "same_split_target_type", "same_split_target_type_len_bin"])
+    ap.add_argument("--retrieval-policy", default="same_split_target_type", choices=["same_split", "same_split_target_type", "same_split_target_type_len_bin", "same_split_target_type_len_seq_util_bin"])
     ap.add_argument("--ridge-lambda", type=float, default=10.0)
     args = ap.parse_args(argv)
     emb = read_json(args.embedding_manifest)

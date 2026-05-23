@@ -15,6 +15,7 @@ POLICIES = [
     "same_split",
     "same_split_target_type",
     "same_split_target_type_len_bin",
+    "same_split_target_type_len_seq_util_bin",
 ]
 
 
@@ -54,7 +55,33 @@ def length_bin(value: Any) -> str:
         return "065-128"
     if v <= 256:
         return "129-256"
-    return "257-plus"
+    if v <= 512:
+        return "257-512"
+    if v <= 1024:
+        return "513-1024"
+    return "1025-plus"
+
+
+def count_bin(value: Any) -> str:
+    if value is None:
+        return "missing"
+    try:
+        v = int(value)
+    except Exception:
+        return "missing"
+    if v <= 0:
+        return "000"
+    if v == 1:
+        return "001"
+    if v <= 3:
+        return "002-003"
+    if v <= 7:
+        return "004-007"
+    if v <= 15:
+        return "008-015"
+    if v <= 31:
+        return "016-031"
+    return "032-plus"
 
 
 def group_key(row: dict[str, Any], policy: str) -> tuple[Any, ...]:
@@ -68,6 +95,17 @@ def group_key(row: dict[str, Any], policy: str) -> tuple[Any, ...]:
             row.get("target_type"),
             length_bin(row.get("context_len")),
             length_bin(row.get("target_len")),
+        )
+    if policy == "same_split_target_type_len_seq_util_bin":
+        return (
+            row.get("split"),
+            row.get("target_type"),
+            length_bin(row.get("context_len")),
+            length_bin(row.get("target_len")),
+            length_bin(row.get("sequence_len")),
+            count_bin(row.get("context_med_count")),
+            count_bin(row.get("context_lab_count")),
+            count_bin(row.get("context_state_count")),
         )
     raise ValueError(f"Unsupported distractor policy: {policy}")
 

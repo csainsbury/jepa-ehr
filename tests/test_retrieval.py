@@ -47,6 +47,19 @@ class RetrievalMetricTests(unittest.TestCase):
         self.assertEqual(report["n_candidate_groups"], 2)
         self.assertEqual(report["overall"]["n"], 4)
 
+    def test_utilisation_binned_policy_uses_sequence_and_context_counts(self) -> None:
+        target = np.eye(4, dtype=np.float32)
+        query = target.copy()
+        index = [
+            {"block_id": "a", "split": "dev", "target_type": "T0", "context_len": 12, "target_len": 32, "sequence_len": 100, "context_med_count": 1, "context_lab_count": 4, "context_state_count": 0},
+            {"block_id": "b", "split": "dev", "target_type": "T0", "context_len": 14, "target_len": 32, "sequence_len": 110, "context_med_count": 1, "context_lab_count": 5, "context_state_count": 0},
+            {"block_id": "c", "split": "dev", "target_type": "T0", "context_len": 12, "target_len": 32, "sequence_len": 100, "context_med_count": 20, "context_lab_count": 4, "context_state_count": 0},
+            {"block_id": "d", "split": "dev", "target_type": "T0", "context_len": 14, "target_len": 32, "sequence_len": 110, "context_med_count": 22, "context_lab_count": 5, "context_state_count": 0},
+        ]
+        report = compute_retrieval_metrics(query, index, target, index, distractor_policy="same_split_target_type_len_seq_util_bin")
+        self.assertEqual(report["n_candidate_groups"], 2)
+        self.assertEqual(report["overall"]["n"], 4)
+
 
 
 class TargetBlockGapTests(unittest.TestCase):
