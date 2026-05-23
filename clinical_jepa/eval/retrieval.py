@@ -135,6 +135,7 @@ def compute_retrieval_metrics(
     ks: tuple[int, ...] = (1, 5, 10),
     distractor_policy: str = "same_split_target_type",
     max_candidates_per_group: int = 0,
+    min_candidates_per_group: int = 0,
     seed: int = 20260523,
     batch_size: int = 512,
 ) -> dict[str, Any]:
@@ -143,7 +144,8 @@ def compute_retrieval_metrics(
     `max_candidates_per_group` samples a stable distractor pool per group. Each
     query's true target is always inserted into its batch candidate set, so ranks
     are with respect to sampled distractors plus the true target. Use 0 for all
-    candidates in each group.
+    candidates in each group. `min_candidates_per_group` skips very small groups
+    when chance rates would be high under fine-grained matching policies.
     """
     if len(query_embeddings) != len(query_index):
         raise ValueError("query embedding rows and query index length differ")
@@ -175,7 +177,7 @@ def compute_retrieval_metrics(
 
     for key, q_indices in query_groups.items():
         group_targets = list(target_groups.get(key, []))
-        if len(group_targets) <= 1:
+        if len(group_targets) <= 1 or (min_candidates_per_group and len(group_targets) < min_candidates_per_group):
             skipped_no_candidates += len(q_indices)
             continue
         if max_candidates_per_group and len(group_targets) > max_candidates_per_group:
@@ -208,6 +210,7 @@ def compute_retrieval_metrics(
         "created_utc": now_utc(),
         "distractor_policy": distractor_policy,
         "max_candidates_per_group": max_candidates_per_group,
+        "min_candidates_per_group": min_candidates_per_group,
         "batch_size": batch_size,
         "query_rows": int(len(query_index)),
         "target_rows": int(len(target_index)),
@@ -235,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--distractor-policy", default="same_split_target_type", choices=POLICIES)
     ap.add_argument("--max-candidates-per-group", type=int, default=0)
+    ap.add_argument("--min-candidates-per-group", type=int, default=0)
     ap.add_argument("--batch-size", type=int, default=512)
     ap.add_argument("--seed", type=int, default=20260523)
     args = ap.parse_args(argv)
@@ -246,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
         read_jsonl(args.target_index),
         distractor_policy=args.distractor_policy,
         max_candidates_per_group=args.max_candidates_per_group,
+        min_candidates_per_group=args.min_candidates_per_group,
         batch_size=args.batch_size,
         seed=args.seed,
     )
