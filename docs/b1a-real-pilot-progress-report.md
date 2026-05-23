@@ -120,6 +120,26 @@ Added probes over the 10k-step v0B learned context-prediction embeddings (`58,19
 
 Interpretation: v0B learned embeddings beat simple context-mode/prior baselines for medication and lab family prediction, but remain below frozen FlatASCEND final-token/mean probes for lab/state. State-family performance is near the empirical-prior ceiling because state labels are highly imbalanced.
 
+## Retrieval and horizon-gap sensitivity
+
+Implemented aggregate target-retrieval metrics for v0B predicted context embeddings against v0B target mean embeddings. On immediate T0 blocks, retrieval against same-split/same-target-type sampled distractors (`4096` candidates per group) was:
+
+- Recall@1 `0.2727`
+- Recall@5 `0.4663`
+- Recall@10 `0.5526`
+- MRR `0.3670`
+- median rank `7`
+
+Horizon-gap sensitivity using the same 10k-step v0B checkpoint:
+
+| Gap between context and T0 target | Blocks | Recall@10 | MRR | med test top1 | lab test top1 | state test top1 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0 events | `58,196` | `0.5526` | `0.3670` | `0.218` | `0.233` | `0.884` |
+| 16 events | `51,478` | `0.4727` | `0.3057` | `0.210` | `0.201` | `0.872` |
+| 64 events | `34,150` | `0.3877` | `0.2339` | `0.204` | `0.191` | `0.864` |
+
+Interpretation: retrieval degrades monotonically with event gap, which is the expected direction for a horizon-sensitive predictor. Medication/lab family probes degrade more modestly; state-family scores remain high because the state label distribution is highly imbalanced.
+
 ## Current outputs of interest
 
 ```text
@@ -130,16 +150,15 @@ v0/real-b1a-pilot-70k/v0D-real/summary.md
 v0/real-b1a-pilot-70k/v0A-real-60k/embedding-cache-manifest.json
 v0/real-b1a-pilot-70k/v0A-real-60k-probes/summary.md
 v0/real-b1a-pilot-70k/v0B-real-10k/summary.md
-v0/real-b1a-pilot-70k/v0B-real-10k-probes/summary.md
+v0/real-b1a-pilot-70k/v0B-real-10k-probes-retrieval-fast/summary.md
+v0/real-b1a-pilot-70k/horizon-gap/gap16/v0B-real-10k-probes-retrieval/summary.md
+v0/real-b1a-pilot-70k/horizon-gap/gap64/v0B-real-10k-probes-retrieval/summary.md
 v0/real-b1a-pilot-70k/controls/context-family/summary.md
 ```
 
 ## Recommended next atoms
 
-1. Add explicit leakage/control probes for v0A final-token strength:
-   - target-label permutation control;
-   - context-final-token family baseline;
-   - horizon-gap sensitivity.
-2. Add v0B downstream probe/retrieval evaluation so v0B can be compared to v0A/v0D on the same labels.
-3. Run a larger v0B model or longer schedule only after the controls confirm evaluation is not dominated by immediate token autocorrelation.
-4. Decide whether INSPECT should be used as external validation rather than only staged in the bundle.
+1. Add matched-distractor retrieval policies using utilisation/sequence-length strata, not only same split/target type.
+2. Add explicit v0A retrieval, or a v0A predictor head, so v0A and v0B can be compared on retrieval rather than only probes.
+3. Add INSPECT-as-external-validation rather than only using the staged MIMIC primary split.
+4. Only then consider a larger v0B encoder/EMA target architecture beyond the current mean-token scaffold.

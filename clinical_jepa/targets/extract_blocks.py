@@ -49,17 +49,19 @@ def _source_paths(split_manifest: dict[str, Any], split: str) -> tuple[str, str]
     return str(index_paths[split]), str(h5_paths[split])
 
 
-def _t0_block(seq_id: str, split: str, seq_len: int, source_dataset: str, ordinal: int, target_window: int) -> dict[str, Any] | None:
+def _t0_block(seq_id: str, split: str, seq_len: int, source_dataset: str, ordinal: int, target_window: int, gap_events: int = 0) -> dict[str, Any] | None:
     min_context = 8
-    if seq_len < min_context + target_window + 2:
+    gap_events = max(0, int(gap_events))
+    if seq_len < min_context + gap_events + target_window + 2:
         return None
-    context_end = min(max(min_context, seq_len // 2), seq_len - target_window - 2)
-    target_start = context_end + 1
+    max_context_end = seq_len - gap_events - target_window - 2
+    context_end = min(max(min_context, seq_len // 2), max_context_end)
+    target_start = context_end + 1 + gap_events
     target_end = min(seq_len - 1, target_start + target_window - 1)
     if context_end >= target_start or target_start >= target_end:
         return None
     return {
-        "block_id": stable_hmac(f"T0|{seq_id}|{context_end}|{target_start}|{target_end}|{ordinal}", "clinical-jepa-real-block-v0"),
+        "block_id": stable_hmac(f"T0|{seq_id}|{context_end}|{target_start}|{target_end}|gap{gap_events}|{ordinal}", "clinical-jepa-real-block-v0"),
         "patient_hash": stable_hmac(seq_id, "clinical-jepa-rekeyed-seq"),
         "sequence_id": seq_id,
         "sequence_group": seq_id,
@@ -69,7 +71,8 @@ def _t0_block(seq_id: str, split: str, seq_len: int, source_dataset: str, ordina
         "context_end_ref": int(context_end),
         "target_start_ref": int(target_start),
         "target_end_ref": int(target_end),
-        "horizon_descriptor": "event_window_32_or_configured",
+        "horizon_descriptor": f"event_gap_{gap_events}_window_{target_window}",
+        "gap_events": int(gap_events),
         "source_dataset": source_dataset,
         "unit": "event_index",
     }
@@ -134,7 +137,7 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
                 processed[split] += 1
                 made = False
                 if "T0" in args.targets:
-                    block = _t0_block(seq_id, split, seq_len, source_dataset, 0, t0_window)
+                    block = _t0_block(seq_id, split, seq_len, source_dataset, 0, t0_window, args.t0_gap_events)
                     if block:
                         block["sequence_file"] = h5_path
                         blocks.append(block)
@@ -165,6 +168,7 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
         "t1_no_medication_anchor": t1_no_anchor,
         "targets": args.targets,
         "caps": {"train": args.max_real_train, "dev": args.max_real_dev, "test": args.max_real_test},
+        "t0_gap_events": int(args.t0_gap_events),
         "aggregate_only": True,
     }
     return blocks, {"counts": counts, "report": report}
@@ -205,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-real-dev", type=int, default=0, help="0 means no cap")
     ap.add_argument("--max-real-test", type=int, default=0, help="0 means no cap")
     ap.add_argument("--t1-anchors-per-sequence", type=int, default=1)
+    ap.add_argument("--t0-gap-events", type=int, default=0, help="Number of events to skip between context end and T0 target start")
     args = ap.parse_args(argv)
 
     dataset_cfg = load_yaml(args.dataset_config)
