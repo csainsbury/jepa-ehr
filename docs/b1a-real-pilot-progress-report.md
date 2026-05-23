@@ -140,6 +140,18 @@ Horizon-gap sensitivity using the same 10k-step v0B checkpoint:
 
 Interpretation: retrieval degrades monotonically with event gap, which is the expected direction for a horizon-sensitive predictor. Medication/lab family probes degrade more modestly; state-family scores remain high because the state label distribution is highly imbalanced.
 
+## v0A target-embedding retrieval comparison
+
+Added v0A target-block FlatASCEND embeddings and trained ridge predictors from v0A context embeddings to v0A target embeddings, using the same retrieval harness and sampled same-split/same-target-type distractor policy. Best v0A retrieval by gap:
+
+| Gap between context and T0 target | Blocks | Best v0A predictor | v0A Recall@10 | v0A MRR | v0B Recall@10 | v0B MRR |
+|---:|---:|---|---:|---:|---:|---:|
+| 0 events | `60,000` | final-token context → target-mean | `0.3019` | `0.1684` | `0.5526` | `0.3670` |
+| 16 events | `51,478` | context-mean → target-mean | `0.2310` | `0.1273` | `0.4727` | `0.3057` |
+| 64 events | `34,150` | context-mean → target-mean | `0.1255` | `0.0660` | `0.3877` | `0.2339` |
+
+Interpretation: in this first retrieval framing, the 10k-step v0B minimal JEPA scaffold substantially outperforms the v0A frozen-FlatASCEND target-embedding predictor on retrieval, despite v0A remaining much stronger on immediate lab/state classification probes. This is promising for v0B as a non-teacher-circular latent-prediction line, but the comparison still needs matched utilisation/sequence-length distractors before promotion.
+
 ## Current outputs of interest
 
 ```text
@@ -151,14 +163,17 @@ v0/real-b1a-pilot-70k/v0A-real-60k/embedding-cache-manifest.json
 v0/real-b1a-pilot-70k/v0A-real-60k-probes/summary.md
 v0/real-b1a-pilot-70k/v0B-real-10k/summary.md
 v0/real-b1a-pilot-70k/v0B-real-10k-probes-retrieval-fast/summary.md
+v0/real-b1a-pilot-70k/v0A-real-60k-target-predictor/summary.md
 v0/real-b1a-pilot-70k/horizon-gap/gap16/v0B-real-10k-probes-retrieval/summary.md
+v0/real-b1a-pilot-70k/horizon-gap/gap16/v0A-target-predictor/summary.md
 v0/real-b1a-pilot-70k/horizon-gap/gap64/v0B-real-10k-probes-retrieval/summary.md
+v0/real-b1a-pilot-70k/horizon-gap/gap64/v0A-target-predictor/summary.md
 v0/real-b1a-pilot-70k/controls/context-family/summary.md
 ```
 
 ## Recommended next atoms
 
 1. Add matched-distractor retrieval policies using utilisation/sequence-length strata, not only same split/target type.
-2. Add explicit v0A retrieval, or a v0A predictor head, so v0A and v0B can be compared on retrieval rather than only probes.
-3. Add INSPECT-as-external-validation rather than only using the staged MIMIC primary split.
+2. Add INSPECT-as-external-validation rather than only using the staged MIMIC primary split.
+3. Add patient/time shuffle retrieval controls for v0B and v0A predictor outputs.
 4. Only then consider a larger v0B encoder/EMA target architecture beyond the current mean-token scaffold.

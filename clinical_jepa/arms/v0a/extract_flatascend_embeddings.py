@@ -61,6 +61,19 @@ def _pad(ids: list[np.ndarray], dts: list[np.ndarray], device: Any):
     return tok, tim, mask
 
 
+def _pool_hidden(model: Any, ids: list[np.ndarray], dts: list[np.ndarray], device: Any) -> tuple[np.ndarray, np.ndarray]:
+    import torch
+
+    tok, tim, mask = _pad(ids, dts, device)
+    out = model(tok, tim, attention_mask=mask)
+    h = out.hidden_states
+    denom = mask.sum(dim=1).clamp_min(1.0).unsqueeze(-1)
+    pooled = (h * mask.unsqueeze(-1)).sum(dim=1) / denom
+    last_idx = mask.sum(dim=1).long().clamp_min(1) - 1
+    final = h[torch.arange(h.size(0), device=device), last_idx]
+    return pooled.detach().cpu().numpy().astype(np.float16), final.detach().cpu().numpy().astype(np.float16)
+
+
 def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, Any], outdir: Path) -> int:
     import h5py
     import torch
@@ -83,12 +96,14 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
     if not blocks:
         raise SystemExit("No eligible target blocks with sequence_file/sequence_group")
     hidden = int(cfg.get("hidden_size", 768))
-    mean_emb = np.zeros((len(blocks), hidden), dtype=np.float16)
-    final_emb = np.zeros((len(blocks), hidden), dtype=np.float16)
+    context_mean = np.zeros((len(blocks), hidden), dtype=np.float16)
+    context_final = np.zeros((len(blocks), hidden), dtype=np.float16)
+    target_mean = np.zeros((len(blocks), hidden), dtype=np.float16) if args.include_target_embeddings else None
+    target_final = np.zeros((len(blocks), hidden), dtype=np.float16) if args.include_target_embeddings else None
     index_path = outdir / "embedding-index.jsonl"
     file_cache: dict[str, Any] = {}
 
-    def read_context(block: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    def read_span(block: dict[str, Any], start_ref: str, end_ref: str, max_tokens: int, from_end: bool) -> tuple[np.ndarray, np.ndarray]:
         path = str(block["sequence_file"])
         if path not in file_cache:
             file_cache[path] = h5py.File(path, "r")
@@ -99,38 +114,65 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
             dt = h5[group]["time_deltas"][:]
         else:
             dt = np.zeros_like(arr, dtype=np.float32)
-        c0 = max(0, int(block.get("context_start_ref", 0)))
-        c1 = min(len(arr) - 1, int(block["context_end_ref"]))
-        ids = np.asarray(arr[c0 : c1 + 1][-args.max_context_tokens:], dtype=np.int64)
-        dts = np.asarray(dt[c0 : c1 + 1][-args.max_context_tokens:], dtype=np.float32)
+        s = max(0, int(block[start_ref]))
+        e = min(len(arr) - 1, int(block[end_ref]))
+        ids = np.asarray(arr[s : e + 1], dtype=np.int64)
+        dts = np.asarray(dt[s : e + 1], dtype=np.float32)
+        if max_tokens and len(ids) > max_tokens:
+            if from_end:
+                ids = ids[-max_tokens:]
+                dts = dts[-max_tokens:]
+            else:
+                ids = ids[:max_tokens]
+                dts = dts[:max_tokens]
         return ids, dts
 
     try:
-        rows = []
         with torch.no_grad(), index_path.open("w") as idx_f:
             for start in range(0, len(blocks), args.batch_size):
                 batch_blocks = blocks[start : start + args.batch_size]
-                ids, dts = zip(*(read_context(b) for b in batch_blocks))
-                tok, tim, mask = _pad(list(ids), list(dts), device)
-                out = model(tok, tim, attention_mask=mask)
-                h = out.hidden_states
-                denom = mask.sum(dim=1).clamp_min(1.0).unsqueeze(-1)
-                pooled = (h * mask.unsqueeze(-1)).sum(dim=1) / denom
-                last_idx = mask.sum(dim=1).long().clamp_min(1) - 1
-                final = h[torch.arange(h.size(0), device=device), last_idx]
-                mean_emb[start : start + len(batch_blocks)] = pooled.detach().cpu().numpy().astype(np.float16)
-                final_emb[start : start + len(batch_blocks)] = final.detach().cpu().numpy().astype(np.float16)
+                c_ids, c_dts = zip(*(read_span(b, "context_start_ref", "context_end_ref", args.max_context_tokens, True) for b in batch_blocks))
+                pooled, final = _pool_hidden(model, list(c_ids), list(c_dts), device)
+                context_mean[start : start + len(batch_blocks)] = pooled
+                context_final[start : start + len(batch_blocks)] = final
+
+                if args.include_target_embeddings and target_mean is not None and target_final is not None:
+                    t_ids, t_dts = zip(*(read_span(b, "target_start_ref", "target_end_ref", args.max_target_tokens, False) for b in batch_blocks))
+                    t_pooled, t_final = _pool_hidden(model, list(t_ids), list(t_dts), device)
+                    target_mean[start : start + len(batch_blocks)] = t_pooled
+                    target_final[start : start + len(batch_blocks)] = t_final
+
                 for j, b in enumerate(batch_blocks):
-                    rec = {"row": start + j, "block_id": b.get("block_id"), "split": b.get("split"), "target_type": b.get("target_type"), "source_dataset": b.get("source_dataset")}
+                    rec = {
+                        "row": start + j,
+                        "block_id": b.get("block_id"),
+                        "split": b.get("split"),
+                        "target_type": b.get("target_type"),
+                        "horizon_descriptor": b.get("horizon_descriptor"),
+                        "gap_events": b.get("gap_events"),
+                        "source_dataset": b.get("source_dataset"),
+                    }
                     idx_f.write(json.dumps(rec, separators=(",", ":")) + "\n")
     finally:
         for f in file_cache.values():
             f.close()
 
-    mean_path = outdir / "context-final-layer-mean.fp16.npy"
-    final_path = outdir / "context-final-token.fp16.npy"
-    np.save(mean_path, mean_emb)
-    np.save(final_path, final_emb)
+    context_mean_path = outdir / "context-final-layer-mean.fp16.npy"
+    context_final_path = outdir / "context-final-token.fp16.npy"
+    np.save(context_mean_path, context_mean)
+    np.save(context_final_path, context_final)
+    embedding_files: dict[str, str] = {
+        "final_mean_fp16": str(context_mean_path),
+        "final_token_fp16": str(context_final_path),
+        "index_jsonl": str(index_path),
+    }
+    if args.include_target_embeddings and target_mean is not None and target_final is not None:
+        target_mean_path = outdir / "target-final-layer-mean.fp16.npy"
+        target_final_path = outdir / "target-final-token.fp16.npy"
+        np.save(target_mean_path, target_mean)
+        np.save(target_final_path, target_final)
+        embedding_files.update({"target_final_mean_fp16": str(target_mean_path), "target_final_token_fp16": str(target_final_path)})
+
     counts: dict[str, int] = {}
     for b in blocks:
         key = f"{b.get('split')}:{b.get('target_type')}"
@@ -145,18 +187,20 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
         "prefix_only": True,
         "target_layers": ["final"],
         "pooling": ["mean", "final_token"],
-        "counts": {"contexts": len(blocks), "targets": 0},
+        "counts": {"contexts": len(blocks), "targets": len(blocks) if args.include_target_embeddings else 0},
         "count_breakdown": counts,
-        "embedding_files": {"final_mean_fp16": str(mean_path), "final_token_fp16": str(final_path), "index_jsonl": str(index_path)},
+        "embedding_files": embedding_files,
         "embedding_shape": [len(blocks), hidden],
+        "target_embedding_shape": [len(blocks), hidden] if args.include_target_embeddings else None,
         "device": str(device),
         "max_context_tokens": args.max_context_tokens,
+        "max_target_tokens": args.max_target_tokens,
         "leakage_audit_status": "pass",
-        "notes": "Prefix-only FlatASCEND context embeddings from re-keyed bundle; no tokens, source ids, or patient examples written.",
+        "notes": "Prefix-only FlatASCEND context embeddings plus optional target-block embeddings; no tokens, source ids, or patient examples written.",
     }
     validate_artifact("v0a-embedding-cache", manifest)
     write_json(outdir / "embedding-cache-manifest.json", manifest)
-    print(json.dumps({"embedding_manifest": str(outdir / "embedding-cache-manifest.json"), "contexts": len(blocks), "shape": [len(blocks), hidden]}, indent=2))
+    print(json.dumps({"embedding_manifest": str(outdir / "embedding-cache-manifest.json"), "contexts": len(blocks), "targets": manifest["counts"]["targets"], "shape": [len(blocks), hidden]}, indent=2))
     return 0
 
 
@@ -170,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-blocks", type=int, default=20000)
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--max-context-tokens", type=int, default=256)
+    ap.add_argument("--max-target-tokens", type=int, default=64)
+    ap.add_argument("--include-target-embeddings", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--cpu", action="store_true")
     args = ap.parse_args(argv)
     require_pass_leakage(args.leakage_report)

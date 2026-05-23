@@ -3,12 +3,12 @@ from __future__ import annotations
 import argparse
 import collections
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from clinical_jepa.eval.retrieval import compute_retrieval_metrics
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, write_json
 
 
@@ -99,7 +99,6 @@ def _standardize(train_x: np.ndarray, x: np.ndarray) -> tuple[np.ndarray, np.nda
 
 
 def _ridge_train(x: np.ndarray, y_idx: np.ndarray, n_classes: int, lam: float = 1.0) -> np.ndarray:
-    # Add intercept column; solve multiclass ridge in closed form.
     x1 = np.concatenate([x, np.ones((x.shape[0], 1), dtype=x.dtype)], axis=1).astype(np.float64)
     y = np.zeros((x.shape[0], n_classes), dtype=np.float64)
     y[np.arange(x.shape[0]), y_idx] = 1.0
@@ -114,13 +113,37 @@ def _ridge_predict(x: np.ndarray, w: np.ndarray) -> np.ndarray:
     return (x1 @ w).argmax(axis=1)
 
 
+def _ridge_regression_fit(train_x: np.ndarray, train_y: np.ndarray, lam: float = 10.0) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Fit standardised ridge regression X->Y with intercept."""
+    x_mu = train_x.mean(axis=0, keepdims=True)
+    x_sigma = train_x.std(axis=0, keepdims=True)
+    x_sigma[x_sigma < 1e-6] = 1.0
+    y_mu = train_y.mean(axis=0, keepdims=True)
+    y_sigma = train_y.std(axis=0, keepdims=True)
+    y_sigma[y_sigma < 1e-6] = 1.0
+    x = (train_x - x_mu) / x_sigma
+    y = (train_y - y_mu) / y_sigma
+    x1 = np.concatenate([x, np.ones((x.shape[0], 1), dtype=x.dtype)], axis=1).astype(np.float64)
+    xtx = x1.T @ x1
+    xtx += lam * np.eye(xtx.shape[0], dtype=np.float64)
+    w = np.linalg.solve(xtx, x1.T @ y.astype(np.float64))
+    stats = {"x_mu": x_mu, "x_sigma": x_sigma, "y_mu": y_mu, "y_sigma": y_sigma}
+    return w, stats
+
+
+def _ridge_regression_predict(x: np.ndarray, w: np.ndarray, stats: dict[str, np.ndarray]) -> np.ndarray:
+    x_std = (x - stats["x_mu"]) / stats["x_sigma"]
+    x1 = np.concatenate([x_std, np.ones((x.shape[0], 1), dtype=x_std.dtype)], axis=1).astype(np.float64)
+    y_std = x1 @ w
+    return (y_std * stats["y_sigma"] + stats["y_mu"]).astype(np.float32)
+
+
 def _centroid_predict(train_x: np.ndarray, train_y: np.ndarray, x: np.ndarray, n_classes: int) -> np.ndarray:
     cents = np.zeros((n_classes, train_x.shape[1]), dtype=np.float32)
     for c in range(n_classes):
         rows = train_x[train_y == c]
         if len(rows):
             cents[c] = rows.mean(axis=0)
-    # cosine similarity
     xx = x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-8)
     cc = cents / (np.linalg.norm(cents, axis=1, keepdims=True) + 1e-8)
     return (xx @ cc.T).argmax(axis=1)
@@ -161,38 +184,53 @@ def _evaluate_task(x: np.ndarray, rows: list[dict[str, Any]], labels: dict[str, 
         pred_ridge = _ridge_predict(eval_x_std, w)
         pred_cent = _centroid_predict(train_x_std, train_y, eval_x_std, len(train_labs))
         for baseline, pred in [("ridge_linear_probe", pred_ridge), ("nearest_centroid_probe", pred_cent)]:
-            metrics.append({
-                "task": task,
-                "pooling": pooling_name,
-                "split": split,
-                "baseline": baseline,
-                "n_train": int(len(train_y)),
-                "n_evaluated": int(len(y)),
-                "n_classes_train": int(len(train_labs)),
-                "top1_accuracy": float((pred == y).mean()),
-            })
-        metrics.append({
-            "task": task,
-            "pooling": pooling_name,
-            "split": split,
-            "baseline": "empirical_train_prior",
-            "n_train": int(len(train_y)),
-            "n_evaluated": int(len(y)),
-            "n_classes_train": int(len(train_labs)),
-            "top1_accuracy": float(np.mean([int(v in prior1) for v in y])),
-            "top5_accuracy": float(np.mean([int(v in prior5) for v in y])),
-        })
+            metrics.append({"task": task, "pooling": pooling_name, "split": split, "baseline": baseline, "n_train": int(len(train_y)), "n_evaluated": int(len(y)), "n_classes_train": int(len(train_labs)), "top1_accuracy": float((pred == y).mean())})
+        metrics.append({"task": task, "pooling": pooling_name, "split": split, "baseline": "empirical_train_prior", "n_train": int(len(train_y)), "n_evaluated": int(len(y)), "n_classes_train": int(len(train_labs)), "top1_accuracy": float(np.mean([int(v in prior1) for v in y])), "top5_accuracy": float(np.mean([int(v in prior5) for v in y]))})
     return metrics
 
 
+def _train_target_predictor_and_retrieve(files: dict[str, str], rows: list[dict[str, Any]], outdir: Path, *, max_candidates: int, lam: float) -> dict[str, Any] | None:
+    retrievals: dict[str, Any] = {}
+    pairs = [
+        ("mean_to_mean", "final_mean_fp16", "target_final_mean_fp16"),
+        ("final_to_mean", "final_token_fp16", "target_final_mean_fp16"),
+        ("final_to_final", "final_token_fp16", "target_final_token_fp16"),
+    ]
+    train_idx = np.asarray([i for i, row in enumerate(rows) if row.get("split") == "train"], dtype=np.int64)
+    if len(train_idx) == 0:
+        return None
+    for name, context_key, target_key in pairs:
+        if context_key not in files or target_key not in files:
+            continue
+        x = np.load(files[context_key]).astype(np.float32)
+        y = np.load(files[target_key]).astype(np.float32)
+        w, stats = _ridge_regression_fit(x[train_idx], y[train_idx], lam=lam)
+        pred = _ridge_regression_predict(x, w, stats).astype(np.float16)
+        pred_path = outdir / f"v0a-target-pred-{name}.fp16.npy"
+        np.save(pred_path, pred)
+        report = compute_retrieval_metrics(
+            pred,
+            rows,
+            y.astype(np.float16),
+            rows,
+            distractor_policy="same_split_target_type",
+            max_candidates_per_group=max_candidates,
+        )
+        report["predictor"] = {"name": name, "context_embedding": context_key, "target_embedding": target_key, "ridge_lambda": lam, "predicted_embedding_file": str(pred_path)}
+        retrievals[name] = report
+    return retrievals or None
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="v0A FlatASCEND predictor/probe")
+    ap = argparse.ArgumentParser(description="v0A FlatASCEND predictor/probe/retrieval")
     ap.add_argument("--embedding-manifest", required=True)
     ap.add_argument("--variant", default="linear,mlp")
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--dataset-config")
     ap.add_argument("--target-blocks")
+    ap.add_argument("--retrieval-max-candidates", type=int, default=4096)
+    ap.add_argument("--ridge-lambda", type=float, default=10.0)
     args = ap.parse_args(argv)
     emb = read_json(args.embedding_manifest)
     if emb.get("prefix_only") is not True:
@@ -218,21 +256,30 @@ def main(argv: list[str] | None = None) -> int:
     labels = _read_target_labels(block_ids, target_manifest, id_to_token)
     all_metrics = []
     for pooling_key, pooling_name in [("final_mean_fp16", "final_mean"), ("final_token_fp16", "final_token")]:
+        if pooling_key not in files:
+            continue
         x = np.load(files[pooling_key]).astype(np.float32)
         all_metrics.extend(_evaluate_task(x, rows, labels, "next_med_family", "med", pooling_name))
         all_metrics.extend(_evaluate_task(x, rows, labels, "next_lab_family", "lab", pooling_name))
         all_metrics.extend(_evaluate_task(x, rows, labels, "next_state_family", "state", pooling_name))
-    manifest = {"schema_version": "clinical-jepa-v0a-train-manifest-v0", "created_utc": now_utc(), "dry_run": False, "variants": ["ridge_linear_probe", "nearest_centroid_probe"], "embedding_manifest": args.embedding_manifest, "trained": True, "aggregate_only": True, "n_embedding_rows": len(rows), "n_labeled_blocks": len(labels)}
+
+    retrievals = _train_target_predictor_and_retrieve(files, rows, outdir, max_candidates=args.retrieval_max_candidates, lam=args.ridge_lambda)
+    manifest = {"schema_version": "clinical-jepa-v0a-train-manifest-v0", "created_utc": now_utc(), "dry_run": False, "variants": ["ridge_linear_probe", "nearest_centroid_probe", "ridge_target_embedding_predictor"], "embedding_manifest": args.embedding_manifest, "trained": True, "aggregate_only": True, "n_embedding_rows": len(rows), "n_labeled_blocks": len(labels), "retrieval_predictors": list(retrievals or {})}
     write_json(outdir / "train-manifest.json", manifest)
-    write_json(outdir / "prediction-manifest.json", {"created_utc": now_utc(), "dry_run": False, "aggregate_only": True, "metrics": all_metrics})
+    write_json(outdir / "prediction-manifest.json", {"created_utc": now_utc(), "dry_run": False, "aggregate_only": True, "metrics": all_metrics, "retrieval": retrievals})
     md = ["# v0A FlatASCEND embedding probes", "", f"Embedding rows: {len(rows)}", f"Labeled T0 blocks: {len(labels)}", ""]
     for m in all_metrics:
         if m["baseline"] in {"ridge_linear_probe", "nearest_centroid_probe"}:
             md.append(f"- {m['task']} / {m['pooling']} / {m['split']} / {m['baseline']}: top1={m['top1_accuracy']:.3f}, n={m['n_evaluated']}, classes={m['n_classes_train']}")
+    if retrievals:
+        md.extend(["", "## Target-embedding retrieval", ""])
+        for name, report in retrievals.items():
+            overall = report["overall"]
+            md.append(f"- {name}: R@10={overall['recall_at_10']:.4f}, MRR={overall['mrr']:.4f}, median_rank={overall['median_rank']}")
     (outdir / "summary.md").write_text("\n".join(md) + "\n")
-    print(json.dumps({"train_manifest": str(outdir / "train-manifest.json"), "n_metrics": len(all_metrics)}, indent=2))
+    print(json.dumps({"train_manifest": str(outdir / "train-manifest.json"), "n_metrics": len(all_metrics), "retrieval_predictors": list(retrievals or {})}, indent=2))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
