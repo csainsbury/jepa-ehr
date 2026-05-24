@@ -30,6 +30,13 @@ SAFE_METADATA_FIELDS = {
     "contact_count",
     "equivalent_contact_present",
     "negative_control_present",
+    "diuretic_initiator_present",
+    "active_med_comparator_present",
+    "prior_exposure_lookback_complete",
+    "prior_diuretic_or_fluid_med_exposure",
+    "scenario_specific_lab_family_present",
+    "surveillance_control_present",
+    "biologic_negative_control_present",
     "scenario_consistent",
 }
 
