@@ -2,7 +2,7 @@
 
 Clinical-JEPA scaffolding for leakage-aware latent prediction experiments over tokenised EHR sequences.
 
-**Current v0 claim, stated cautiously:** Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences, including external INSPECT transfer. The current main evidence line is the scaled mean-token v0B scaffold; first transformer+EMA variants are strong on MIMIC but weaker on the INSPECT transfer gate.
+**Current v0 claim, stated cautiously:** Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences, including external INSPECT transfer. The current main evidence line is the scaled mean-token v0B scaffold; first transformer+EMA variants are strong on MIMIC and show clear INSPECT signal, but do not yet beat the simpler scaffold under the demanding MIMIC→INSPECT zero-shot transfer gate.
 
 This repository contains code, schemas, example configs, and aggregate/sanitized pilot notes. It does **not** contain clinical data, patient-level records, source identifiers, source-ID maps, token-level examples, embeddings, checkpoints, credentials, or download tokens.
 

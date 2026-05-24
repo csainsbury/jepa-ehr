@@ -18,9 +18,9 @@ The strongest result so far is not a finished model; it is a staged chain of evi
 4. Length-matched, utilisation/context-count matched, shuffle, query-shuffle, and time-shift controls did not explain the main retrieval signal.
 5. External INSPECT validation showed source-transfer signal for v0B; MIMIC-trained v0A transfer was much weaker.
 6. Scaling the mean-token v0B scaffold improved retrieval strongly, with 256d variants giving the best INSPECT transfer under candidate-normalized evaluation.
-7. First transformer+EMA variants were very strong on MIMIC but underperformed the scaled mean-token scaffold on INSPECT transfer.
+7. First transformer+EMA variants were very strong on MIMIC and retained clear INSPECT signal, but did not yet beat the scaled mean-token scaffold under the demanding MIMIC→INSPECT zero-shot transfer gate.
 
-The current interpretation is: **Clinical-JEPA v0 supports a cautious representation-learning claim**. Scaled mean-token v0B is the current main evidence line; transformer+EMA is an architecture diagnostic until a regularised/source-robust variant improves external transfer.
+The current interpretation is: **Clinical-JEPA v0 supports a cautious representation-learning claim**. Scaled mean-token v0B is the current main evidence line because it is strongest under the MIMIC→INSPECT zero-shot transfer gate; transformer+EMA is a promising architecture diagnostic that already transfers clearly above controls, but needs transfer-aware regularisation or source-robust training before it becomes the mainline.
 
 ---
 
@@ -425,7 +425,7 @@ Completed first transformer+EMA architecture evaluations on Vast:
 - `transformer-ema-384d-15k`: 2-layer transformer, 384d, 8 heads, 15k steps; dev cosine `0.5447`.
 - `transformer-ema-128d-25k`: 2-layer transformer, 128d, 4 heads, 25k steps.
 
-Both used the same aggregate-only retrieval, candidate-normalized retrieval, and target/query/time-shift controls as the scaled mean-token scaffold.
+All transformer+EMA variants used the same aggregate-only retrieval, candidate-normalized retrieval, and target/query/time-shift controls as the scaled mean-token scaffold.
 
 ### Outcome: candidate-normalized retrieval
 
@@ -440,9 +440,9 @@ Target/query/time-shift controls for these transformer+EMA runs stayed near chan
 
 ### Interpretation
 
-Transformer+EMA strongly improves or matches the best MIMIC gap-0 retrieval, but does **not** beat the best scaled mean-token scaffold on INSPECT transfer. The 384d/15k model transfers best among transformer+EMA variants, while shorter 256d training improves transfer over 256d/40k and the smaller 128d/25k run underperforms. This suggests source-specialisation and training/capacity effects rather than a simple “larger/longer is better” rule.
+Transformer+EMA strongly improves or matches the best MIMIC gap-0 retrieval and transfers clearly above controls, but does **not yet** beat the best scaled mean-token scaffold under the demanding MIMIC→INSPECT zero-shot transfer gate. The 384d/15k model transfers best among transformer+EMA variants, while shorter 256d training improves transfer over 256d/40k and the smaller 128d/25k run is lower than the other transformer variants. This suggests source-specialisation and training/capacity effects rather than a simple “larger/longer is better” rule.
 
-This means transformer+EMA should not yet replace the mean-token v0B scaffold as the mainline. It is a valuable architecture diagnostic showing strong within-source sequence modelling, but external-transfer robustness remains the gating criterion.
+This means transformer+EMA should not yet replace the mean-token v0B scaffold as the mainline. It is a valuable and promising architecture diagnostic showing strong within-source sequence modelling and non-trivial zero-shot source transfer; the remaining question is how to improve transfer robustness enough to beat the simpler scaffold.
 
 ### Final comparison snapshot
 
@@ -481,7 +481,7 @@ The final candidate-normalized comparison ranks the scaled mean-token models abo
 ### Best next steps
 
 1. Treat scaled mean-token v0B, especially 256d/25k and 256d/50k, as the current main evidence line.
-2. Treat transformer+EMA as an architecture diagnostic rather than the mainline until a regularised/source-balanced variant beats mean-token transfer.
+2. Treat transformer+EMA as a promising architecture diagnostic rather than the mainline until a transfer-aware regularised or source-balanced variant beats mean-token transfer.
 3. Pause new Vast compute and write up the aggregate findings before designing another architecture sweep.
 4. If another experiment is needed later, make it targeted: regularised/source-balanced transformer+EMA or held-out-source-aware early stopping, not a broad scaling sweep.
 5. Keep v0C raw/MEDS-lite and outcome-proximal T2 labels gated until explicit approval.
@@ -490,4 +490,4 @@ The final candidate-normalized comparison ranks the scaled mean-token models abo
 
 ## Short version for a slide
 
-Clinical-JEPA v0 has moved from idea to controlled real-data pilot. The JEPA objective learns non-collapsed future-block representations, beats frozen-FlatASCEND target-retrieval baselines under matched distractors, degrades sensibly with horizon, and transfers to INSPECT. Scaling the mean-token scaffold gives the strongest external-transfer results so far. First transformer+EMA variants are very strong on MIMIC but underperform the scaled mean-token scaffold on INSPECT, so they are architecture diagnostics rather than the current v0B mainline.
+Clinical-JEPA v0 has moved from idea to controlled real-data pilot. The JEPA objective learns non-collapsed future-block representations, beats frozen-FlatASCEND target-retrieval baselines under matched distractors, degrades sensibly with horizon, and transfers to INSPECT. Scaling the mean-token scaffold gives the strongest external-transfer results so far. First transformer+EMA variants are very strong on MIMIC and transfer clearly above controls, but do not yet beat the scaled mean-token scaffold under the hard MIMIC→INSPECT zero-shot gate, so they are promising architecture diagnostics rather than the current v0B mainline.

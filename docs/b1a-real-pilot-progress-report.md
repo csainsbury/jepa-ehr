@@ -248,7 +248,7 @@ Scaled-model query/time-shift controls are no longer near zero under the very fi
 
 ### 512d / 20k
 
-A 512-dimensional, 20k-step sweep improved MIMIC retrieval further but underperformed the 256d/25k run on INSPECT transfer.
+A 512-dimensional, 20k-step sweep improved MIMIC retrieval further but was lower than the 256d/25k run on INSPECT transfer.
 
 Training diagnostics:
 
@@ -336,7 +336,7 @@ Candidate-normalized results:
 | 128d/25k / INSPECT gap 16 | `0.4646` | `0.2615` | `12,152` | `0.0246` |
 | 128d/25k / INSPECT gap 64 | `0.3806` | `0.2047` | `11,560` | `0.0255` |
 
-Interpretation: transformer+EMA is very strong on MIMIC and controls remain near chance, but it does not beat the best scaled mean-token scaffold on INSPECT transfer. The 384d/15k transformer is the best transformer+EMA transfer variant; 256d/20k improves transfer over 256d/40k but remains below 384d/15k; 128d/25k underperforms. The current main evidence line therefore remains scaled mean-token v0B, not transformer+EMA.
+Interpretation: transformer+EMA is very strong on MIMIC and controls remain near chance. It transfers clearly above controls, but does not yet beat the best scaled mean-token scaffold under the demanding MIMIC→INSPECT zero-shot transfer gate. The 384d/15k transformer is the best transformer+EMA transfer variant; 256d/20k improves transfer over 256d/40k but remains below 384d/15k; 128d/25k is lower than the other transformer variants. The current main evidence line therefore remains scaled mean-token v0B, while transformer+EMA remains a promising transfer-aware architecture target rather than a failed direction.
 
 Final aggregate comparison snapshot:
 
@@ -373,5 +373,5 @@ v0/real-b1a-pilot-70k/controls/context-family/summary.md
 
 1. Stop/park Vast compute now that the queued aggregate diagnostics are complete and copied locally.
 2. Promote aggregate-only scripts/docs/results into the public repo as appropriate, with no data, embeddings, checkpoints, source-ID maps, secrets, or patient-level outputs.
-3. Write the v0 result narrative around scaled mean-token v0B as the current main evidence line and transformer+EMA as a strong but less transferable architecture diagnostic.
+3. Write the v0 result narrative around scaled mean-token v0B as the current main evidence line and transformer+EMA as a strong, promising architecture diagnostic that has not yet beaten mean-token under the hard MIMIC→INSPECT zero-shot gate.
 4. Defer any new GPU experiment until after synthesis; if needed, make it a targeted regularised/source-balanced transformer+EMA run rather than a broad sweep.

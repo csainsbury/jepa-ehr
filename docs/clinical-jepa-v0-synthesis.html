@@ -58,7 +58,7 @@
   <section id="abstract">
     <h2>1. Abstract / cautious claim</h2>
     <div class="callout good">
-      <strong>Cautious claim.</strong> Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences, including transfer to an external INSPECT validation source. The strongest external-transfer line so far is the scaled mean-token v0B scaffold; first transformer+EMA variants are strong on MIMIC but less transferable.
+      <strong>Cautious claim.</strong> Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences, including transfer to an external INSPECT validation source. The strongest external-transfer line so far is the scaled mean-token v0B scaffold; first transformer+EMA variants are strong on MIMIC and show real INSPECT signal, but do not yet beat the simpler scaled mean-token scaffold under the demanding MIMIC→INSPECT zero-shot transfer gate.
     </div>
     <p>The v0 programme tested whether a JEPA-style latent prediction objective can learn useful clinical state-transition representations from tokenised EHR sequences, without collapsing into a FlatASCEND/autoregressive teacher-copy story. The answer is provisionally yes: the signal survives leakage checks, matched distractors, horizon stress, candidate-normalized retrieval, row-shuffle controls, query-shuffle controls, within-group time-shift controls, and source-transfer evaluation.</p>
     <p>The result is not a clinical outcome model and not a causal treatment-effect claim. It is evidence that latent future-state prediction over clinical event streams is a viable representation-learning objective worth developing further.</p>
@@ -108,7 +108,7 @@
       <li>Length, sequence-length, utilisation/context-count matching, candidate normalization, and row/query/time controls did not explain the main signal.</li>
       <li>MIMIC-trained v0B showed external INSPECT transfer; MIMIC-trained v0A transfer was much weaker.</li>
       <li>Scaling the mean-token v0B scaffold improved retrieval strongly, with a MIMIC-vs-transfer trade-off.</li>
-      <li>Transformer+EMA variants improved MIMIC retrieval but underperformed scaled mean-token models on INSPECT transfer.</li>
+      <li>Transformer+EMA variants improved MIMIC retrieval and transferred clearly above controls, but did not yet beat scaled mean-token models under the demanding MIMIC→INSPECT zero-shot transfer gate.</li>
     </ol>
 
     <h3>4.2 Robustness/control summary</h3>
@@ -178,7 +178,7 @@
       <tbody>
         <tr><td>Compute</td><td><span class="tag good">Keep Vast stopped</span></td><td>Current work is write-up and public documentation, not GPU-bound.</td></tr>
         <tr><td>Main v0B line</td><td><span class="tag good">Scaled mean-token v0B</span></td><td>Best INSPECT transfer and simplest current evidence line.</td></tr>
-        <tr><td>Transformer+EMA</td><td><span class="tag warn">Architecture diagnostic</span></td><td>Strong MIMIC scores, weaker INSPECT transfer.</td></tr>
+        <tr><td>Transformer+EMA</td><td><span class="tag warn">Promising architecture diagnostic</span></td><td>Strong MIMIC scores and clear zero-shot INSPECT signal, but not yet better than the simpler scaffold under the external-source transfer gate.</td></tr>
         <tr><td>Claim strength</td><td><span class="tag good">Cautious representation-learning claim</span></td><td>Retrieval/transfer evidence is strong; clinical utility and causal claims are not established.</td></tr>
         <tr><td>v0C/T2</td><td><span class="tag stop">Remain gated</span></td><td>Raw/MEDS-lite and outcome-proximal labels require explicit approval and prefix-safety review.</td></tr>
       </tbody>

@@ -6,7 +6,7 @@ Status: **do not run until after write-up review**.
 
 ## Decision context
 
-The B1a v0 synthesis supports scaled mean-token v0B as the current main evidence line. First transformer+EMA variants were very strong on MIMIC but underperformed scaled mean-token models on INSPECT transfer. Therefore the next GPU experiment, if any, should be a single targeted transfer-improvement test rather than a broad architecture sweep.
+The B1a v0 synthesis supports scaled mean-token v0B as the current main evidence line. First transformer+EMA variants were very strong on MIMIC and retained clear INSPECT signal, but did not yet beat scaled mean-token models under the demanding MIMIC→INSPECT zero-shot transfer gate. Therefore the next GPU experiment, if any, should be a single targeted transfer-improvement test rather than a broad architecture sweep.
 
 ## Question
 
