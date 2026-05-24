@@ -378,10 +378,11 @@ Candidate-normalized retrieval used only groups with at least 128 candidates and
 | 256d / 25k | `0.8723` | `0.7064` | `0.6427` | `0.4845` |
 | 512d / 20k | `0.9412` | `0.7102` | `0.6232` | `0.4596` |
 | 256d / 50k | `0.9084` | `0.7096` | `0.6414` | `0.4812` |
+| 384d / 40k | `0.9301` | `0.6988` | `0.6402` | `0.4716` |
 
 ### Outcome: scaled-model controls
 
-For 256d/25k and 256d/50k, target/query/time-shift controls were no longer near zero under the fine utilisation policy, because candidate groups are smaller and more homogeneous. But controls remained far below observed retrieval.
+For the scaled mean-token models, target/query/time-shift controls were no longer near zero under the fine utilisation policy, because candidate groups are smaller and more homogeneous. But controls remained far below observed retrieval.
 
 Example, 256d/50k:
 
@@ -409,38 +410,52 @@ The mean-token scaffold has been useful, but it is not a true JEPA architecture.
 
 ---
 
-## 11. Current active step: transformer + EMA target JEPA
+## 11. Transformer + EMA target JEPA architecture test
 
 ### Intuition
 
 A real JEPA should have separate context and target encoders, usually with a slow-moving/EMA target branch to avoid representational collapse and teacher leakage. The mean-token scaffold tests the objective; a transformer+EMA model tests whether richer sequence structure helps.
 
-### What is running now
+### What we ran
 
-A first transformer EMA JEPA run is active on Vast:
+Completed first transformer+EMA architecture evaluations on Vast:
 
-- model: transformer context encoder + EMA target encoder;
-- dimension: `256`;
-- layers: `2`;
-- heads: `8`;
-- steps: `20,000`;
-- context cap: `256` events;
-- target cap: `64` events.
+- `transformer-ema-256d-20k`: 2-layer transformer, 256d, 8 heads, 20k steps; dev cosine `0.5836`.
+- `transformer-ema-256d-40k`: 2-layer transformer, 256d, 8 heads, 40k steps; dev cosine `0.5600`.
+- `transformer-ema-384d-15k`: 2-layer transformer, 384d, 8 heads, 15k steps; dev cosine `0.5447`.
+- `transformer-ema-128d-25k`: 2-layer transformer, 128d, 4 heads, 25k steps.
 
-### Expected outcome
+Both used the same aggregate-only retrieval, candidate-normalized retrieval, and target/query/time-shift controls as the scaled mean-token scaffold.
 
-The key question is not just whether it improves MIMIC retrieval. It should be judged on:
+### Outcome: candidate-normalized retrieval
 
-1. non-collapse diagnostics: cosine, variance, effective rank;
-2. MIMIC horizon retrieval;
-3. INSPECT transfer;
-4. candidate-normalized retrieval;
-5. query/time-shift controls;
-6. whether improvement comes from sequence modelling rather than smaller candidate groups.
+| Model | MIMIC gap 0 R@10 | MIMIC gap 64 R@10 | INSPECT gap 0 R@10 | INSPECT gap 64 R@10 |
+|---|---:|---:|---:|---:|
+| transformer+EMA 384d/15k | `0.9608` | `0.7039` | `0.5612` | `0.4278` |
+| transformer+EMA 256d/20k | `0.9569` | `0.6823` | `0.5385` | `0.4077` |
+| transformer+EMA 256d/40k | `0.9539` | `0.6664` | `0.5151` | `0.3851` |
+| transformer+EMA 128d/25k | `0.9003` | `0.6466` | `0.4903` | `0.3806` |
 
-### Rationale for next step
+Target/query/time-shift controls for these transformer+EMA runs stayed near chance under the candidate-normalized policy, around R@10 `0.022–0.027`, while observed retrieval was much higher.
 
-If transformer+EMA improves INSPECT transfer or horizon stability, promote this to the main v0B architecture line. If it only improves MIMIC and worsens external transfer, keep it as a capacity/overfit diagnostic and design stronger regularisation or source-balanced training.
+### Interpretation
+
+Transformer+EMA strongly improves or matches the best MIMIC gap-0 retrieval, but does **not** beat the best scaled mean-token scaffold on INSPECT transfer. The 384d/15k model transfers best among transformer+EMA variants, while shorter 256d training improves transfer over 256d/40k and the smaller 128d/25k run underperforms. This suggests source-specialisation and training/capacity effects rather than a simple “larger/longer is better” rule.
+
+This means transformer+EMA should not yet replace the mean-token v0B scaffold as the mainline. It is a valuable architecture diagnostic showing strong within-source sequence modelling, but external-transfer robustness remains the gating criterion.
+
+### Final comparison snapshot
+
+The final candidate-normalized comparison ranks the scaled mean-token models above all transformer+EMA variants on INSPECT gap 0/16/64. On INSPECT gap 64, the top models are:
+
+| Rank | Model | Family | R@10 | MRR |
+|---:|---|---|---:|---:|
+| 1 | scaled-256d/25k | mean-token | `0.4845` | `0.2982` |
+| 2 | 256d/50k | mean-token | `0.4812` | `0.2923` |
+| 3 | 384d/40k | mean-token | `0.4716` | `0.2904` |
+| 4 | scaled-512d/20k | mean-token | `0.4596` | `0.2775` |
+| 5 | transformer+EMA 384d/15k | transformer+EMA | `0.4278` | `0.2397` |
+
 
 ---
 
@@ -460,20 +475,19 @@ If transformer+EMA improves INSPECT transfer or horizon stability, promote this 
 
 - How much of the retrieval signal is clinically meaningful patient-state transition vs care-process/utilisation structure.
 - Whether mean-token scaling is discovering robust clinical state or increasingly fitting source-specific token co-occurrence geometry.
-- Whether a transformer/EMA architecture improves source transfer enough to justify moving beyond the scaffold.
+- Whether the mean-token scaffold's superior INSPECT transfer reflects true robustness or a simpler representation that avoids source-specialised sequence shortcuts.
 - Whether INSPECT should be used only as locked external validation or also in source-balanced training for later v1.
 
 ### Best next steps
 
-1. Finish the transformer+EMA v0B run.
-2. Evaluate it on MIMIC and INSPECT using the same retrieval, candidate-normalized, and query/time-shift controls.
-3. Compare transformer+EMA against the best mean-token model, especially on INSPECT gap 16/64.
-4. If transformer+EMA improves transfer, make it the v0B mainline.
-5. If not, run one source-balanced or regularised mean-token/transformer variant before investing in a larger architecture.
-6. Keep v0C raw/MEDS-lite gated until explicit approval.
+1. Treat scaled mean-token v0B, especially 256d/25k and 256d/50k, as the current main evidence line.
+2. Treat transformer+EMA as an architecture diagnostic rather than the mainline until a regularised/source-balanced variant beats mean-token transfer.
+3. Pause new Vast compute and write up the aggregate findings before designing another architecture sweep.
+4. If another experiment is needed later, make it targeted: regularised/source-balanced transformer+EMA or held-out-source-aware early stopping, not a broad scaling sweep.
+5. Keep v0C raw/MEDS-lite and outcome-proximal T2 labels gated until explicit approval.
 
 ---
 
 ## Short version for a slide
 
-Clinical-JEPA v0 has moved from idea to controlled real-data pilot. The minimal JEPA objective learns non-collapsed future-block representations, beats frozen-FlatASCEND target-retrieval baselines under matched distractors, degrades sensibly with horizon, and transfers to INSPECT. Scaling the mean-token scaffold gives large retrieval gains but raises candidate-set and source-transfer questions. The current run is the first transformer+EMA JEPA architecture test, which will decide whether to promote v0B from scaffold to main architecture line.
+Clinical-JEPA v0 has moved from idea to controlled real-data pilot. The JEPA objective learns non-collapsed future-block representations, beats frozen-FlatASCEND target-retrieval baselines under matched distractors, degrades sensibly with horizon, and transfers to INSPECT. Scaling the mean-token scaffold gives the strongest external-transfer results so far. First transformer+EMA variants are very strong on MIMIC but underperform the scaled mean-token scaffold on INSPECT, so they are architecture diagnostics rather than the current v0B mainline.

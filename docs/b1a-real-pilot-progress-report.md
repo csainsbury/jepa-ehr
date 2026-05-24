@@ -286,7 +286,7 @@ Candidate-normalized retrieval with only groups containing at least 128 candidat
 | 512d/20k / INSPECT gap 16 | `0.5605` | `0.3621` | `11,285` | `6,497` |
 | 512d/20k / INSPECT gap 64 | `0.4596` | `0.2775` | `10,691` | `5,978` |
 
-Interpretation caution: these are still mean-token scaffolds, not true EMA/transformer JEPA architectures. Scaling improves retrieval substantially, but candidate-set/group-size effects and source-transfer differences must be reported explicitly. A 256d/50k follow-up is now running to test whether the 256d external-transfer advantage improves with longer training.
+Interpretation caution: these are still mean-token scaffolds, not true EMA/transformer JEPA architectures. Scaling improves retrieval substantially, but candidate-set/group-size effects and source-transfer differences must be reported explicitly. Later 256d/50k and 384d/40k controls confirmed the same pattern: 256d/25k, 256d/50k, and 384d/40k are tightly clustered on INSPECT transfer, with 256d/25k marginally best on candidate-normalized INSPECT gap 64.
 
 Sanitized aggregate snapshots:
 
@@ -301,6 +301,53 @@ state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness
 state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/scaled-query-time-controls/
 state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/v0b-scaled-512d-20k/
 state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/b1a-robustness-controls/candidate-normalized/
+```
+
+## Transformer+EMA architecture diagnostics
+
+Completed the first transformer+EMA JEPA evaluations for `256d/20k`, `256d/40k`, `384d/15k`, and `128d/25k`, using utilisation/context-count matched retrieval, candidate-normalized retrieval, and target/query/time-shift controls.
+
+Candidate-normalized results:
+
+| Model / source-gap | Recall@10 | MRR | evaluated blocks | target-shuffle R@10 |
+|---|---:|---:|---:|---:|
+| 256d/20k / MIMIC gap 0 | `0.9569` | `0.8919` | `47,737` | `0.0223` |
+| 256d/20k / MIMIC gap 16 | `0.7870` | `0.5702` | `41,730` | `0.0227` |
+| 256d/20k / MIMIC gap 64 | `0.6823` | `0.4404` | `25,434` | `0.0254` |
+| 256d/20k / INSPECT gap 0 | `0.5385` | `0.3250` | `12,288` | `0.0265` |
+| 256d/20k / INSPECT gap 16 | `0.4932` | `0.2876` | `12,152` | `0.0255` |
+| 256d/20k / INSPECT gap 64 | `0.4077` | `0.2260` | `11,560` | `0.0226` |
+| 256d/40k / MIMIC gap 0 | `0.9539` | `0.8963` | `47,737` | `0.0228` |
+| 256d/40k / MIMIC gap 16 | `0.7919` | `0.5765` | `41,730` | `0.0230` |
+| 256d/40k / MIMIC gap 64 | `0.6664` | `0.4235` | `25,434` | `0.0257` |
+| 256d/40k / INSPECT gap 0 | `0.5151` | `0.3034` | `12,288` | `0.0243` |
+| 256d/40k / INSPECT gap 16 | `0.4587` | `0.2584` | `12,152` | `0.0249` |
+| 256d/40k / INSPECT gap 64 | `0.3851` | `0.2120` | `11,560` | `0.0240` |
+| 384d/15k / MIMIC gap 0 | `0.9608` | `0.9064` | `47,737` | `0.0219` |
+| 384d/15k / MIMIC gap 16 | `0.8244` | `0.6213` | `41,730` | `0.0222` |
+| 384d/15k / MIMIC gap 64 | `0.7039` | `0.4636` | `25,434` | `0.0248` |
+| 384d/15k / INSPECT gap 0 | `0.5612` | `0.3390` | `12,288` | `0.0257` |
+| 384d/15k / INSPECT gap 16 | `0.5197` | `0.3077` | `12,152` | `0.0255` |
+| 384d/15k / INSPECT gap 64 | `0.4278` | `0.2397` | `11,560` | `0.0249` |
+| 128d/25k / MIMIC gap 0 | `0.9003` | `0.7190` | `47,737` | `0.0224` |
+| 128d/25k / MIMIC gap 16 | `0.7043` | `0.4669` | `41,730` | `0.0235` |
+| 128d/25k / MIMIC gap 64 | `0.6466` | `0.3916` | `25,434` | `0.0246` |
+| 128d/25k / INSPECT gap 0 | `0.4903` | `0.2848` | `12,288` | `0.0252` |
+| 128d/25k / INSPECT gap 16 | `0.4646` | `0.2615` | `12,152` | `0.0246` |
+| 128d/25k / INSPECT gap 64 | `0.3806` | `0.2047` | `11,560` | `0.0255` |
+
+Interpretation: transformer+EMA is very strong on MIMIC and controls remain near chance, but it does not beat the best scaled mean-token scaffold on INSPECT transfer. The 384d/15k transformer is the best transformer+EMA transfer variant; 256d/20k improves transfer over 256d/40k but remains below 384d/15k; 128d/25k underperforms. The current main evidence line therefore remains scaled mean-token v0B, not transformer+EMA.
+
+Final aggregate comparison snapshot:
+
+```text
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/transformer-ema-eval/transformer-jepa-comparison-20260524T174601Z.md
+```
+
+Sanitized aggregate snapshot:
+
+```text
+state/workflows/2026-05-23-clinical-jepa-blueprint/vast-snapshots/transformer-ema-eval/
 ```
 
 ## Current outputs of interest
@@ -324,6 +371,7 @@ v0/real-b1a-pilot-70k/controls/context-family/summary.md
 
 ## Recommended next atoms
 
-1. Finish the running v0B 256d/50k follow-up and compare against 256d/25k and 512d/20k.
-2. Run query/time-shift and candidate-normalized controls for 256d/50k if it improves or matches 256d/25k.
-3. Then consider a true larger v0B encoder/EMA target architecture beyond the mean-token scaffold.
+1. Stop/park Vast compute now that the queued aggregate diagnostics are complete and copied locally.
+2. Promote aggregate-only scripts/docs/results into the public repo as appropriate, with no data, embeddings, checkpoints, source-ID maps, secrets, or patient-level outputs.
+3. Write the v0 result narrative around scaled mean-token v0B as the current main evidence line and transformer+EMA as a strong but less transferable architecture diagnostic.
+4. Defer any new GPU experiment until after synthesis; if needed, make it a targeted regularised/source-balanced transformer+EMA run rather than a broad sweep.
