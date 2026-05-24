@@ -1,74 +1,160 @@
-# Clinical-JEPA next experiment brief — transfer-guarded transformer+EMA
+# Clinical-JEPA next experiment brief — generation and TTE readiness first
 
 Date: 2026-05-24
 
-Status: **do not run until after write-up review**.
+Status: **do not run compute until after write-up review**.
 
-## Decision context
+## Why this replaces the transfer-optimisation brief
 
-The B1a v0 synthesis supports scaled mean-token v0B as the current main evidence line. First transformer+EMA variants were very strong on MIMIC and retained clear INSPECT signal, but did not yet beat scaled mean-token models under the demanding MIMIC→INSPECT zero-shot transfer gate. Therefore the next GPU experiment, if any, should be a single targeted transfer-improvement test rather than a broad architecture sweep.
+The previous follow-up brief jumped too quickly to transfer-aware transformer+EMA optimisation. That is not wrong eventually, but it is not the next conceptual bottleneck.
 
-## Question
+The original Clinical-JEPA question is broader:
 
-Can a regularised transformer+EMA model close the INSPECT transfer gap while retaining strong MIMIC retrieval?
+> Can a JEPA-style latent patient-state model help produce autoregressive clinical futures that are clinically reasonable?
 
-## Default training boundary
+The v0 work so far answered an upstream representation question: JEPA-style latent prediction learns a real future-block signal and transfers under a hard MIMIC→INSPECT zero-shot test. It did **not** yet answer whether the latent state can be rendered into clinically reasonable explicit event sequences.
 
-- Train on MIMIC only.
-- Keep INSPECT locked for one-shot external evaluation.
-- If INSPECT is used in training, that must be an explicit separate decision because it changes the external-validation story.
+Therefore the next experiment should test **generation/readout readiness and TTE-style data quality**, not transfer optimisation.
 
-## Single experiment sketch
+## How far we got technically
 
-Model: `transformer-ema-transfer-guarded-v0`
+Completed:
 
-Configuration envelope:
+- Governed re-keyed B1a MIMIC + INSPECT tokenised substrate.
+- Prefix-safe target-block extraction and leakage audits.
+- v0A frozen FlatASCEND baselines.
+- v0B mean-token JEPA latent prediction.
+- Transformer+EMA JEPA latent prediction diagnostics.
+- Matched/candidate-normalized retrieval and target/query/time-shift controls.
+- INSPECT external zero-shot evaluation.
 
-- 2-layer transformer+EMA context/target encoders.
-- 256–384d representation width.
-- stronger dropout and weight decay than the first transformer+EMA variants.
-- higher EMA decay.
-- predictor bottleneck to reduce source-specific memorisation.
-- shorter training / early-stop checkpoint selection using MIMIC dev gap64 retrieval and non-collapse diagnostics.
+Not yet completed:
 
-## Required evaluations
+- No JEPA decoder/renderer that emits explicit future token/time sequences.
+- No JEPA-conditioned autoregressive rollout.
+- No evaluation of JEPA-generated sequences for clinical plausibility.
+- No TTE-style cohort/specification audit of generated futures.
+- T1 medication-change blocks were extracted in the pilot, but the main retrieval/architecture wave focused on T0 future-block prediction. T2 outcome-proximal labels remain gated/unconfirmed.
 
-Use the same aggregate-only evaluation stack as v0:
+Current technical position:
 
-1. MIMIC gap0/gap16/gap64 retrieval.
-2. INSPECT gap0/gap16/gap64 retrieval.
-3. Candidate-normalized retrieval with min 128 / max 512 candidates per group.
-4. Target-row shuffle, query-row shuffle, and within-group time-shift controls.
-5. Collapse diagnostics: dev cosine, variance/effective rank.
-6. Leakage audit unchanged/pass.
+- Clinical-JEPA can predict latent future-block representations.
+- The nearest-neighbour target-retrieval setup can be used as a **retrieval-based pseudo-renderer** for a first data-quality/generation-readiness test.
+- FlatASCEND remains the explicit autoregressive speaker/generator substrate. A hybrid route would let JEPA predict latent future state first, then either retrieve or condition/render explicit sequences.
 
-## Primary success gate
+## Next question
 
-Candidate-normalized INSPECT gap64 must beat the scaled mean-token 256d/25k reference:
+Before another architecture or transfer-learning run, answer:
 
-- reference INSPECT gap64 R@10: `0.4845`
-- reference INSPECT gap64 MRR: `0.2982`
+> Are the available tokenised sequences and target blocks good enough to support clinically meaningful generation/readout tests, especially TTE-style incident-user or active-comparator scenarios?
 
-A MIMIC-only gain is insufficient.
+## Proposed next atom: TTE/specification data-quality audit
 
-## Secondary gates
+Purpose: test whether the governed B1a token substrate supports clean clinical decision-point cohorts and sequence-quality checks before asking JEPA to generate futures.
 
-- INSPECT gap16 should also improve over or match the mean-token reference.
-- Controls must remain far below observed retrieval.
-- Horizon degradation should remain sensible.
-- No collapse or effective-rank warning.
-- No leakage-audit regression.
+This is **not** a causal estimate and **not** a treatment-effect claim. It is a data/specification readiness test.
+
+### Candidate TTE-style specification card
+
+Pick one medication-initiation scenario only, preferably one already compatible with FlatASCEND/ASCEND token families and available in MIMIC + INSPECT.
+
+Minimum card fields:
+
+- clinical question / decision point;
+- eligibility window;
+- incident-user definition;
+- active comparator or clinically plausible non-exposed index event;
+- time zero;
+- baseline lookback;
+- follow-up horizon;
+- outcome/proxy candidates;
+- censoring rules;
+- required negative controls;
+- surveillance/contact-intensity controls;
+- leakage exclusions;
+- minimum cohort-size and positivity thresholds.
+
+### Aggregate outputs
+
+For each source and split, write aggregate-only tables:
+
+- eligible subjects/sequences;
+- incident initiators;
+- comparator candidates;
+- baseline lookback completeness;
+- follow-up availability;
+- outcome/proxy event rates;
+- medication/lab/state observation density;
+- equivalent-contact availability for comparators;
+- source differences MIMIC vs INSPECT;
+- reasons for exclusion;
+- warning flags for immortal-time, prevalent-user, time-lag, detection, or endpoint-adjacent leakage risk.
+
+No patient-level rows, examples, source identifiers, HDF5s, embeddings, checkpoints, or raw tokens should be copied into reports.
+
+## Proposed next atom: retrieval-based pseudo-rendering smoke test
+
+If the TTE/specification audit passes, use existing JEPA embeddings without training a new model:
+
+1. For each eligible context, predict a latent future state.
+2. Retrieve top-k observed target blocks under the existing matched/candidate-normalized policy.
+3. Treat retrieved target blocks as a **pseudo-rendered future set**, not a generated sequence.
+4. Evaluate whether these retrieved futures are clinically/specification-consistent in aggregate.
+
+Aggregate checks:
+
+- event-family distribution vs observed futures;
+- medication/lab/state density;
+- horizon/time-gap plausibility;
+- TTE eligibility/follow-up consistency;
+- treatment-strategy consistency;
+- impossible or contradictory transition rates;
+- negative-control event rates;
+- surveillance/contact-intensity artifacts.
+
+This tests whether the latent representation can select clinically plausible futures before building a decoder.
+
+## Proposed later atom: explicit renderer/rollout bridge
+
+Only after the above passes, choose one renderer route:
+
+1. **Retrieval renderer:** return nearest observed future blocks as a non-generative clinical analogue / case-based future set.
+2. **FlatASCEND speaker bridge:** use Clinical-JEPA to choose or condition a latent future state, then use FlatASCEND-style autoregressive continuation as the explicit event speaker.
+3. **JEPA decoder head:** train a small decoder from predicted latent state to future token/time distributions, with strong syntax/time plausibility checks.
+
+Do not start with a large new transformer+EMA optimisation run until the renderer question is framed.
+
+## Success gates
+
+The TTE/data-quality atom succeeds if:
+
+- at least one scenario has enough incident-user and comparator candidates in MIMIC;
+- the same scenario is at least measurable in INSPECT;
+- time zero, baseline lookback, and follow-up can be defined without future leakage;
+- outcome/proxy candidates are prefix-safe or explicitly marked as not ready;
+- surveillance/contact-intensity controls are available;
+- exclusion reasons and source differences are reportable in aggregate.
+
+The pseudo-rendering atom succeeds if:
+
+- retrieved futures are far more specification-consistent than shuffle controls;
+- horizon/time and event-family distributions are plausible;
+- negative controls do not move in clinically nonsensical ways;
+- artifacts point to fixable data/specification issues rather than model collapse.
 
 ## Stop criteria
 
-Stop after one run if:
+Stop before new model training if:
 
-- INSPECT gap64 remains below the mean-token reference by more than a small tolerance;
-- controls rise materially toward observed retrieval;
-- representation collapse diagnostics worsen;
-- implementation requires new data access, raw/MEDS-lite inputs, or T2 outcome labels.
+- no clean incident-user/comparator scenario can be specified;
+- required outcome/proxy labels are not prefix-safe;
+- source differences make INSPECT uninterpretable for the scenario;
+- controls suggest retrieval/pseudo-rendering is mostly utilisation or contact-density matching;
+- the task requires v0C raw/MEDS-lite or T2 outcome-proximal labels without explicit approval.
 
-Do not launch a sweep without a new written rationale.
+## Relation to transfer optimisation
+
+Transfer-aware transformer+EMA regularisation remains a plausible later experiment, but it should be downstream of the generation/readout question. If the substrate cannot yet support clinically meaningful TTE-style generation tests, improving MIMIC→INSPECT retrieval alone will not answer the core Clinical-JEPA/ORCA question.
 
 ## Governance boundary
 

@@ -186,20 +186,34 @@
   </section>
 
   <section id="next-experiment">
-    <h2>9. Next experiment brief — only if needed after write-up</h2>
-    <div class="callout warn"><strong>Default posture:</strong> do not restart compute until the written report and public docs have been reviewed. If another experiment is justified, run one targeted transfer-improvement test, not a broad sweep.</div>
-    <h3>Experiment: transfer-guarded regularised transformer+EMA</h3>
+    <h2>9. Next experiment brief — generation and TTE readiness first</h2>
+    <div class="callout warn"><strong>Correction to the transfer-optimisation instinct:</strong> the next conceptual bottleneck is not immediately improving MIMIC→INSPECT transfer. The core question is whether JEPA-style latent state prediction can help produce clinically reasonable explicit futures. We have not yet tested that.</div>
+    <h3>How far we got technically</h3>
+    <ul>
+      <li>Completed: governed token substrate, prefix-safe target blocks, leakage audits, v0A baselines, v0B mean-token JEPA, transformer+EMA diagnostics, matched retrieval, candidate-normalized retrieval, controls, and INSPECT zero-shot evaluation.</li>
+      <li>Not completed: no JEPA decoder/renderer, no JEPA-conditioned autoregressive rollout, no clinical plausibility evaluation of JEPA-generated sequences, and no TTE-style audit of generated futures.</li>
+      <li>Current bridge: the retrieval setup can serve as a <em>pseudo-renderer</em> by retrieving observed future blocks nearest to the predicted latent future state. That is not generation, but it is a good first test of whether latent predictions select clinically plausible futures.</li>
+    </ul>
+    <h3>Next atom A: TTE/specification data-quality audit</h3>
+    <p>Before training another model, define one medication-initiation or active-comparator scenario as a target-trial-style specification card. This is a data/specification readiness test, not a causal estimate.</p>
     <table>
       <tbody>
-        <tr><th>Question</th><td>Can a regularised transformer+EMA model close the INSPECT transfer gap while retaining strong MIMIC retrieval?</td></tr>
-        <tr><th>Default training boundary</th><td>MIMIC-only training, INSPECT locked for one-shot external evaluation. If INSPECT is used in training, that must be a separate explicit decision because it changes the external-validation story.</td></tr>
-        <tr><th>Single configuration</th><td>2-layer transformer+EMA, 256–384d, stronger dropout/weight decay, higher EMA decay, predictor bottleneck, shorter training with early-stop checkpoint selection using MIMIC dev gap64 and collapse diagnostics.</td></tr>
-        <tr><th>Primary gate</th><td>Candidate-normalized INSPECT gap64 R@10 and MRR must beat the scaled mean-token 256d/25k reference, not just improve MIMIC gap0.</td></tr>
-        <tr><th>Secondary gates</th><td>Controls remain far below observed retrieval; horizon degradation remains sensible; no collapse; no leakage audit regressions.</td></tr>
-        <tr><th>Stop criteria</th><td>Stop after one run if INSPECT gap64 remains below mean-token reference by more than a small tolerance, or if controls rise materially toward observed retrieval. Do not launch a sweep without a new written rationale.</td></tr>
-        <tr><th>Governance</th><td>No v0C raw/MEDS-lite and no T2 outcome-proximal labels unless explicitly approved. No raw/patient-level outputs, checkpoints, embeddings, HDF5s, source-ID maps, secrets, or time-limited URLs in public artifacts.</td></tr>
+        <tr><th>Specification fields</th><td>Eligibility, incident-user definition, active comparator/equivalent contact, time zero, baseline lookback, follow-up, outcome/proxy candidates, censoring, negative controls, surveillance/contact-intensity controls, leakage exclusions.</td></tr>
+        <tr><th>Aggregate outputs</th><td>Cohort counts, incident initiators, comparator candidates, baseline completeness, follow-up availability, event rates, observation density, exclusion reasons, MIMIC vs INSPECT source differences, and bias/leakage warnings.</td></tr>
+        <tr><th>Pass gate</th><td>At least one scenario has enough MIMIC subjects and is measurable in INSPECT, with prefix-safe definitions and usable negative/surveillance controls.</td></tr>
       </tbody>
     </table>
+    <h3>Next atom B: retrieval-based pseudo-rendering smoke test</h3>
+    <p>If the TTE/specification audit passes, use existing JEPA embeddings without new training: predict latent future state, retrieve top-k matched observed target blocks, and assess whether those retrieved futures are clinically/specification-consistent in aggregate.</p>
+    <table>
+      <tbody>
+        <tr><th>Checks</th><td>Event-family distribution, medication/lab/state density, horizon/time-gap plausibility, TTE consistency, treatment-strategy consistency, impossible transition rates, negative-control rates, and surveillance artifacts.</td></tr>
+        <tr><th>Success</th><td>Retrieved futures are much more specification-consistent than shuffle controls and reveal plausible future-state structure rather than just utilisation/contact-density matching.</td></tr>
+        <tr><th>Stop</th><td>Stop before new model training if no clean TTE-style scenario exists, outcome/proxy labels are not prefix-safe, or pseudo-rendering is mostly utilisation/contact-density.</td></tr>
+      </tbody>
+    </table>
+    <h3>Only later: explicit renderer/rollout bridge</h3>
+    <p>After the above passes, choose between a retrieval renderer, a FlatASCEND speaker bridge, or a small JEPA decoder head. Transfer-aware transformer+EMA regularisation remains a later experiment, downstream of the generation/readout question.</p>
   </section>
 </main>
 </body>
