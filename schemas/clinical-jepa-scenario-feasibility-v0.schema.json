@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-scenario-feasibility-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "scenario_id", "aggregate_only", "overall_decision", "results"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-scenario-feasibility-v0"]},
+    "created_utc": {"type": "string"},
+    "scenario_id": {"type": "string"},
+    "dry_run": {"type": "boolean"},
+    "leakage_checked": {"type": "boolean"},
+    "aggregate_only": {"type": "boolean", "const": true},
+    "source_target_blocks": {"type": "string"},
+    "n_groups": {"type": "integer", "minimum": 0},
+    "overall_decision": {"type": "string", "enum": ["promote", "redesign", "park", "insufficient_information"]},
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "scenario_id",
+          "source_role",
+          "split",
+          "n_subjects",
+          "n_sequences",
+          "n_eligible",
+          "n_incident_initiators",
+          "n_comparator_candidates",
+          "baseline_lookback_complete_pct",
+          "followup_available_pct",
+          "target_block_available_pct",
+          "proxy_event_rate_pct",
+          "negative_control_rate_pct",
+          "median_contact_count",
+          "exclusion_counts",
+          "warnings",
+          "decision"
+        ],
+        "properties": {
+          "scenario_id": {"type": "string"},
+          "source_role": {"type": "string"},
+          "split": {"type": "string"},
+          "n_subjects": {"type": "integer", "minimum": 0},
+          "n_sequences": {"type": "integer", "minimum": 0},
+          "n_eligible": {"type": "integer", "minimum": 0},
+          "n_incident_initiators": {"type": "integer", "minimum": 0},
+          "n_comparator_candidates": {"type": "integer", "minimum": 0},
+          "baseline_lookback_complete_pct": {"type": "number", "minimum": 0},
+          "followup_available_pct": {"type": "number", "minimum": 0},
+          "target_block_available_pct": {"type": "number", "minimum": 0},
+          "proxy_event_rate_pct": {"type": "number", "minimum": 0},
+          "negative_control_rate_pct": {"type": "number", "minimum": 0},
+          "median_contact_count": {"type": "number", "minimum": 0},
+          "median_lab_or_event_density": {"type": "number", "minimum": 0},
+          "event_family_summary": {"type": "object"},
+          "exclusion_counts": {"type": "object"},
+          "warnings": {"type": "array", "items": {"type": "string"}},
+          "decision": {"type": "string", "enum": ["promote", "redesign", "park", "insufficient_information"]},
+          "notes": {"type": "string"}
+        }
+      }
+    },
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "string"}
+  }
+}

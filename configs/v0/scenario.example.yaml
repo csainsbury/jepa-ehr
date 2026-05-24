@@ -1,0 +1,75 @@
+# Placeholder-only scenario card for aggregate Clinical-JEPA TTE/readout feasibility scans.
+# This file is safe to commit. It contains no clinical data, IDs, tokens, or source paths.
+
+scenario_id: diuretic_fluid_management_placeholder
+status: placeholder_not_approved_for_claims
+clinical_question: >-
+  Can a medication-change clinical decision point support aggregate-only
+  pseudo-rendering/readout checks without leakage or contact-intensity collapse?
+claim_boundary: >-
+  Specification/data-quality diagnostic only. Not a causal estimate, treatment
+  effect, clinical response claim, or clinical recommendation.
+
+source_roles:
+  primary: MIMIC train/dev/test when approved local bundle is present
+  external_validation: INSPECT external validation when approved local bundle is present
+
+time_zero: medication-change target-block anchor or equivalent contact event
+baseline_lookback: prefix/context events only
+followup: target-block event window only
+
+target_block_mapping:
+  primary: T1
+  comparators: [T0]
+  t2_outcome_proximal: gated_disabled
+
+aggregate_rules:
+  eligible_target_types: [T0, T1]
+  incident_target_types: [T1]
+  comparator_target_types: [T0]
+  min_context_events: 8
+  min_target_events: 8
+  baseline_lookback_events: 8
+  followup_events: 8
+  # These fields are aggregate metadata expected in embedding/target indices when available.
+  proxy_positive_fields: [target_lab_count, target_state_count]
+  negative_control_positive_fields: [negative_control_present]
+  incident_positive_fields: [target_med_count]
+  comparator_positive_fields: [equivalent_contact_present]
+
+minimums:
+  eligible: 10
+  incident_initiators: 5
+  comparator_candidates: 5
+  followup_available_pct: 80
+  target_block_available_pct: 80
+
+required_guardrails:
+  - equivalent_contact_comparator
+  - incident_lookback
+  - endpoint_leakage_embargo
+  - negative_controls_defined
+  - contact_intensity_controls_defined
+  - source_measurability
+
+guardrail_status:
+  equivalent_contact_comparator: not_verified
+  incident_lookback: not_verified
+  endpoint_leakage_embargo: not_verified
+  negative_controls_defined: not_verified
+  contact_intensity_controls_defined: not_verified
+  source_measurability: not_verified
+
+bias_checks:
+  immortal_time: exposure/comparator assignment must be knowable at time zero
+  prevalent_user: prior exposure lookback must be definable or explicitly marked unavailable
+  time_lag: comparator requires equivalent clinical opportunity/contact
+  surveillance: contact/lab/event density must be summarized and stratified later
+  leakage: outcome/target-confirming events must not enter context
+  source_mismatch: MIMIC and INSPECT measurability must be separately summarized
+
+stop_gates:
+  - no clean equivalent-contact comparator
+  - outcome/proxy not prefix-safe
+  - source role not measurable in INSPECT
+  - scenario requires raw/MEDS-lite or T2 labels without explicit approval

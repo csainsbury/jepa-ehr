@@ -8,8 +8,8 @@ This repository contains code, schemas, example configs, and aggregate/sanitized
 
 ## What is here
 
-- `clinical_jepa/` — split manifests, target-block extraction, leakage audits, v0A/v0B/v0D scaffold code.
-- `schemas/` — JSON schemas for manifests and aggregate result artifacts.
+- `clinical_jepa/` — split manifests, target-block extraction, leakage audits, v0A/v0B/v0D scaffold code, aggregate TTE scenario feasibility, and pseudo-rendering readiness helpers.
+- `schemas/` — JSON schemas for manifests and aggregate result artifacts, including scenario-feasibility and pseudo-rendering-readiness outputs.
 - `configs/v0/*.example.yaml` — placeholder configs only.
 - `scripts/` — preflight, synthetic checks, safe data-bundle preflight, and aggregate probe helpers.
 - `docs/` — design notes and sanitized aggregate pilot results, including:
@@ -36,7 +36,7 @@ source .venv/bin/activate
 python -m pip install -e .
 bash scripts/run_synthetic_scaffold_checks.sh
 bash scripts/run_schema_validation_checks.sh
-python -m unittest tests/test_synthetic_pipeline.py tests/test_validation.py
+python -m unittest tests/test_synthetic_pipeline.py tests/test_validation.py tests/test_scenario_feasibility.py tests/test_pseudo_rendering.py
 ```
 
 Real-data runs require an approved de-identified/tokenised local bundle and must keep outputs aggregate-only unless separately governed.

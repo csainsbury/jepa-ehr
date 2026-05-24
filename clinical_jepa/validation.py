@@ -17,6 +17,8 @@ KIND_TO_SCHEMA = {
     "query-descriptors": "clinical-jepa-query-descriptors-v0.schema.json",
     "v0a-embedding-cache": "clinical-jepa-v0a-embedding-cache-v0.schema.json",
     "v0b-train-manifest": "clinical-jepa-v0b-train-manifest-v0.schema.json",
+    "scenario-feasibility": "clinical-jepa-scenario-feasibility-v0.schema.json",
+    "pseudo-rendering-readiness": "clinical-jepa-pseudo-rendering-readiness-v0.schema.json",
 }
 
 VERSION_TO_KIND = {
@@ -26,6 +28,8 @@ VERSION_TO_KIND = {
     "clinical-jepa-query-descriptors-v0": "query-descriptors",
     "clinical-jepa-v0a-embedding-cache-v0": "v0a-embedding-cache",
     "clinical-jepa-v0b-train-manifest-v0": "v0b-train-manifest",
+    "clinical-jepa-scenario-feasibility-v0": "scenario-feasibility",
+    "clinical-jepa-pseudo-rendering-readiness-v0": "pseudo-rendering-readiness",
 }
 
 TYPE_MAP = {
@@ -36,6 +40,30 @@ TYPE_MAP = {
     "number": (int, float),
     "boolean": bool,
     "null": type(None),
+}
+
+AGGREGATE_ONLY_KINDS = {"scenario-feasibility", "pseudo-rendering-readiness"}
+FORBIDDEN_AGGREGATE_KEYS = {
+    "block_id",
+    "block_ids",
+    "patient_hash",
+    "patient_hashes",
+    "sequence_id",
+    "sequence_ids",
+    "sequence_file",
+    "source_id",
+    "source_ids",
+    "token",
+    "tokens",
+    "token_id",
+    "token_ids",
+    "raw_tokens",
+    "h5_path",
+    "hdf5_path",
+    "embedding",
+    "embeddings",
+    "checkpoint",
+    "checkpoints",
 }
 
 
@@ -103,9 +131,24 @@ def validate_schema(data: Any, schema: dict[str, Any], *, root: dict[str, Any] |
     return errors
 
 
+def _scan_forbidden_aggregate_keys(data: Any, *, path: str = "$") -> list[str]:
+    errors: list[str] = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if str(key).lower() in FORBIDDEN_AGGREGATE_KEYS:
+                errors.append(f"{path}: forbidden aggregate-only key {key!r}")
+            errors.extend(_scan_forbidden_aggregate_keys(value, path=f"{path}.{key}"))
+    elif isinstance(data, list):
+        for idx, item in enumerate(data):
+            errors.extend(_scan_forbidden_aggregate_keys(item, path=f"{path}[{idx}]"))
+    return errors
+
+
 def validate_artifact(kind: str, data: dict[str, Any], *, raise_on_error: bool = True) -> list[str]:
     schema = load_schema(kind)
     errors = validate_schema(data, schema)
+    if kind in AGGREGATE_ONLY_KINDS:
+        errors.extend(_scan_forbidden_aggregate_keys(data))
     if errors and raise_on_error:
         raise ValueError("Schema validation failed for " + kind + ":\n" + "\n".join(errors))
     return errors

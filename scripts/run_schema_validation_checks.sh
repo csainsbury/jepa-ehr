@@ -4,10 +4,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 WORK="${1:-/tmp/clinical_jepa_schema_check}"
 rm -rf "$WORK"
-mkdir -p "$WORK"/{splits,target-blocks,leakage,results,v0A,v0B,v0D}
-DATASET="run-workspace/state/task-work/clinical-jepa-pilot/configs/v0/dataset.example.yaml"
-ARMS="run-workspace/state/task-work/clinical-jepa-pilot/configs/v0/arms.example.yaml"
-METRICS="run-workspace/state/task-work/clinical-jepa-pilot/configs/v0/metrics.example.yaml"
+mkdir -p "$WORK"/{splits,target-blocks,leakage,results,scenario,pseudo,v0A,v0B,v0D}
+DATASET="configs/v0/dataset.example.yaml"
+ARMS="configs/v0/arms.example.yaml"
+METRICS="configs/v0/metrics.example.yaml"
+SCENARIO="configs/v0/scenario.example.yaml"
 
 python3 -m compileall -q clinical_jepa
 python3 -m unittest discover -s tests
@@ -17,6 +18,42 @@ python3 -m clinical_jepa.targets.extract_blocks --dataset-config "$DATASET" --sp
 python3 -m clinical_jepa.validation --file "$WORK/target-blocks/target-block-manifest.json"
 python3 -m clinical_jepa.audit.run_leakage_audit --dataset-config "$DATASET" --split-manifest "$WORK/splits/split-manifest.json" --target-blocks "$WORK/target-blocks/target-block-manifest.json" --output "$WORK/leakage/leakage-audit-report.json"
 python3 -m clinical_jepa.validation --file "$WORK/leakage/leakage-audit-report.json"
+python3 -m clinical_jepa.tte.scan_feasibility --target-blocks "$WORK/target-blocks/target-block-manifest.json" --scenario-card "$SCENARIO" --leakage-report "$WORK/leakage/leakage-audit-report.json" --output-dir "$WORK/scenario"
+python3 -m clinical_jepa.validation --file "$WORK/scenario/scenario-feasibility.json"
+python3 - <<'PY' "$WORK/pseudo"
+import json
+import sys
+from pathlib import Path
+import numpy as np
+out = Path(sys.argv[1])
+out.mkdir(parents=True, exist_ok=True)
+arr = np.eye(4, dtype=np.float32)
+np.save(out / "query.npy", arr)
+np.save(out / "target.npy", arr)
+rows = []
+for i in range(4):
+    rows.append({
+        "block_id": f"synthetic-block-{i}",
+        "patient_hash": f"synthetic-patient-{i}",
+        "split": "dev",
+        "target_type": "T0",
+        "context_len": 16,
+        "target_len": 16,
+        "sequence_len": 64,
+        "context_med_count": 1,
+        "context_lab_count": 2,
+        "context_state_count": 0,
+        "target_med_count": int(i % 2 == 0),
+        "target_lab_count": 1,
+        "target_state_count": 0,
+        "scenario_consistent": i != 3,
+        "negative_control_present": i == 3,
+    })
+for name in ["query-index.jsonl", "target-index.jsonl"]:
+    (out / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
+PY
+python3 -m clinical_jepa.eval.pseudo_rendering --query-embeddings "$WORK/pseudo/query.npy" --query-index "$WORK/pseudo/query-index.jsonl" --target-embeddings "$WORK/pseudo/target.npy" --target-index "$WORK/pseudo/target-index.jsonl" --output-dir "$WORK/pseudo" --distractor-policy same_split_target_type --top-k 2
+python3 -m clinical_jepa.validation --file "$WORK/pseudo/pseudo-rendering-readiness.json"
 python3 -m clinical_jepa.eval.run_metrics --metrics-config "$METRICS" --split-manifest "$WORK/splits/split-manifest.json" --target-blocks "$WORK/target-blocks/target-block-manifest.json" --leakage-report "$WORK/leakage/leakage-audit-report.json" --output-dir "$WORK/results" --dry-run
 python3 -m clinical_jepa.validation --kind metrics-bundle --file "$WORK/results/baseline-results.json"
 python3 -m clinical_jepa.validation --kind metrics-bundle --file "$WORK/results/retrieval-results.json"

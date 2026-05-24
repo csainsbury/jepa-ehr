@@ -30,6 +30,21 @@ class ValidationTests(unittest.TestCase):
         invalid.pop("counts")
         self.assertTrue(validate_artifact("split-manifest", invalid, raise_on_error=False))
 
+    def test_aggregate_only_artifacts_reject_identifier_keys(self) -> None:
+        valid = {
+            "schema_version": "clinical-jepa-scenario-feasibility-v0",
+            "created_utc": "2026-05-24T00:00:00Z",
+            "scenario_id": "s",
+            "aggregate_only": True,
+            "overall_decision": "redesign",
+            "results": [],
+        }
+        self.assertEqual(validate_artifact("scenario-feasibility", valid, raise_on_error=False), [])
+        invalid = dict(valid)
+        invalid["patient_hashes"] = ["not-allowed-even-if-hashed"]
+        errors = validate_artifact("scenario-feasibility", invalid, raise_on_error=False)
+        self.assertTrue(any("forbidden aggregate-only key" in e for e in errors))
+
     def test_cli_auto_validation(self) -> None:
         data = {
             "schema_version": "clinical-jepa-query-descriptors-v0",
