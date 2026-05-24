@@ -17,10 +17,10 @@ The strongest result so far is not a finished model; it is a staged chain of evi
 3. v0B retrieval degraded monotonically with larger event gaps, which is the expected direction for a horizon-sensitive predictor.
 4. Length-matched, utilisation/context-count matched, shuffle, query-shuffle, and time-shift controls did not explain the main retrieval signal.
 5. External INSPECT validation showed source-transfer signal for v0B; MIMIC-trained v0A transfer was much weaker.
-6. Scaling the mean-token v0B scaffold improved retrieval strongly, though source-transfer and candidate-set effects now need careful reporting.
-7. The next active step is a transformer + EMA-target JEPA run, moving beyond the mean-token scaffold.
+6. Scaling the mean-token v0B scaffold improved retrieval strongly, with 256d variants giving the best INSPECT transfer under candidate-normalized evaluation.
+7. First transformer+EMA variants were very strong on MIMIC but underperformed the scaled mean-token scaffold on INSPECT transfer.
 
-The current interpretation is: **Clinical-JEPA is worth promoting from scaffold experiment to a proper architecture experiment**, but only with continued controls for utilisation, candidate-set size, source transfer, and care-process shortcuts.
+The current interpretation is: **Clinical-JEPA v0 supports a cautious representation-learning claim**. Scaled mean-token v0B is the current main evidence line; transformer+EMA is an architecture diagnostic until a regularised/source-robust variant improves external transfer.
 
 ---
 

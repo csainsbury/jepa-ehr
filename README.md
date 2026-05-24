@@ -2,7 +2,9 @@
 
 Clinical-JEPA scaffolding for leakage-aware latent prediction experiments over tokenised EHR sequences.
 
-This repository contains code, schemas, example configs, and aggregate/sanitized pilot notes. It does **not** contain clinical data, patient-level records, source identifiers, embeddings, checkpoints, credentials, or download tokens.
+**Current v0 claim, stated cautiously:** Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences, including external INSPECT transfer. The current main evidence line is the scaled mean-token v0B scaffold; first transformer+EMA variants are strong on MIMIC but weaker on the INSPECT transfer gate.
+
+This repository contains code, schemas, example configs, and aggregate/sanitized pilot notes. It does **not** contain clinical data, patient-level records, source identifiers, source-ID maps, token-level examples, embeddings, checkpoints, credentials, or download tokens.
 
 ## What is here
 
@@ -10,7 +12,11 @@ This repository contains code, schemas, example configs, and aggregate/sanitized
 - `schemas/` — JSON schemas for manifests and aggregate result artifacts.
 - `configs/v0/*.example.yaml` — placeholder configs only.
 - `scripts/` — preflight, synthetic checks, safe data-bundle preflight, and aggregate probe helpers.
-- `docs/` — design notes and sanitized aggregate pilot results.
+- `docs/` — design notes and sanitized aggregate pilot results, including:
+  - `docs/clinical-jepa-v0-synthesis.html` — clean synthesis report with cautious claim, transfer gate, figure/table plan, and decisions.
+  - `docs/clinical-jepa-v0-research-narrative.md` — longer aggregate research narrative.
+  - `docs/b1a-real-pilot-progress-report.md` — detailed aggregate progress report.
+  - `docs/clinical-jepa-next-experiment-brief.md` — single targeted follow-up experiment brief, not approval to run it.
 
 ## Safety boundary
 
@@ -34,3 +40,7 @@ python -m unittest tests/test_synthetic_pipeline.py tests/test_validation.py
 ```
 
 Real-data runs require an approved de-identified/tokenised local bundle and must keep outputs aggregate-only unless separately governed.
+
+## Interpretation boundary
+
+The v0 results support a representation-learning claim, not a clinical utility or causal treatment-effect claim. Candidate-normalized INSPECT transfer is the current promotion gate for architecture decisions; MIMIC-only improvements are insufficient.

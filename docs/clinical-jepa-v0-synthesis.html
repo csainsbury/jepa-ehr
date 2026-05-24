@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clinical-JEPA v0 synthesis report</title>
+  <style>
+    :root{
+      --bg:#f6f7f4; --paper:#fff; --ink:#1f2933; --muted:#61717c; --line:#d9e0dc;
+      --blue:#255f7a; --green:#2f6f55; --gold:#b1812c; --red:#8a2d2d; --soft:#eef5f3;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55}
+    header{background:linear-gradient(135deg,#17384a,#2d6d61);color:white;padding:2.6rem 1.2rem 2.2rem;border-bottom:6px solid #d8b45c}
+    header .wrap, main{max-width:1160px;margin:0 auto}
+    main{padding:1.6rem 1.2rem 4rem}
+    h1{font-size:clamp(2.05rem,4vw,3.45rem);line-height:1.05;margin:.1rem 0 .8rem}
+    h2{font-size:1.55rem;color:var(--blue);margin-top:2.5rem;border-top:2px solid var(--line);padding-top:.75rem}
+    h3{font-size:1.15rem;color:#274d44;margin-top:1.35rem}
+    p{margin:.55rem 0 1rem}.lede{font-size:1.15rem;max-width:920px}.meta{opacity:.88;font-size:.95rem}.small{font-size:.9rem;color:var(--muted)}
+    a{color:var(--blue)}
+    .panel{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:1rem 1.1rem;box-shadow:0 1px 2px rgba(0,0,0,.035);margin:1rem 0}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:1rem}
+    .kpi{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:1rem}.kpi strong{display:block;font-size:1.55rem;color:var(--green)}
+    .callout{background:#fff7df;border-left:5px solid var(--gold);border-radius:10px;padding:1rem 1.1rem;margin:1rem 0}.callout.good{background:#edf8f0;border-left-color:var(--green)}.callout.warn{background:#fff4e8;border-left-color:#b86514}.callout.stop{background:#fff0f0;border-left-color:var(--red)}
+    table{border-collapse:collapse;width:100%;background:var(--paper);margin:.7rem 0 1.25rem;font-size:.94rem} th,td{border:1px solid var(--line);padding:.55rem .62rem;text-align:left;vertical-align:top} th{background:#ecf3f1;color:#233e43}.num{text-align:right;font-variant-numeric:tabular-nums} tr:nth-child(even) td{background:#fbfcfb}
+    code,pre{background:#edf2ef;border-radius:6px}code{padding:.1rem .32rem}pre{padding:.85rem;overflow:auto;border:1px solid var(--line)}
+    .tag{display:inline-block;border-radius:999px;padding:.18rem .55rem;font-size:.78rem;background:#e6eef4;color:#214e63;margin:.12rem .12rem}.tag.good{background:#dff2e7;color:#185c38}.tag.warn{background:#fff0cc;color:#754600}.tag.stop{background:#ffe1e1;color:#7f2525}
+    .toc ul{columns:2;margin:.4rem 0 0}.toc li{break-inside:avoid;margin:.15rem 0}
+    .flow{display:grid;grid-template-columns:repeat(5,1fr);gap:.6rem;align-items:stretch;margin:1rem 0}.box{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:.8rem;text-align:center;font-weight:650}.arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);font-weight:800}
+    .figcaption{font-size:.9rem;color:var(--muted);margin-top:-.2rem}.decision td:first-child{font-weight:700}
+    @media(max-width:820px){.toc ul{columns:1}.flow{grid-template-columns:1fr}.arrow{display:none}table{font-size:.86rem}}
+  </style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="meta">Clinical-JEPA v0 · aggregate-only synthesis · 2026-05-24</div>
+  <h1>From governed EHR tokens to latent future-block prediction</h1>
+  <p class="lede">A clean synthesis of the B1a real-data pilot: what was tested, what survived controls, what did not, and what decisions follow.</p>
+  <p class="meta">This report is written to be usable internally and as the basis for a public-facing project note. It intentionally excludes raw data, patient-level examples, source-ID maps, HDF5s, embeddings, checkpoints, credentials, download tokens, and governed data paths.</p>
+</div></header>
+<main>
+  <section class="panel toc">
+    <strong>Contents</strong>
+    <ul>
+      <li><a href="#abstract">Abstract / cautious claim</a></li>
+      <li><a href="#question">Question and design</a></li>
+      <li><a href="#pipeline">Pipeline and governance</a></li>
+      <li><a href="#results">Main results</a></li>
+      <li><a href="#comparison">Final comparison</a></li>
+      <li><a href="#interpretation">Interpretation and limitations</a></li>
+      <li><a href="#figures">Figure and table set</a></li>
+      <li><a href="#decisions">Decisions</a></li>
+      <li><a href="#next-experiment">Next experiment brief</a></li>
+    </ul>
+  </section>
+
+  <section id="abstract">
+    <h2>1. Abstract / cautious claim</h2>
+    <div class="callout good">
+      <strong>Cautious claim.</strong> Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences, including transfer to an external INSPECT validation source. The strongest external-transfer line so far is the scaled mean-token v0B scaffold; first transformer+EMA variants are strong on MIMIC but less transferable.
+    </div>
+    <p>The v0 programme tested whether a JEPA-style latent prediction objective can learn useful clinical state-transition representations from tokenised EHR sequences, without collapsing into a FlatASCEND/autoregressive teacher-copy story. The answer is provisionally yes: the signal survives leakage checks, matched distractors, horizon stress, candidate-normalized retrieval, row-shuffle controls, query-shuffle controls, within-group time-shift controls, and source-transfer evaluation.</p>
+    <p>The result is not a clinical outcome model and not a causal treatment-effect claim. It is evidence that latent future-state prediction over clinical event streams is a viable representation-learning objective worth developing further.</p>
+  </section>
+
+  <section id="question">
+    <h2>2. Question and design</h2>
+    <p>The core question was:</p>
+    <blockquote class="panel">Can a latent clinical-state prediction objective learn non-collapsed, horizon-sensitive, transferable representations from tokenised EHR sequences, beyond trivial care-process or FlatASCEND-derived shortcuts?</blockquote>
+    <div class="grid">
+      <div class="kpi"><strong>445,580</strong><span>total re-keyed sequences in the governed B1a MIMIC + INSPECT substrate.</span></div>
+      <div class="kpi"><strong>105M</strong><span>token/events in the staged governed bundle.</span></div>
+      <div class="kpi"><strong>124,409</strong><span>initial MIMIC T0/T1 target blocks extracted under prefix-safe rules.</span></div>
+      <div class="kpi"><strong>0 / 16 / 64</strong><span>event-gap horizons used for retrieval stress testing.</span></div>
+    </div>
+    <h3>Arms and baselines</h3>
+    <ul>
+      <li><strong>v0D direct baselines:</strong> empirical/context-family baselines for next token-family labels.</li>
+      <li><strong>v0A FlatASCEND baseline:</strong> frozen FlatASCEND hidden-state probes and target-embedding predictors.</li>
+      <li><strong>v0B mean-token JEPA:</strong> simple context/target mean-token encoders and predictor trained by cosine objective.</li>
+      <li><strong>Transformer+EMA diagnostic:</strong> sequence encoder with slow-moving/EMA target branch and predictor head.</li>
+    </ul>
+  </section>
+
+  <section id="pipeline">
+    <h2>3. Pipeline and governance</h2>
+    <div class="flow" role="img" aria-label="Pipeline diagram from governed data to target blocks, models, retrieval controls, external validation, and decisions.">
+      <div class="box">Governed re-keyed token bundle</div><div class="arrow">→</div>
+      <div class="box">Prefix-safe target blocks + leakage audits</div><div class="arrow">→</div>
+      <div class="box">v0A/v0B/transformer arms</div><div class="arrow">→</div>
+      <div class="box">Matched retrieval + controls</div><div class="arrow">→</div>
+      <div class="box">INSPECT transfer gate + decisions</div>
+    </div>
+    <p class="figcaption">Figure 1. Proposed pipeline figure: governed substrate → leakage-safe targets → model arms → robustness controls → external validation decision gate.</p>
+    <div class="callout stop">
+      <strong>Governance boundary.</strong> Public and Cog reports contain only aggregate summaries, code, schemas, and sanitized docs. They exclude clinical data, patient-level rows, source identifiers/maps, token-level examples, HDF5s, embedding arrays, model checkpoints, secrets, passfiles, and time-limited URLs.
+    </div>
+  </section>
+
+  <section id="results">
+    <h2>4. Main results</h2>
+    <h3>4.1 Evidence chain</h3>
+    <ol>
+      <li>The minimal v0B JEPA scaffold learned non-collapsed real-data representations.</li>
+      <li>v0B target retrieval beat frozen FlatASCEND v0A target-prediction baselines under multiple retrieval framings.</li>
+      <li>Retrieval degraded monotonically with larger event gaps, consistent with a horizon-sensitive predictor.</li>
+      <li>Length, sequence-length, utilisation/context-count matching, candidate normalization, and row/query/time controls did not explain the main signal.</li>
+      <li>MIMIC-trained v0B showed external INSPECT transfer; MIMIC-trained v0A transfer was much weaker.</li>
+      <li>Scaling the mean-token v0B scaffold improved retrieval strongly, with a MIMIC-vs-transfer trade-off.</li>
+      <li>Transformer+EMA variants improved MIMIC retrieval but underperformed scaled mean-token models on INSPECT transfer.</li>
+    </ol>
+
+    <h3>4.2 Robustness/control summary</h3>
+    <table>
+      <thead><tr><th>Check</th><th>Why it matters</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Leakage audit</td><td>Prevents target/context overlap and split artifacts.</td><td><span class="tag good">Pass</span> for current target-block evaluations.</td></tr>
+        <tr><td>Horizon gap 0/16/64</td><td>Tests whether retrieval degrades as future target gets further away.</td><td><span class="tag good">Expected monotonic degradation</span> in core v0B and scaled runs.</td></tr>
+        <tr><td>Length/utilisation matching</td><td>Reduces shortcuts from sequence length, care intensity, and event-family density.</td><td><span class="tag good">Signal survives</span>, but candidate-set effects require normalization.</td></tr>
+        <tr><td>Candidate-normalized retrieval</td><td>Controls fine-group candidate-size effects by requiring ≥128 and sampling ≤512 candidates/group.</td><td><span class="tag good">Ordering preserved</span>: mean-token 256d variants best on INSPECT.</td></tr>
+        <tr><td>Target/query/time controls</td><td>Tests row-order, target-distribution, query-order, and nearby-time artifacts.</td><td><span class="tag good">Controls far below observed</span> in final comparison.</td></tr>
+        <tr><td>INSPECT transfer</td><td>Tests whether signal is not purely MIMIC-specific.</td><td><span class="tag good">External signal present</span>; mean-token transfers best.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="comparison">
+    <h2>5. Final comparison</h2>
+    <p>The transfer robustness gate is candidate-normalized retrieval on INSPECT, especially gap16/gap64. MIMIC gap0 is useful but not decisive because source-specialised representations can look strong there.</p>
+    <h3>5.1 Candidate-normalized model comparison</h3>
+    <table>
+      <thead><tr><th>Model</th><th>Family</th><th class="num">MIMIC gap0 R@10</th><th class="num">MIMIC gap64 R@10</th><th class="num">INSPECT gap0 R@10</th><th class="num">INSPECT gap64 R@10</th></tr></thead>
+      <tbody>
+        <tr><td>scaled-256d/25k</td><td>mean-token</td><td class="num">0.8723</td><td class="num">0.7064</td><td class="num">0.6427</td><td class="num">0.4845</td></tr>
+        <tr><td>256d/50k</td><td>mean-token</td><td class="num">0.9084</td><td class="num">0.7096</td><td class="num">0.6414</td><td class="num">0.4812</td></tr>
+        <tr><td>384d/40k</td><td>mean-token</td><td class="num">0.9301</td><td class="num">0.6988</td><td class="num">0.6402</td><td class="num">0.4716</td></tr>
+        <tr><td>scaled-512d/20k</td><td>mean-token</td><td class="num">0.9412</td><td class="num">0.7102</td><td class="num">0.6232</td><td class="num">0.4596</td></tr>
+        <tr><td>transformer+EMA 384d/15k</td><td>transformer+EMA</td><td class="num">0.9608</td><td class="num">0.7039</td><td class="num">0.5612</td><td class="num">0.4278</td></tr>
+        <tr><td>transformer+EMA 256d/20k</td><td>transformer+EMA</td><td class="num">0.9569</td><td class="num">0.6823</td><td class="num">0.5385</td><td class="num">0.4077</td></tr>
+        <tr><td>transformer+EMA 256d/40k</td><td>transformer+EMA</td><td class="num">0.9539</td><td class="num">0.6664</td><td class="num">0.5151</td><td class="num">0.3851</td></tr>
+        <tr><td>transformer+EMA 128d/25k</td><td>transformer+EMA</td><td class="num">0.9003</td><td class="num">0.6466</td><td class="num">0.4903</td><td class="num">0.3806</td></tr>
+      </tbody>
+    </table>
+    <div class="callout">
+      <strong>Decision implication.</strong> Transformer+EMA currently wins MIMIC gap0, but scaled mean-token wins the external-transfer gate. The v0B main evidence line should therefore remain scaled mean-token until a transformer variant improves INSPECT transfer.
+    </div>
+  </section>
+
+  <section id="interpretation">
+    <h2>6. Interpretation and limitations</h2>
+    <div class="grid">
+      <div class="panel"><h3>What this supports</h3><ul><li>Latent future-block prediction is a viable clinical representation-learning objective.</li><li>The signal is not explained away by the current leakage, length/utilisation, candidate-size, or shuffle/time controls.</li><li>External-source transfer is present, especially for scaled mean-token variants.</li></ul></div>
+      <div class="panel"><h3>What it does not support yet</h3><ul><li>No clinical outcome utility claim.</li><li>No causal treatment-effect claim.</li><li>No claim that transformer+EMA is the best architecture.</li><li>No claim that retrieval equals clinical interpretability.</li></ul></div>
+    </div>
+    <h3>Working interpretation</h3>
+    <p>The simplest interpretation is that v0B learns a real latent transition signal, but richer sequence modelling may over-specialise to source-specific token geometry unless regularised or trained/evaluated with source robustness in mind. The current best transfer behaviour comes from scaled mean-token variants, which may act as a useful regulariser by discarding some source-specific sequence detail.</p>
+  </section>
+
+  <section id="figures">
+    <h2>7. Decided figure and table set</h2>
+    <table>
+      <thead><tr><th>ID</th><th>Type</th><th>Content</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td>Figure 1</td><td>Pipeline diagram</td><td>Governed re-keyed token bundle → prefix-safe target blocks → v0A/v0B/transformer arms → matched retrieval/controls → INSPECT transfer gate.</td><td>Explain workflow and governance boundary in one panel.</td></tr>
+        <tr><td>Table 1</td><td>Evidence chain</td><td>Baseline, v0A, minimal v0B, scaled mean-token, transformer+EMA, controls, INSPECT transfer.</td><td>Show staged progression rather than one cherry-picked score.</td></tr>
+        <tr><td>Table 2</td><td>Robustness/control table</td><td>Leakage pass, horizon degradation, matching policies, candidate normalization, shuffle/query/time controls.</td><td>Foreground skepticism and shortcut controls.</td></tr>
+        <tr><td>Table 3</td><td>Final model comparison</td><td>Candidate-normalized MIMIC/INSPECT gap0/gap64 for mean-token and transformer+EMA models.</td><td>Make the transfer gate and mainline decision transparent.</td></tr>
+        <tr><td>Figure 2</td><td>Decision panel</td><td>Mean-token mainline; transformer+EMA diagnostic; v0C/T2 gated; next experiment only if targeted.</td><td>Convert results into decisions.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="decisions">
+    <h2>8. Decisions now</h2>
+    <table class="decision">
+      <thead><tr><th>Decision</th><th>Recommended position</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td>Compute</td><td><span class="tag good">Keep Vast stopped</span></td><td>Current work is write-up and public documentation, not GPU-bound.</td></tr>
+        <tr><td>Main v0B line</td><td><span class="tag good">Scaled mean-token v0B</span></td><td>Best INSPECT transfer and simplest current evidence line.</td></tr>
+        <tr><td>Transformer+EMA</td><td><span class="tag warn">Architecture diagnostic</span></td><td>Strong MIMIC scores, weaker INSPECT transfer.</td></tr>
+        <tr><td>Claim strength</td><td><span class="tag good">Cautious representation-learning claim</span></td><td>Retrieval/transfer evidence is strong; clinical utility and causal claims are not established.</td></tr>
+        <tr><td>v0C/T2</td><td><span class="tag stop">Remain gated</span></td><td>Raw/MEDS-lite and outcome-proximal labels require explicit approval and prefix-safety review.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="next-experiment">
+    <h2>9. Next experiment brief — only if needed after write-up</h2>
+    <div class="callout warn"><strong>Default posture:</strong> do not restart compute until the written report and public docs have been reviewed. If another experiment is justified, run one targeted transfer-improvement test, not a broad sweep.</div>
+    <h3>Experiment: transfer-guarded regularised transformer+EMA</h3>
+    <table>
+      <tbody>
+        <tr><th>Question</th><td>Can a regularised transformer+EMA model close the INSPECT transfer gap while retaining strong MIMIC retrieval?</td></tr>
+        <tr><th>Default training boundary</th><td>MIMIC-only training, INSPECT locked for one-shot external evaluation. If INSPECT is used in training, that must be a separate explicit decision because it changes the external-validation story.</td></tr>
+        <tr><th>Single configuration</th><td>2-layer transformer+EMA, 256–384d, stronger dropout/weight decay, higher EMA decay, predictor bottleneck, shorter training with early-stop checkpoint selection using MIMIC dev gap64 and collapse diagnostics.</td></tr>
+        <tr><th>Primary gate</th><td>Candidate-normalized INSPECT gap64 R@10 and MRR must beat the scaled mean-token 256d/25k reference, not just improve MIMIC gap0.</td></tr>
+        <tr><th>Secondary gates</th><td>Controls remain far below observed retrieval; horizon degradation remains sensible; no collapse; no leakage audit regressions.</td></tr>
+        <tr><th>Stop criteria</th><td>Stop after one run if INSPECT gap64 remains below mean-token reference by more than a small tolerance, or if controls rise materially toward observed retrieval. Do not launch a sweep without a new written rationale.</td></tr>
+        <tr><th>Governance</th><td>No v0C raw/MEDS-lite and no T2 outcome-proximal labels unless explicitly approved. No raw/patient-level outputs, checkpoints, embeddings, HDF5s, source-ID maps, secrets, or time-limited URLs in public artifacts.</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>
