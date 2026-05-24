@@ -13,6 +13,43 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENARIO = ROOT / "configs/v0/scenario.example.yaml"
 
 
+def _availability_report(n_target_rows: int = 12, n_metadata_rows: int = 0) -> dict:
+    required = [
+        "split",
+        "target_type",
+        "source_dataset",
+        "context_len",
+        "target_len",
+        "context_med_count",
+        "context_lab_count",
+        "context_state_count",
+        "target_med_count",
+        "target_lab_count",
+        "target_state_count",
+        "equivalent_contact_present",
+        "negative_control_present",
+    ]
+    return {
+        "schema_version": "clinical-jepa-metadata-availability-v0",
+        "created_utc": "2026-05-24T00:00:00Z",
+        "scenario_id": "synthetic_diuretic_placeholder",
+        "aggregate_only": True,
+        "overall_decision": "pass",
+        "n_target_rows": n_target_rows,
+        "n_metadata_rows": n_metadata_rows,
+        "n_merged_rows": n_target_rows,
+        "field_results": [
+            {"field": field, "tier": "required", "status": "present", "coverage_pct": 100.0, "source": "present"}
+            for field in required
+        ],
+        "pass_park_gates": {
+            "required_fields_total": len(required),
+            "required_fields_passing": len(required),
+        },
+        "warnings": [],
+    }
+
+
 def _manifest() -> dict:
     blocks = []
     for i in range(6):
@@ -85,7 +122,7 @@ class ScenarioFeasibilityTests(unittest.TestCase):
                 "source_measurability": "pass",
             },
         }
-        report = scan_scenario_feasibility(_manifest(), scenario, dry_run=False)
+        report = scan_scenario_feasibility(_manifest(), scenario, dry_run=False, metadata_availability_report=_availability_report())
         self.assertEqual(report["aggregate_only"], True)
         self.assertEqual(report["overall_decision"], "promote")
         dumped = json.dumps(report)
@@ -94,6 +131,90 @@ class ScenarioFeasibilityTests(unittest.TestCase):
         result = report["results"][0]
         self.assertEqual(result["n_incident_initiators"], 6)
         self.assertEqual(result["n_comparator_candidates"], 6)
+
+    def test_real_mode_without_metadata_availability_cannot_promote(self) -> None:
+        scenario = {
+            "scenario_id": "synthetic_diuretic_placeholder",
+            "aggregate_rules": {
+                "eligible_target_types": ["T0", "T1"],
+                "incident_target_types": ["T1"],
+                "comparator_target_types": ["T0"],
+                "min_context_events": 8,
+                "min_target_events": 8,
+                "incident_positive_fields": ["target_med_count"],
+                "comparator_positive_fields": ["equivalent_contact_present"],
+                "negative_control_positive_fields": ["negative_control_present"],
+            },
+            "minimums": {"eligible": 10, "incident_initiators": 5, "comparator_candidates": 5},
+            "guardrail_status": {
+                "equivalent_contact_comparator": "pass",
+                "incident_lookback": "pass",
+                "endpoint_leakage_embargo": "pass",
+                "negative_controls_defined": "pass",
+                "contact_intensity_controls_defined": "pass",
+                "source_measurability": "pass",
+            },
+        }
+        report = scan_scenario_feasibility(_manifest(), scenario, dry_run=False)
+        self.assertEqual(report["overall_decision"], "park")
+        self.assertIn("metadata_availability_not_checked", report["warnings"])
+
+    def test_underspecified_metadata_availability_report_does_not_promote(self) -> None:
+        scenario = {
+            "scenario_id": "synthetic_diuretic_placeholder",
+            "aggregate_rules": {
+                "eligible_target_types": ["T0", "T1"],
+                "incident_target_types": ["T1"],
+                "comparator_target_types": ["T0"],
+                "min_context_events": 8,
+                "min_target_events": 8,
+                "incident_positive_fields": ["target_med_count"],
+                "comparator_positive_fields": ["equivalent_contact_present"],
+                "negative_control_positive_fields": ["negative_control_present"],
+            },
+            "minimums": {"eligible": 10, "incident_initiators": 5, "comparator_candidates": 5},
+            "guardrail_status": {
+                "equivalent_contact_comparator": "pass",
+                "incident_lookback": "pass",
+                "endpoint_leakage_embargo": "pass",
+                "negative_controls_defined": "pass",
+                "contact_intensity_controls_defined": "pass",
+                "source_measurability": "pass",
+            },
+        }
+        fake = _availability_report()
+        fake["field_results"] = [{"field": "split", "tier": "required", "status": "present", "coverage_pct": 100.0, "source": "present"}]
+        fake["pass_park_gates"] = {"required_fields_total": 1, "required_fields_passing": 1}
+        report = scan_scenario_feasibility(_manifest(), scenario, dry_run=False, metadata_availability_report=fake)
+        self.assertEqual(report["overall_decision"], "park")
+        self.assertTrue(any(w.startswith("metadata_availability_expected_fields_missing") for w in report["warnings"]))
+
+    def test_minimal_fake_metadata_availability_report_does_not_promote(self) -> None:
+        scenario = {
+            "scenario_id": "synthetic_diuretic_placeholder",
+            "aggregate_rules": {
+                "eligible_target_types": ["T0", "T1"],
+                "incident_target_types": ["T1"],
+                "comparator_target_types": ["T0"],
+                "min_context_events": 8,
+                "min_target_events": 8,
+                "incident_positive_fields": ["target_med_count"],
+                "comparator_positive_fields": ["equivalent_contact_present"],
+                "negative_control_positive_fields": ["negative_control_present"],
+            },
+            "minimums": {"eligible": 10, "incident_initiators": 5, "comparator_candidates": 5},
+            "guardrail_status": {
+                "equivalent_contact_comparator": "pass",
+                "incident_lookback": "pass",
+                "endpoint_leakage_embargo": "pass",
+                "negative_controls_defined": "pass",
+                "contact_intensity_controls_defined": "pass",
+                "source_measurability": "pass",
+            },
+        }
+        report = scan_scenario_feasibility(_manifest(), scenario, dry_run=False, metadata_availability_report={"overall_decision": "pass"})
+        self.assertEqual(report["overall_decision"], "park")
+        self.assertIn("metadata_availability_invalid", report["warnings"])
 
     def test_missing_configured_metadata_fields_do_not_promote(self) -> None:
         scenario = {

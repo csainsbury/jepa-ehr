@@ -48,6 +48,14 @@ Before another architecture or transfer-learning run, answer:
 
 > Are the available tokenised sequences and target blocks good enough to support clinically meaningful generation/readout tests, especially TTE-style incident-user or active-comparator scenarios?
 
+## Proposed next atom: metadata availability audit
+
+Before a real scenario scan, run an aggregate-only metadata availability audit. It should answer whether the required per-block aggregate fields are present or safely derivable without opening raw data or exporting row-level examples.
+
+Required fields include structural target-block fields, context/target length, med/lab/state count summaries, equivalent-contact markers, and negative-control markers. Missing fields must be reported as missing; they must not be silently interpreted as zero clinical events.
+
+This gate can be run locally on safe JSON/JSONL manifests or in a governed environment that emits only the aggregate audit report. It is still **not** a reason to restart Vast unless the approved bundle or metadata sidecar exists only there.
+
 ## Proposed next atom: TTE/specification data-quality audit
 
 Purpose: test whether the governed B1a token substrate supports clean clinical decision-point cohorts and sequence-quality checks before asking JEPA to generate futures.

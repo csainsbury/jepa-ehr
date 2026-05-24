@@ -8,10 +8,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from clinical_jepa.tte.audit_metadata_availability import _reject_unsafe_input_path
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json
 from clinical_jepa.validation import validate_artifact
 
 SPLITS = ("train", "dev", "test", "stress")
+SOURCE_ROLES = {"primary", "inspect_external", "external_validation", "other_aggregate", "unknown"}
 COUNT_FIELDS = (
     "context_med_count",
     "context_lab_count",
@@ -78,14 +80,25 @@ def _contact_count(row: dict[str, Any]) -> float:
     return float(_context_len(row) + _target_len(row))
 
 
+def _normalize_source_role(value: Any) -> str:
+    role = str(value or "").strip().lower()
+    if role in SOURCE_ROLES:
+        return role
+    if "inspect" in role:
+        return "inspect_external"
+    if role in {"mimic", "mimic_train", "mimic_dev", "mimic_test"}:
+        return "primary"
+    return "other_aggregate" if role else "unknown"
+
+
 def _source_role(row: dict[str, Any], default_source_role: str) -> str:
     if row.get("source_role"):
-        return str(row["source_role"])
+        return _normalize_source_role(row["source_role"])
     src = str(row.get("source_dataset") or "").lower()
     if "inspect" in src:
         return "inspect_external"
     if default_source_role:
-        return default_source_role
+        return _normalize_source_role(default_source_role)
     return "primary"
 
 
@@ -109,7 +122,7 @@ def _iter_jsonl(path: str | Path) -> list[dict[str, Any]]:
 def _load_metadata_rows(path: str | Path | None) -> list[dict[str, Any]]:
     if not path:
         return []
-    p = Path(path)
+    p = _reject_unsafe_input_path(path, role="metadata-index")
     if p.suffix == ".jsonl":
         return _iter_jsonl(p)
     data = json.loads(p.read_text())
@@ -320,6 +333,68 @@ def _summarize_group(rows: list[dict[str, Any]], scenario: dict[str, Any], *, so
     return result
 
 
+def _expected_availability_fields(scenario: dict[str, Any]) -> set[str]:
+    return {
+        "split",
+        "target_type",
+        "source_dataset",
+        "context_len",
+        "target_len",
+        "context_med_count",
+        "context_lab_count",
+        "context_state_count",
+        "target_med_count",
+        "target_lab_count",
+        "target_state_count",
+        *_configured_metadata_fields(_rules(scenario)),
+    }
+
+
+def _metadata_availability_warnings(
+    report: dict[str, Any] | None,
+    *,
+    dry_run: bool,
+    scenario: dict[str, Any],
+    n_target_rows: int,
+    n_metadata_rows: int,
+) -> list[str]:
+    if report:
+        errors = validate_artifact("metadata-availability", report, raise_on_error=False)
+        if errors:
+            return ["metadata_availability_invalid"]
+        warnings: list[str] = []
+        decision = report.get("overall_decision")
+        if decision != "pass":
+            warnings.append(f"metadata_availability_not_pass:{decision or 'unknown'}")
+        if report.get("aggregate_only") is not True:
+            warnings.append("metadata_availability_not_aggregate_only")
+        if str(report.get("scenario_id")) != str(_scenario_id(scenario)):
+            warnings.append("metadata_availability_scenario_mismatch")
+        if int(report.get("n_target_rows", -1)) != int(n_target_rows):
+            warnings.append("metadata_availability_target_row_count_mismatch")
+        if int(report.get("n_metadata_rows", -1)) != int(n_metadata_rows):
+            warnings.append("metadata_availability_metadata_row_count_mismatch")
+        gates = report.get("pass_park_gates") if isinstance(report.get("pass_park_gates"), dict) else {}
+        required_total = int(gates.get("required_fields_total", 0) or 0)
+        required_passing = int(gates.get("required_fields_passing", -1) or -1)
+        if required_total <= 0 or required_passing != required_total:
+            warnings.append("metadata_availability_required_gates_not_satisfied")
+        required_results = [r for r in report.get("field_results", []) if isinstance(r, dict) and r.get("tier") == "required"]
+        if len(required_results) != required_total:
+            warnings.append("metadata_availability_required_field_result_count_mismatch")
+        bad_required = [r for r in required_results if r.get("status") not in {"present", "derivable"}]
+        if bad_required:
+            warnings.append("metadata_availability_required_fields_not_available")
+        reported_required_fields = {str(r.get("field")) for r in required_results}
+        missing_expected = sorted(_expected_availability_fields(scenario) - reported_required_fields)
+        if missing_expected:
+            warnings.append("metadata_availability_expected_fields_missing:" + ",".join(missing_expected))
+        return warnings
+    if dry_run:
+        return []
+    return ["metadata_availability_not_checked"]
+
+
 def scan_scenario_feasibility(
     target_manifest: dict[str, Any],
     scenario: dict[str, Any],
@@ -328,6 +403,7 @@ def scan_scenario_feasibility(
     dry_run: bool = False,
     leakage_checked: bool | None = None,
     metadata_rows: list[dict[str, Any]] | None = None,
+    metadata_availability_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if leakage_checked is None:
         leakage_checked = not dry_run
@@ -344,10 +420,17 @@ def scan_scenario_feasibility(
         _summarize_group(rows, scenario, source_role=role, split=split, leakage_checked=leakage_checked)
         for (role, split), rows in sorted(grouped.items())
     ]
+    metadata_warnings = _metadata_availability_warnings(
+        metadata_availability_report,
+        dry_run=dry_run,
+        scenario=scenario,
+        n_target_rows=len(blocks),
+        n_metadata_rows=len(metadata_rows or []),
+    )
     overall_decision = "promote" if results and all(r["decision"] == "promote" for r in results) else "redesign"
     if not results:
         overall_decision = "park"
-    if any(r["decision"] == "park" for r in results):
+    if any(r["decision"] == "park" for r in results) or metadata_warnings:
         overall_decision = "park"
 
     report = {
@@ -361,7 +444,7 @@ def scan_scenario_feasibility(
         "n_groups": len(results),
         "overall_decision": overall_decision,
         "results": results,
-        "warnings": sorted({w for r in results for w in r.get("warnings", [])}),
+        "warnings": sorted({w for r in results for w in r.get("warnings", [])} | set(metadata_warnings)),
         "notes": "Scenario feasibility is aggregate-only. It is a TTE/specification readiness diagnostic, not a causal estimate.",
     }
     validate_artifact("scenario-feasibility", report)
@@ -405,6 +488,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--scenario-card", required=True)
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--metadata-index", help="Optional JSON/JSONL index keyed by block_id containing aggregate-only fields such as counts and guardrail flags")
+    ap.add_argument("--metadata-availability-report", help="Optional metadata availability audit; must pass for real-mode promotion")
     ap.add_argument("--leakage-report", help="Required unless --dry-run is set")
     ap.add_argument("--source-role", default="primary", help="Default source role when target blocks do not specify one")
     ap.add_argument("--dry-run", action="store_true")
@@ -418,6 +502,7 @@ def main(argv: list[str] | None = None) -> int:
     target_manifest = read_json(args.target_blocks)
     scenario = load_yaml(args.scenario_card)
     metadata_rows = _load_metadata_rows(args.metadata_index)
+    metadata_availability_report = read_json(_reject_unsafe_input_path(args.metadata_availability_report, role="metadata-availability-report")) if args.metadata_availability_report else None
     report = scan_scenario_feasibility(
         target_manifest,
         scenario,
@@ -425,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         leakage_checked=not args.dry_run,
         metadata_rows=metadata_rows,
+        metadata_availability_report=metadata_availability_report,
     )
     outdir = ensure_dir(args.output_dir)
     write_json(outdir / "scenario-feasibility.json", report)

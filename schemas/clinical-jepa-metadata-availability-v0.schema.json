@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-metadata-availability-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "scenario_id", "aggregate_only", "overall_decision", "field_results", "pass_park_gates", "warnings"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-metadata-availability-v0"]},
+    "created_utc": {"type": "string"},
+    "scenario_id": {"type": "string"},
+    "aggregate_only": {"type": "boolean", "const": true},
+    "overall_decision": {"type": "string", "enum": ["pass", "park", "insufficient_information"]},
+    "n_target_rows": {"type": "integer", "minimum": 0},
+    "n_metadata_rows": {"type": "integer", "minimum": 0},
+    "n_merged_rows": {"type": "integer", "minimum": 0},
+    "field_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "tier", "status", "coverage_pct", "source"],
+        "properties": {
+          "field": {"type": "string"},
+          "tier": {"type": "string"},
+          "status": {"type": "string", "enum": ["present", "derivable", "missing", "partial"]},
+          "coverage_pct": {"type": "number", "minimum": 0},
+          "source": {"type": "string"},
+          "warning": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "group_summaries": {"type": "array"},
+    "pass_park_gates": {"type": "object"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "string"}
+  }
+}

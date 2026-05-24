@@ -1,0 +1,82 @@
+# Placeholder-only metadata availability requirements for Clinical-JEPA TTE/readout scans.
+# Safe to commit: no clinical data, IDs, token examples, or source paths.
+
+schema_version: clinical-jepa-metadata-availability-requirements-v0
+scenario_id: diuretic_fluid_management_placeholder
+claim_boundary: >-
+  Availability audit only. This does not run a scenario scan, train a model,
+  estimate treatment effects, or make clinical recommendations.
+
+join_only_fields:
+  - block_id
+
+required_fields:
+  - split
+  - target_type
+  - source_dataset
+  - context_len
+  - target_len
+  - context_med_count
+  - context_lab_count
+  - context_state_count
+  - target_med_count
+  - target_lab_count
+  - target_state_count
+  - equivalent_contact_present
+  - negative_control_present
+
+derivable_fields:
+  context_len:
+    any_of:
+      - [context_len]
+      - [context_start_ref, context_end_ref]
+  target_len:
+    any_of:
+      - [target_len]
+      - [target_start_ref, target_end_ref]
+  source_role:
+    any_of:
+      - [source_role]
+      - [source_dataset]
+
+strongly_preferred_fields:
+  - source_role
+  - sequence_len
+  - contact_count
+  - prior_exposure_lookback_complete
+  - prior_diuretic_or_fluid_med_exposure
+  - scenario_specific_lab_family_present
+  - surveillance_control_present
+  - biologic_negative_control_present
+  - scenario_consistent
+
+coverage_thresholds:
+  required_min_pct: 100.0
+  strongly_preferred_min_pct: 80.0
+
+forbidden_inputs:
+  suffixes:
+    - .h5
+    - .hdf5
+    - .npy
+    - .npz
+    - .pt
+    - .pth
+    - .ckpt
+    - .safetensors
+    - .parquet
+    - .feather
+    - .arrow
+    - .csv
+    - .tsv
+  path_fragments:
+    - raw
+    - checkpoints
+    - embeddings
+    - token_ids
+    - sequence_file
+
+safe_output_rule: >-
+  Report only aggregate field availability, coverage rates, source-role/split
+  summaries, and warnings. Never emit join keys, patient hashes, token strings,
+  token IDs, HDF5 paths, embeddings, checkpoints, row examples, or source IDs.

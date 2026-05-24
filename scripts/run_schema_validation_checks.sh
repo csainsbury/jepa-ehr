@@ -9,6 +9,7 @@ DATASET="configs/v0/dataset.example.yaml"
 ARMS="configs/v0/arms.example.yaml"
 METRICS="configs/v0/metrics.example.yaml"
 SCENARIO="configs/v0/scenario.example.yaml"
+METADATA_REQ="configs/v0/metadata_availability.example.yaml"
 
 python3 -m compileall -q clinical_jepa
 python3 -m unittest discover -s tests
@@ -18,7 +19,35 @@ python3 -m clinical_jepa.targets.extract_blocks --dataset-config "$DATASET" --sp
 python3 -m clinical_jepa.validation --file "$WORK/target-blocks/target-block-manifest.json"
 python3 -m clinical_jepa.audit.run_leakage_audit --dataset-config "$DATASET" --split-manifest "$WORK/splits/split-manifest.json" --target-blocks "$WORK/target-blocks/target-block-manifest.json" --output "$WORK/leakage/leakage-audit-report.json"
 python3 -m clinical_jepa.validation --file "$WORK/leakage/leakage-audit-report.json"
-python3 -m clinical_jepa.tte.scan_feasibility --target-blocks "$WORK/target-blocks/target-block-manifest.json" --scenario-card "$SCENARIO" --leakage-report "$WORK/leakage/leakage-audit-report.json" --output-dir "$WORK/scenario"
+python3 - <<'PY' "$WORK/target-blocks/target-block-manifest.json" "$WORK/scenario/metadata.json"
+import json
+import sys
+from pathlib import Path
+manifest = json.loads(Path(sys.argv[1]).read_text())
+out = Path(sys.argv[2])
+out.parent.mkdir(parents=True, exist_ok=True)
+rows = []
+for block in manifest["blocks"]:
+    is_t1 = block.get("target_type") == "T1"
+    rows.append({
+        "block_id": block["block_id"],
+        "context_med_count": 1,
+        "context_lab_count": 2,
+        "context_state_count": 0,
+        "target_med_count": int(is_t1),
+        "target_lab_count": 1,
+        "target_state_count": 0,
+        "equivalent_contact_present": int(not is_t1),
+        "negative_control_present": 0,
+        "scenario_consistent": True,
+        "sequence_len": 96,
+        "contact_count": 4,
+    })
+out.write_text(json.dumps({"rows": rows}, indent=2))
+PY
+python3 -m clinical_jepa.tte.audit_metadata_availability --requirements "$METADATA_REQ" --target-blocks "$WORK/target-blocks/target-block-manifest.json" --scenario-card "$SCENARIO" --metadata-index "$WORK/scenario/metadata.json" --output-dir "$WORK/scenario"
+python3 -m clinical_jepa.validation --file "$WORK/scenario/metadata-availability.json"
+python3 -m clinical_jepa.tte.scan_feasibility --target-blocks "$WORK/target-blocks/target-block-manifest.json" --scenario-card "$SCENARIO" --metadata-index "$WORK/scenario/metadata.json" --metadata-availability-report "$WORK/scenario/metadata-availability.json" --leakage-report "$WORK/leakage/leakage-audit-report.json" --output-dir "$WORK/scenario"
 python3 -m clinical_jepa.validation --file "$WORK/scenario/scenario-feasibility.json"
 python3 - <<'PY' "$WORK/pseudo"
 import json
