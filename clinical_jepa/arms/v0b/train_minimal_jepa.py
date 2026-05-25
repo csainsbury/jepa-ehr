@@ -40,7 +40,13 @@ def _dry_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str, 
         "schema_version": "clinical-jepa-v0b-train-manifest-v0",
         "created_utc": now_utc(),
         "dry_run": args.dry_run,
-        "architecture": arms.get("v0B_minimal_jepa", {}),
+        "architecture": {
+            **arms.get("v0B_minimal_jepa", {}),
+            "autoregression_mode": args.autoregression_mode,
+            "horizon_count_trained": int(args.horizon_count),
+            "horizon_stride_tokens": int(args.horizon_stride_tokens or args.max_target_tokens),
+            "max_horizons": int(args.max_horizons or args.horizon_count),
+        },
         "n_synthetic_examples": n,
         "trained_steps": 0,
         "leakage_audit_status": "pass",
@@ -54,7 +60,16 @@ def _dry_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str, 
     return 0
 
 
-def _read_examples(blocks: list[dict[str, Any]], max_blocks: int, max_context: int, max_target: int, seed: int) -> list[tuple[str, np.ndarray, np.ndarray]]:
+def _read_examples(
+    blocks: list[dict[str, Any]],
+    max_blocks: int,
+    max_context: int,
+    max_target: int,
+    seed: int,
+    *,
+    horizon_count: int = 1,
+    horizon_stride_tokens: int = 0,
+) -> list[tuple[str, np.ndarray, list[np.ndarray]]]:
     import h5py
 
     rng = random.Random(seed)
@@ -63,7 +78,9 @@ def _read_examples(blocks: list[dict[str, Any]], max_blocks: int, max_context: i
     if max_blocks > 0:
         blocks = blocks[:max_blocks]
     cache: dict[str, Any] = {}
-    examples: list[tuple[str, np.ndarray, np.ndarray]] = []
+    examples: list[tuple[str, np.ndarray, list[np.ndarray]]] = []
+    horizon_count = max(1, int(horizon_count))
+    stride = int(horizon_stride_tokens) if int(horizon_stride_tokens) > 0 else int(max_target)
     try:
         for b in blocks:
             path = str(b["sequence_file"])
@@ -75,14 +92,25 @@ def _read_examples(blocks: list[dict[str, Any]], max_blocks: int, max_context: i
             c0 = max(0, int(b.get("context_start_ref", 0)))
             c1 = min(len(arr) - 1, int(b["context_end_ref"]))
             t0 = max(0, int(b["target_start_ref"]))
-            t1 = min(len(arr) - 1, int(b["target_end_ref"]))
-            if c1 < c0 or t1 < t0:
+            if c1 < c0 or t0 >= len(arr):
                 continue
             context = np.asarray(arr[c0 : c1 + 1][-max_context:], dtype=np.int64)
-            target = np.asarray(arr[t0 : t1 + 1][:max_target], dtype=np.int64)
-            if len(context) == 0 or len(target) == 0:
+            targets_by_horizon: list[np.ndarray] = []
+            ok = len(context) > 0
+            for h in range(horizon_count):
+                start_idx = t0 + h * stride
+                end_idx = start_idx + max_target
+                if end_idx > len(arr):
+                    ok = False
+                    break
+                target = np.asarray(arr[start_idx:end_idx], dtype=np.int64)
+                if len(target) == 0:
+                    ok = False
+                    break
+                targets_by_horizon.append(target)
+            if not ok:
                 continue
-            examples.append((str(b.get("split", "train")), context, target))
+            examples.append((str(b.get("split", "train")), context, targets_by_horizon))
     finally:
         for f in cache.values():
             f.close()
@@ -101,8 +129,9 @@ def _pad(batch: list[np.ndarray], device: Any):
 
 def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str, Any], targets: dict[str, Any], outdir: Path) -> int:
     import torch
-    import torch.nn as nn
     import torch.nn.functional as F
+
+    from clinical_jepa.arms.v0b.mean_token_model import MeanTokenJEPA
 
     seed = int(dataset.get("run", {}).get("seed", 20260523))
     random.seed(seed)
@@ -112,31 +141,27 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
     vocab_size = int(dataset.get("vocabulary", {}).get("vocab_size") or 438)
     dim = int(args.embedding_dim)
 
-    examples = _read_examples(targets.get("blocks", []), args.max_blocks, args.max_context_tokens, args.max_target_tokens, seed)
+    examples = _read_examples(
+        targets.get("blocks", []),
+        args.max_blocks,
+        args.max_context_tokens,
+        args.max_target_tokens,
+        seed,
+        horizon_count=args.horizon_count,
+        horizon_stride_tokens=args.horizon_stride_tokens,
+    )
     train = [(c, t) for split, c, t in examples if split == "train"]
     dev = [(c, t) for split, c, t in examples if split == "dev"]
     if not train:
         raise SystemExit("No train examples available for real v0B run")
 
-    class MeanJEPA(nn.Module):
-        def __init__(self, vocab: int, d: int):
-            super().__init__()
-            self.embedding = nn.Embedding(vocab, d, padding_idx=0)
-            self.predictor = nn.Sequential(nn.Linear(d, d * 2), nn.GELU(), nn.Linear(d * 2, d))
-
-        def mean_embed(self, ids):
-            mask = (ids != 0).float().unsqueeze(-1)
-            emb = self.embedding(ids) * mask
-            return emb.sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
-
-        def forward(self, ctx, tgt):
-            ctx_z = self.mean_embed(ctx)
-            with torch.no_grad():
-                tgt_z = self.mean_embed(tgt)
-            pred = self.predictor(ctx_z)
-            return pred, tgt_z
-
-    model = MeanJEPA(vocab_size, dim).to(device)
+    max_horizons = int(args.max_horizons) if int(args.max_horizons) > 0 else int(args.horizon_count)
+    model = MeanTokenJEPA(
+        vocab_size,
+        dim,
+        autoregression_mode=args.autoregression_mode,
+        max_horizons=max_horizons,
+    ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
     rng = random.Random(seed)
     losses: list[float] = []
@@ -144,10 +169,15 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
     for step in range(1, args.real_steps + 1):
         batch = [train[rng.randrange(len(train))] for _ in range(args.batch_size)]
         ctx = _pad([b[0] for b in batch], device)
-        tgt = _pad([b[1] for b in batch], device)
-        pred, tgt_z = model(ctx, tgt)
-        cos_loss = 1.0 - F.cosine_similarity(pred, tgt_z, dim=-1).mean()
-        var = pred.var(dim=0).mean()
+        target_steps = []
+        with torch.no_grad():
+            for h in range(args.horizon_count):
+                tgt_h = _pad([b[1][h] for b in batch], device)
+                target_steps.append(model.mean_embed(tgt_h))
+        tgt_z = torch.stack(target_steps, dim=1)
+        pred = model.predict_rollout_from_context_ids(ctx, args.horizon_count)
+        cos_loss = 1.0 - F.cosine_similarity(pred.reshape(-1, dim), tgt_z.reshape(-1, dim), dim=-1).mean()
+        var = pred.reshape(-1, dim).var(dim=0).mean()
         loss = cos_loss + 0.01 * torch.relu(torch.tensor(0.05, device=device) - var)
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -155,7 +185,7 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
         opt.step()
         losses.append(float(loss.detach().cpu()))
 
-    def eval_split(rows: list[tuple[np.ndarray, np.ndarray]], n_eval: int = 2048) -> dict[str, float]:
+    def eval_split(rows: list[tuple[np.ndarray, list[np.ndarray]]], n_eval: int = 2048) -> dict[str, Any]:
         if not rows:
             return {"n": 0, "cosine": 0.0, "loss": 0.0, "effective_rank": 0.0}
         model.eval()
@@ -169,31 +199,52 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
             for i in range(0, len(sample), args.batch_size):
                 batch = sample[i : i + args.batch_size]
                 ctx = _pad([b[0] for b in batch], device)
-                tgt = _pad([b[1] for b in batch], device)
-                pred, tgt_z = model(ctx, tgt)
-                cos = F.cosine_similarity(pred, tgt_z, dim=-1)
+                target_steps = []
+                for h in range(args.horizon_count):
+                    tgt_h = _pad([b[1][h] for b in batch], device)
+                    target_steps.append(model.mean_embed(tgt_h))
+                tgt_z = torch.stack(target_steps, dim=1)
+                pred = model.predict_rollout_from_context_ids(ctx, args.horizon_count)
+                cos = F.cosine_similarity(pred.reshape(-1, dim), tgt_z.reshape(-1, dim), dim=-1)
                 cosines.extend([float(x) for x in cos.cpu()])
                 losses_eval.extend([float(x) for x in (1.0 - cos).cpu()])
-                preds.append(pred.detach().cpu().numpy())
+                preds.append(pred.reshape(-1, dim).detach().cpu().numpy())
         pred_arr = np.concatenate(preds, axis=0) if preds else np.zeros((0, dim), dtype="float32")
         return {"n": len(sample), "cosine": float(np.mean(cosines)), "loss": float(np.mean(losses_eval)), "effective_rank": effective_rank(pred_arr)}
 
     train_eval = eval_split(train)
     dev_eval = eval_split(dev)
     ckpt_path = outdir / "minimal-jepa-v0b.pt"
-    torch.save({"model_state_dict": model.state_dict(), "vocab_size": vocab_size, "embedding_dim": dim, "created_utc": now_utc()}, ckpt_path)
+    architecture = model.architecture_metadata()
+    architecture["horizon_count_trained"] = int(args.horizon_count)
+    architecture["horizon_stride_tokens"] = int(args.horizon_stride_tokens or args.max_target_tokens)
+    torch.save({
+        "model_state_dict": model.state_dict(),
+        "vocab_size": vocab_size,
+        "embedding_dim": dim,
+        "created_utc": now_utc(),
+        "architecture": architecture,
+        "autoregression_mode": args.autoregression_mode,
+        "horizon_count_trained": int(args.horizon_count),
+        "horizon_stride_tokens": int(args.horizon_stride_tokens or args.max_target_tokens),
+        "max_horizons": int(max_horizons),
+    }, ckpt_path)
 
     train_manifest = {
         "schema_version": "clinical-jepa-v0b-train-manifest-v0",
         "created_utc": now_utc(),
         "dry_run": False,
-        "architecture": {"name": "mean-token-jepa-v0", "embedding_dim": dim, "predictor": "2-layer-mlp", "target_encoder": "shared_embedding_stop_gradient"},
+        "architecture": architecture,
         "n_synthetic_examples": 0,
         "n_real_examples_loaded": len(examples),
         "n_train_examples": len(train),
         "n_dev_examples": len(dev),
         "trained_steps": int(args.real_steps),
         "batch_size": int(args.batch_size),
+        "autoregression_mode": args.autoregression_mode,
+        "horizon_count_trained": int(args.horizon_count),
+        "horizon_stride_tokens": int(args.horizon_stride_tokens or args.max_target_tokens),
+        "max_horizons": int(max_horizons),
         "device": str(device),
         "leakage_audit_status": "pass",
         "final_train_loss": float(losses[-1]) if losses else None,
@@ -222,11 +273,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--batch-size", type=int, default=128)
     ap.add_argument("--learning-rate", type=float, default=3e-4)
     ap.add_argument("--embedding-dim", type=int, default=128)
+    ap.add_argument("--autoregression-mode", choices=("recursive", "horizon_conditioned"), default="recursive", help="recursive keeps v0B backward compatibility; horizon_conditioned uses explicit horizon-specific heads")
+    ap.add_argument("--horizon-count", type=int, default=1, help="Number of future target windows to train against")
+    ap.add_argument("--horizon-stride-tokens", type=int, default=0, help="Stride between target windows; defaults to max-target-tokens")
+    ap.add_argument("--max-horizons", type=int, default=0, help="Capacity for horizon-conditioned heads; defaults to horizon-count")
     ap.add_argument("--max-blocks", type=int, default=50000)
     ap.add_argument("--max-context-tokens", type=int, default=128)
     ap.add_argument("--max-target-tokens", type=int, default=32)
     ap.add_argument("--cpu", action="store_true")
     args = ap.parse_args(argv)
+    if args.horizon_count <= 0:
+        raise SystemExit("--horizon-count must be positive")
+    if args.autoregression_mode == "horizon_conditioned" and args.max_horizons and args.horizon_count > args.max_horizons:
+        raise SystemExit("--horizon-count cannot exceed --max-horizons for horizon_conditioned mode")
     require_pass_leakage(args.leakage_report)
     arms = load_yaml(args.arms_config)
     dataset = load_yaml(args.dataset_config)

@@ -145,29 +145,16 @@ def export_mean_token_rollouts(
 
     import h5py
     import torch
-    import torch.nn as nn
 
-    class MeanJEPA(nn.Module):
-        def __init__(self, vocab: int, d: int):
-            super().__init__()
-            self.embedding = nn.Embedding(vocab, d, padding_idx=0)
-            self.predictor = nn.Sequential(nn.Linear(d, d * 2), nn.GELU(), nn.Linear(d * 2, d))
-
-        def mean_embed(self, ids):
-            mask = (ids != 0).float().unsqueeze(-1)
-            emb = self.embedding(ids) * mask
-            return emb.sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
-
-        def predict_from_context_ids(self, ids):
-            return self.predictor(self.mean_embed(ids))
+    from clinical_jepa.arms.v0b.mean_token_model import build_mean_token_jepa_from_checkpoint, checkpoint_autoregression_config
 
     checkpoint_path = Path(checkpoint_path)
     target_blocks_path = Path(target_blocks_path)
     outdir = ensure_dir(output_dir)
     ckpt = torch.load(checkpoint_path, map_location="cpu")
     dim = int(ckpt["embedding_dim"])
-    model = MeanJEPA(int(ckpt["vocab_size"]), dim)
-    model.load_state_dict(ckpt["model_state_dict"])
+    autoreg_config = checkpoint_autoregression_config(ckpt)
+    model = build_mean_token_jepa_from_checkpoint(ckpt)
     device = torch.device("cpu" if cpu or not torch.cuda.is_available() else "cuda")
     model.to(device)
     model.eval()
@@ -240,11 +227,7 @@ def export_mean_token_rollouts(
                 if not kept:
                     continue
                 ctx_tensor = _pad(ctxs, device)
-                pred_h = model.predict_from_context_ids(ctx_tensor)
-                pred_steps = [pred_h]
-                for _ in range(1, horizon_count):
-                    pred_steps.append(model.predictor(pred_steps[-1]))
-                pred_batch = torch.stack(pred_steps, dim=1).detach().cpu().numpy().astype(np.float16)
+                pred_batch = model.predict_rollout_from_context_ids(ctx_tensor, horizon_count).detach().cpu().numpy().astype(np.float16)
                 obs_steps = []
                 for h in range(horizon_count):
                     obs_steps.append(model.mean_embed(_pad(targets_by_h[h], device)))
@@ -290,6 +273,10 @@ def export_mean_token_rollouts(
         "splits": splits_out,
         "target_types": target_types_out,
         "embedding_dim": int(dim),
+        "autoregression_mode": autoreg_config["autoregression_mode"],
+        "horizon_conditioning": autoreg_config["horizon_conditioning"],
+        "horizon_count_trained": int(autoreg_config["horizon_count_trained"]),
+        "max_horizons": int(autoreg_config["max_horizons"]),
         "horizon_count": int(horizon_count),
         "target_window_events": int(target_window_events),
         "horizon_stride_events": int(horizon_stride_events),
