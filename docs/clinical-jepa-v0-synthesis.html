@@ -60,6 +60,9 @@
     <div class="callout good">
       <strong>Cautious claim.</strong> Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences, including transfer to an external INSPECT validation source. The strongest external-transfer line so far is the scaled mean-token v0B scaffold; first transformer+EMA variants are strong on MIMIC and show real INSPECT signal, but do not yet beat the simpler scaled mean-token scaffold under the demanding MIMIC→INSPECT zero-shot transfer gate.
     </div>
+    <div class="callout warn">
+      <strong>Prior-art boundary.</strong> Yang et al. 2026 <em>Clin-JEPA</em> is direct prior art for generic JEPA-style latent rollout over EHR patient trajectories. This report should not be read as claiming first-EHR-JEPA novelty; the local differentiator is governed tokenised-EHR readout, FlatASCEND/ORCA reader-speaker bridging, INSPECT transfer, leakage controls, and TTE-style generation/readout readiness.
+    </div>
     <p>The v0 programme tested whether a JEPA-style latent prediction objective can learn useful clinical state-transition representations from tokenised EHR sequences, without collapsing into a FlatASCEND/autoregressive teacher-copy story. The answer is provisionally yes: the signal survives leakage checks, matched distractors, horizon stress, candidate-normalized retrieval, row-shuffle controls, query-shuffle controls, within-group time-shift controls, and source-transfer evaluation.</p>
     <p>The result is not a clinical outcome model and not a causal treatment-effect claim. It is evidence that latent future-state prediction over clinical event streams is a viable representation-learning objective worth developing further.</p>
   </section>

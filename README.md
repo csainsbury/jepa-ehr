@@ -2,6 +2,8 @@
 
 Clinical-JEPA scaffolding for leakage-aware latent prediction experiments over tokenised EHR sequences.
 
+**Prior-art boundary:** Yang et al. 2026 `Clin-JEPA` is direct prior art for generic JEPA-style latent rollout over EHR patient trajectories. This repo should not be read as claiming first-EHR-JEPA novelty; the local focus is governed tokenised-EHR readout, FlatASCEND/ORCA reader-speaker bridging, external INSPECT transfer, leakage controls, and TTE-style generation/readout readiness.
+
 **Current v0 claim, stated cautiously:** Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences, including external INSPECT transfer. The current main evidence line is the scaled mean-token v0B scaffold; first transformer+EMA variants are strong on MIMIC and show clear INSPECT signal, but do not yet beat the simpler scaffold under the demanding MIMIC→INSPECT zero-shot transfer gate.
 
 This repository contains code, schemas, example configs, and aggregate/sanitized pilot notes. It does **not** contain clinical data, patient-level records, source identifiers, source-ID maps, token-level examples, embeddings, checkpoints, credentials, or download tokens.
@@ -43,4 +45,4 @@ Real-data runs require an approved de-identified/tokenised local bundle and must
 
 ## Interpretation boundary
 
-The v0 results support a representation-learning claim, not a clinical utility or causal treatment-effect claim. Candidate-normalized INSPECT transfer is the current promotion gate for architecture decisions; MIMIC-only improvements are insufficient.
+The v0 results support a representation-learning claim, not a clinical utility, novelty-over-Clin-JEPA, or causal treatment-effect claim. Candidate-normalized INSPECT transfer is the current promotion gate for architecture decisions; MIMIC-only improvements are insufficient.

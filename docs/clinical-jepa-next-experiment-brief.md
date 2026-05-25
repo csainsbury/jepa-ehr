@@ -4,13 +4,17 @@ Date: 2026-05-24
 
 Status: **do not run compute until after write-up review**.
 
+## Prior-art update
+
+Yang et al. 2026 `Clin-JEPA` is now direct prior art for generic JEPA-style latent rollout over EHR patient trajectories: Qwen3-8B LoRA state/action text encoder, retained latent trajectory predictor, and autoregressive continuous-latent rollout on MIMIC-IV ICU. This brief therefore should **not** be read as claiming first-EHR-JEPA novelty. The local differentiator is explicit future readout/rendering, FlatASCEND/ORCA reader-speaker bridging, MIMIC→INSPECT/source-robust controls, and TTE-style specification discipline.
+
 ## Why this replaces the transfer-optimisation brief
 
 The previous follow-up brief jumped too quickly to transfer-aware transformer+EMA optimisation. That is not wrong eventually, but it is not the next conceptual bottleneck.
 
-The original Clinical-JEPA question is broader:
+The original local Clinical-JEPA question is broader than generic latent EHR rollout:
 
-> Can a JEPA-style latent patient-state model help produce autoregressive clinical futures that are clinically reasonable?
+> Can a JEPA-style latent patient-state reader help retrieve, condition, or render autoregressive clinical futures that are clinically reasonable under cross-site and TTE-style controls?
 
 The v0 work so far answered an upstream representation question: JEPA-style latent prediction learns a real future-block signal and transfers under a hard MIMIC→INSPECT zero-shot test. It did **not** yet answer whether the latent state can be rendered into clinically reasonable explicit event sequences.
 
@@ -38,9 +42,10 @@ Not yet completed:
 
 Current technical position:
 
-- Clinical-JEPA can predict latent future-block representations.
+- Clinical-JEPA v0 can predict latent future-block representations.
 - The nearest-neighbour target-retrieval setup can be used as a **retrieval-based pseudo-renderer** for a first data-quality/generation-readiness test.
-- FlatASCEND remains the explicit autoregressive speaker/generator substrate. A hybrid route would let JEPA predict latent future state first, then either retrieve or condition/render explicit sequences.
+- FlatASCEND remains the explicit autoregressive speaker/generator substrate. A hybrid route would let a JEPA-style reader predict latent future state first, then either retrieve or condition/render explicit sequences.
+- Clin-JEPA-like state/action latent rollout should be treated as a prior/baseline ingredient, not as the local novelty claim.
 
 ## Next question
 
@@ -141,6 +146,7 @@ The TTE/data-quality atom succeeds if:
 - time zero, baseline lookback, and follow-up can be defined without future leakage;
 - outcome/proxy candidates are prefix-safe or explicitly marked as not ready;
 - surveillance/contact-intensity controls are available;
+- action/intervention descriptors used for any future rollout are prefix-safe or explicitly labelled as proposed-policy / observed-future-action inputs;
 - exclusion reasons and source differences are reportable in aggregate.
 
 The pseudo-rendering atom succeeds if:
@@ -166,4 +172,4 @@ Transfer-aware transformer+EMA regularisation remains a plausible later experime
 
 ## Governance boundary
 
-Do not include raw/patient-level data, HDF5s, source-ID maps, embeddings, checkpoints, secrets, `.env` files, passfiles, or time-limited URLs in public artifacts. v0C raw/MEDS-lite and outcome-proximal T2 labels remain gated until explicitly approved.
+Do not include raw/patient-level data, HDF5s, source-ID maps, embeddings, checkpoints, secrets, `.env` files, passfiles, or time-limited URLs in public artifacts. v0C raw/MEDS-lite and outcome-proximal T2 labels remain gated until explicitly approved. Do not describe pseudo-rendered observed target blocks as generated sequences, and do not describe action-conditioned latent rollout as treatment-effect estimation.

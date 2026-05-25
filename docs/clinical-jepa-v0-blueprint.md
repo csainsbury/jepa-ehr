@@ -1,7 +1,7 @@
 ---
 title: Clinical-JEPA pilot atomic blueprint
 created: 2026-05-23
-updated: 2026-05-23
+updated: 2026-05-25
 status: draft-for-automated-development
 project: ascend-orca-clinical-jepa
 intended_use: outcome-loops-and-physarum
@@ -10,6 +10,7 @@ canonical_sources:
   - wiki/concepts/joint-embedding-predictive-architecture.md
   - wiki/synthesis/orca-and-jepa-representation-space-translation.md
   - wiki/sources/2026-05-23-jepa-autoregression-batch.md
+  - wiki/sources/2026-05-25-yang26-clin-jepa.md
   - wiki/entities/flatascend.md
   - wiki/sources/2026-04-11-sainsbury26-flatascend.md
   - wiki/sources/2026-04-11-sainsbury26-orca-iatric.md
@@ -25,6 +26,8 @@ supporting_scouts:
 ## 0. One-line objective
 
 Build a staged Clinical-JEPA experimental programme that tests whether **latent clinical-state prediction** can improve on, complement, or reveal limitations of the existing [[entities/flatascend|FlatASCEND]] / [[entities/orca|ORCA]] substrate, without prematurely locking into FlatASCEND-derived representations.
+
+**Prior-art update:** Yang et al. 2026 `Clin-JEPA` is direct prior art for generic JEPA-style latent rollout over EHR patient trajectories. This blueprint should therefore be read as a local bridge/evaluation programme, not a first-EHR-JEPA novelty claim.
 
 The core project claim to test is:
 
@@ -47,10 +50,11 @@ This is **not** approval to access raw clinical data, modify project repos, or r
 
 1. JEPA is latent prediction: predict target representations from context representations rather than reconstructing raw observations (source: [[concepts/joint-embedding-predictive-architecture]]).
 2. Newer JEPA work blurs the boundary with autoregression: sequential, probabilistic, bidirectional, action-conditioned and generative-adjacent JEPA variants exist (source: [[sources/2026-05-23-jepa-autoregression-batch]]).
-3. ORCA is **not currently a JEPA**; it is a broader language-of-EHR programme whose empirical substrate is FlatASCEND plus alignment/translation analyses (source: [[synthesis/orca-and-jepa-representation-space-translation]], [[sources/2026-04-11-sainsbury26-orca-iatric]]).
-4. FlatASCEND is a strong existing speaker/generator baseline, using flat composite tokens, a GPT-style decoder, continuous time head, scheduled sampling, and incident-user pharmacological evaluation (source: [[entities/flatascend]], [[sources/2026-04-11-sainsbury26-flatascend]]).
-5. FlatASCEND has known weaknesses: cross-site zero-shot transfer, outpatient long-gap temporal fidelity, and observational confounding in pharmacological directions (source: [[sources/2026-04-11-sainsbury26-flatascend]]).
-6. The ASCEND arc repeatedly warns that evaluation must avoid trivial distributional metrics, leakage, teacher circularity, pseudo-replication, and overclaiming causal meaning from observational EHR (source: [[synthesis/ascend-research-arc]]).
+3. Clin-JEPA is now direct EHR-JEPA prior art: it uses state/action text, a Qwen3-8B LoRA encoder, and retained autoregressive latent rollout on MIMIC-IV ICU (source: [[sources/2026-05-25-yang26-clin-jepa]]).
+4. ORCA is **not currently a JEPA**; it is a broader language-of-EHR programme whose empirical substrate is FlatASCEND plus alignment/translation analyses (source: [[synthesis/orca-and-jepa-representation-space-translation]], [[sources/2026-04-11-sainsbury26-orca-iatric]]).
+5. FlatASCEND is a strong existing speaker/generator baseline, using flat composite tokens, a GPT-style decoder, continuous time head, scheduled sampling, and incident-user pharmacological evaluation (source: [[entities/flatascend]], [[sources/2026-04-11-sainsbury26-flatascend]]).
+6. FlatASCEND has known weaknesses: cross-site zero-shot transfer, outpatient long-gap temporal fidelity, and observational confounding in pharmacological directions (source: [[sources/2026-04-11-sainsbury26-flatascend]]).
+7. The ASCEND arc repeatedly warns that evaluation must avoid trivial distributional metrics, leakage, teacher circularity, pseudo-replication, and overclaiming causal meaning from observational EHR (source: [[synthesis/ascend-research-arc]]).
 
 ## 3. Non-negotiable guardrails
 
