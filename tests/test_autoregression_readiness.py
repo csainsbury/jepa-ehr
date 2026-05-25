@@ -57,6 +57,28 @@ class AutoregressionReadinessTests(unittest.TestCase):
         self.assertIn("time_shift_control_requires_multiple_horizons", report["warnings"])
         self.assertEqual(report["shift_controls"]["controls"]["time_shift"]["per_horizon"], [])
 
+    def test_noncyclic_time_shift_distances_and_target_similarity(self) -> None:
+        n, h, d = 6, 5, 6
+        target = np.zeros((n, h, d), dtype=np.float32)
+        for step in range(h):
+            target[:, step, :] = np.roll(np.eye(d, dtype=np.float32), shift=step, axis=1)[:n]
+        pred = target.copy()
+        report = compute_autoregression_readiness_report(
+            pred,
+            target,
+            _rows(n),
+            distractor_policy="same_split_target_type",
+            control_mode="time_shift",
+            time_shift_mode="noncyclic_forward",
+            time_shift_distances=(1, 2, 4),
+        )
+        rows = report["shift_controls"]["controls"]["time_shift"]["per_horizon"]
+        self.assertEqual(len(rows), 4 + 3 + 1)
+        self.assertEqual({row["distance"] for row in rows}, {1, 2, 4})
+        self.assertEqual(report["shift_controls"]["time_shift_mode"], "noncyclic_forward")
+        self.assertEqual(report["target_horizon_similarity"]["distances"], [1, 2, 4])
+        self.assertEqual(report["target_horizon_similarity"]["per_distance"][0]["n_horizon_pairs"], 4)
+
     def test_cli_writes_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

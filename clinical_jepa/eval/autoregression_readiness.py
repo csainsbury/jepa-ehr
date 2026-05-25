@@ -15,6 +15,7 @@ from clinical_jepa.utils import ensure_dir, now_utc, write_json
 from clinical_jepa.validation import validate_artifact
 
 CONTROL_MODES = ("none", "query_shift", "target_shift", "time_shift", "all")
+TIME_SHIFT_MODES = ("cyclic_next_horizon", "noncyclic_forward")
 
 
 def _as_rollout(x: np.ndarray, name: str) -> np.ndarray:
@@ -112,11 +113,62 @@ def _requested_controls(control_mode: str) -> list[str]:
 def _control_summary(per_horizon: list[dict[str, Any]]) -> dict[str, Any]:
     if not per_horizon:
         return {"n_horizons": 0}
-    return {
+    distances = sorted({int(row["distance"]) for row in per_horizon if "distance" in row})
+    out: dict[str, Any] = {
         "n_horizons": len(per_horizon),
         "cosine_aligned_minus_control_mean": _mean([float(row["cosine_aligned_minus_control"]) for row in per_horizon]),
         "mrr_aligned_minus_control_mean": _mean([float(row["mrr_aligned_minus_control"]) for row in per_horizon]),
         "recall_at_10_aligned_minus_control_mean": _mean([float(row["recall_at_10_aligned_minus_control"]) for row in per_horizon]),
+    }
+    if distances:
+        out["distances"] = distances
+        out["per_distance"] = []
+        for distance in distances:
+            rows = [row for row in per_horizon if int(row.get("distance", -1)) == distance]
+            out["per_distance"].append({
+                "distance": distance,
+                "n_horizons": len(rows),
+                "cosine_aligned_minus_control_mean": _mean([float(row["cosine_aligned_minus_control"]) for row in rows]),
+                "mrr_aligned_minus_control_mean": _mean([float(row["mrr_aligned_minus_control"]) for row in rows]),
+                "recall_at_10_aligned_minus_control_mean": _mean([float(row["recall_at_10_aligned_minus_control"]) for row in rows]),
+            })
+    return out
+
+
+def _target_horizon_similarity(target: np.ndarray, distances: tuple[int, ...]) -> dict[str, Any]:
+    horizons = target.shape[1]
+    per_distance: list[dict[str, Any]] = []
+    for distance in distances:
+        if distance <= 0:
+            continue
+        per_pair: list[dict[str, Any]] = []
+        for h in range(horizons - distance):
+            a = target[:, h, :]
+            b = target[:, h + distance, :]
+            cos = _safe_cosine(a, b)
+            l2 = np.linalg.norm(a - b, axis=1)
+            mae = np.mean(np.abs(a - b), axis=1)
+            per_pair.append({
+                "from_horizon_index": int(h),
+                "to_horizon_index": int(h + distance),
+                "cosine_mean": float(np.mean(cos)),
+                "cosine_median": float(np.median(cos)),
+                "l2_mean": float(np.mean(l2)),
+                "mae_mean": float(np.mean(mae)),
+            })
+        per_distance.append({
+            "distance": int(distance),
+            "n_horizon_pairs": len(per_pair),
+            "cosine_mean_over_pairs": _mean([row["cosine_mean"] for row in per_pair]),
+            "l2_mean_over_pairs": _mean([row["l2_mean"] for row in per_pair]),
+            "mae_mean_over_pairs": _mean([row["mae_mean"] for row in per_pair]),
+            "per_pair": per_pair,
+        })
+    return {
+        "mode": "observed_target_forward_horizon_similarity",
+        "distances": [int(d) for d in distances if d > 0],
+        "per_distance": per_distance,
+        "notes": "Observed target-target similarity by forward horizon distance; this is independent of predicted rollout quality and helps diagnose whether adjacent future windows are intrinsically hard to separate.",
     }
 
 
@@ -232,6 +284,8 @@ def compute_autoregression_readiness_report(
     seed: int = 20260523,
     batch_size: int = 256,
     control_mode: str = "none",
+    time_shift_distances: tuple[int, ...] = (1,),
+    time_shift_mode: str = "cyclic_next_horizon",
 ) -> dict[str, Any]:
     """Aggregate-only latent autoregression readiness metrics.
 
@@ -257,7 +311,10 @@ def compute_autoregression_readiness_report(
     per_horizon: list[dict[str, Any]] = []
     warnings: list[str] = []
     requested_controls = _requested_controls(control_mode)
-    shift_controls: dict[str, Any] = {"mode": control_mode, "controls": {}}
+    if time_shift_mode not in TIME_SHIFT_MODES:
+        raise ValueError(f"Unsupported time_shift_mode={time_shift_mode!r}; expected one of {TIME_SHIFT_MODES}")
+    time_shift_distances = tuple(sorted({int(d) for d in time_shift_distances if int(d) > 0})) or (1,)
+    shift_controls: dict[str, Any] = {"mode": control_mode, "time_shift_mode": time_shift_mode, "time_shift_distances": list(time_shift_distances), "controls": {}}
     for name in requested_controls:
         shift_controls["controls"][name] = {"per_horizon": []}
     query_shift_indices: np.ndarray | None = None
@@ -270,6 +327,9 @@ def compute_autoregression_readiness_report(
         target_shift_indices, target_shift_small_groups = _matched_random_indices(index, distractor_policy, control_rng)
     if "time_shift" in requested_controls and horizons < 2:
         warnings.append("time_shift_control_requires_multiple_horizons")
+    for distance in time_shift_distances:
+        if distance >= horizons:
+            warnings.append(f"time_shift_distance_{distance}_requires_more_horizons")
 
     for h in range(horizons):
         pred_h = pred[:, h, :]
@@ -360,24 +420,35 @@ def compute_autoregression_readiness_report(
             shift_controls["controls"]["target_shift"]["per_horizon"].append(metrics)
 
         if "time_shift" in requested_controls and horizons >= 2:
-            target_horizon_index = int((h + 1) % horizons)
-            metrics = _control_metrics_for_horizon(
-                pred_h,
-                target[:, target_horizon_index, :],
-                index,
-                aligned_cosine_mean=aligned_cosine_mean,
-                aligned_l2_mean=aligned_l2_mean,
-                aligned_mae_mean=aligned_mae_mean,
-                aligned_retrieval=retrieval,
-                distractor_policy=distractor_policy,
-                ks=ks,
-                max_candidates_per_group=max_candidates_per_group,
-                min_candidates_per_group=min_candidates_per_group,
-                rng=control_rng,
-                batch_size=batch_size,
-            )
-            metrics.update({"horizon_index": h, "target_horizon_index": target_horizon_index, "mode": "cyclic_next_horizon"})
-            shift_controls["controls"]["time_shift"]["per_horizon"].append(metrics)
+            for distance in time_shift_distances:
+                if time_shift_mode == "cyclic_next_horizon":
+                    target_horizon_index = int((h + distance) % horizons)
+                else:
+                    target_horizon_index = int(h + distance)
+                    if target_horizon_index >= horizons:
+                        continue
+                metrics = _control_metrics_for_horizon(
+                    pred_h,
+                    target[:, target_horizon_index, :],
+                    index,
+                    aligned_cosine_mean=aligned_cosine_mean,
+                    aligned_l2_mean=aligned_l2_mean,
+                    aligned_mae_mean=aligned_mae_mean,
+                    aligned_retrieval=retrieval,
+                    distractor_policy=distractor_policy,
+                    ks=ks,
+                    max_candidates_per_group=max_candidates_per_group,
+                    min_candidates_per_group=min_candidates_per_group,
+                    rng=control_rng,
+                    batch_size=batch_size,
+                )
+                metrics.update({
+                    "horizon_index": h,
+                    "target_horizon_index": target_horizon_index,
+                    "distance": int(distance),
+                    "mode": time_shift_mode,
+                })
+                shift_controls["controls"]["time_shift"]["per_horizon"].append(metrics)
 
     for control in shift_controls["controls"].values():
         control["summary"] = _control_summary(control.get("per_horizon", []))
@@ -419,6 +490,7 @@ def compute_autoregression_readiness_report(
         "control_mode": control_mode,
         "per_horizon": per_horizon,
         "shift_controls": shift_controls,
+        "target_horizon_similarity": _target_horizon_similarity(target, time_shift_distances),
         "transition_dynamics": transitions,
         "rollout_summary": {
             "cosine_first": cosine_values[0] if cosine_values else None,
@@ -429,6 +501,7 @@ def compute_autoregression_readiness_report(
             "mrr_last": mrr_values[-1] if mrr_values else None,
             "mrr_last_minus_first": (mrr_values[-1] - mrr_values[0]) if len(mrr_values) >= 2 else None,
             "mrr_slope_per_horizon": _slope(mrr_values),
+            "target_adjacent_cosine_mean": next((row["cosine_mean_over_pairs"] for row in _target_horizon_similarity(target, (1,))["per_distance"] if row["distance"] == 1), None),
             "recall_at_10_first": recall10_values[0] if recall10_values else None,
             "recall_at_10_last": recall10_values[-1] if recall10_values else None,
             "recall_at_10_last_minus_first": (recall10_values[-1] - recall10_values[0]) if len(recall10_values) >= 2 else None,
@@ -469,15 +542,30 @@ def _summary_md(report: dict[str, Any]) -> str:
             "",
             "## Shift controls",
             "",
-            "| Control | Horizon | Cosine mean | Cosine delta | Recall@10 | Recall delta | MRR | MRR delta |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|",
+            "| Control | Horizon | Target horizon | Distance | Cosine mean | Cosine delta | Recall@10 | Recall delta | MRR | MRR delta |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ])
         for name, control in controls.items():
             for row in control.get("per_horizon", []):
                 retrieval = row["retrieval"]
+                target_horizon = row.get("target_horizon_index", "")
+                distance = row.get("distance", "")
                 lines.append(
-                    f"| `{name}` | {row['horizon_index']} | {row['cosine_mean']:.4f} | {row['cosine_aligned_minus_control']:.4f} | {retrieval.get('recall_at_10', 0.0):.4f} | {row['recall_at_10_aligned_minus_control']:.4f} | {retrieval.get('mrr', 0.0):.4f} | {row['mrr_aligned_minus_control']:.4f} |"
+                    f"| `{name}` | {row['horizon_index']} | {target_horizon} | {distance} | {row['cosine_mean']:.4f} | {row['cosine_aligned_minus_control']:.4f} | {retrieval.get('recall_at_10', 0.0):.4f} | {row['recall_at_10_aligned_minus_control']:.4f} | {retrieval.get('mrr', 0.0):.4f} | {row['mrr_aligned_minus_control']:.4f} |"
                 )
+    target_similarity = report.get("target_horizon_similarity", {}).get("per_distance", [])
+    if target_similarity:
+        lines.extend([
+            "",
+            "## Observed target-horizon similarity",
+            "",
+            "| Forward distance | Horizon pairs | Target-target cosine | Target-target L2 |",
+            "|---:|---:|---:|---:|",
+        ])
+        for row in target_similarity:
+            lines.append(
+                f"| {row['distance']} | {row['n_horizon_pairs']} | {row['cosine_mean_over_pairs']:.4f} | {row['l2_mean_over_pairs']:.4f} |"
+            )
     summary = report["rollout_summary"]
     lines.extend([
         "",
@@ -505,6 +593,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--seed", type=int, default=20260523)
     ap.add_argument("--control-mode", default="none", choices=CONTROL_MODES, help="Optional aggregate shift controls to compute")
+    ap.add_argument("--time-shift-distances", nargs="+", type=int, default=[1], help="Forward horizon distances for time-shift and target-target diagnostics")
+    ap.add_argument("--time-shift-mode", default="cyclic_next_horizon", choices=TIME_SHIFT_MODES, help="How to map time-shift target horizons")
     args = ap.parse_args(argv)
 
     report = compute_autoregression_readiness_report(
@@ -518,6 +608,8 @@ def main(argv: list[str] | None = None) -> int:
         batch_size=args.batch_size,
         seed=args.seed,
         control_mode=args.control_mode,
+        time_shift_distances=tuple(args.time_shift_distances),
+        time_shift_mode=args.time_shift_mode,
     )
     outdir = ensure_dir(args.output_dir)
     write_json(outdir / "autoregression-readiness.json", report)
