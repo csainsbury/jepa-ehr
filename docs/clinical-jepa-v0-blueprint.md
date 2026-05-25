@@ -27,7 +27,7 @@ supporting_scouts:
 
 Build a staged Clinical-JEPA experimental programme that tests whether **latent clinical-state prediction** can improve on, complement, or reveal limitations of the existing [[entities/flatascend|FlatASCEND]] / [[entities/orca|ORCA]] substrate, without prematurely locking into FlatASCEND-derived representations.
 
-**Prior-art update:** Yang et al. 2026 `Clin-JEPA` is direct prior art for generic JEPA-style latent rollout over EHR patient trajectories. This blueprint should therefore be read as a local bridge/evaluation programme, not a first-EHR-JEPA novelty claim.
+**Prior-art update:** Yang et al. 2026 `Clin-JEPA` is direct prior art for generic JEPA-style latent rollout over EHR patient trajectories. This blueprint should therefore be read as a local bridge/evaluation programme, not a first-EHR-JEPA novelty claim. The current active gate is accurate autoregression/readout on governed same-source future windows; INSPECT remains an external stress test, not the optimisation target.
 
 The core project claim to test is:
 
@@ -456,6 +456,7 @@ Promote to v2 only if Clinical-JEPA beats or complements FlatASCEND-derived repr
 
 - better latent retrieval under matched distractors;
 - better frozen clinical probe;
+- accurate autoregressive future-state readout;
 - better cross-site alignment/stress transfer;
 - better cloze/outcome prediction;
 - healthier representation geometry;

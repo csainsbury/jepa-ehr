@@ -20,6 +20,7 @@ KIND_TO_SCHEMA = {
     "metadata-availability": "clinical-jepa-metadata-availability-v0.schema.json",
     "scenario-feasibility": "clinical-jepa-scenario-feasibility-v0.schema.json",
     "pseudo-rendering-readiness": "clinical-jepa-pseudo-rendering-readiness-v0.schema.json",
+    "autoregression-readiness": "clinical-jepa-autoregression-readiness-v0.schema.json",
 }
 
 VERSION_TO_KIND = {
@@ -32,6 +33,7 @@ VERSION_TO_KIND = {
     "clinical-jepa-metadata-availability-v0": "metadata-availability",
     "clinical-jepa-scenario-feasibility-v0": "scenario-feasibility",
     "clinical-jepa-pseudo-rendering-readiness-v0": "pseudo-rendering-readiness",
+    "clinical-jepa-autoregression-readiness-v0": "autoregression-readiness",
 }
 
 TYPE_MAP = {
@@ -44,7 +46,7 @@ TYPE_MAP = {
     "null": type(None),
 }
 
-AGGREGATE_ONLY_KINDS = {"metadata-availability", "scenario-feasibility", "pseudo-rendering-readiness"}
+AGGREGATE_ONLY_KINDS = {"metadata-availability", "scenario-feasibility", "pseudo-rendering-readiness", "autoregression-readiness"}
 FORBIDDEN_AGGREGATE_KEYS = {
     "block_id",
     "block_ids",

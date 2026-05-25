@@ -4,7 +4,7 @@ Date: 2026-05-24
 
 This note is an aggregate-only account of the Clinical-JEPA v0 pilot so far. It intentionally omits raw/token-level examples, source identifiers, source-ID mappings, patient-level records, free text, dates, credentials, checkpoint files, and governed data paths.
 
-**Prior-art boundary:** Yang et al. 2026 `Clin-JEPA` is direct prior art for generic JEPA-style latent rollout over EHR patient trajectories. This narrative therefore frames local novelty around governed tokenised-EHR readout, FlatASCEND/ORCA reader-speaker bridging, external INSPECT transfer, leakage controls, and TTE-style generation/readout readiness — not around being the first EHR-JEPA.
+**Prior-art boundary:** Yang et al. 2026 `Clin-JEPA` is direct prior art for generic JEPA-style latent rollout over EHR patient trajectories. This narrative therefore frames local novelty around governed tokenised-EHR readout, FlatASCEND/ORCA reader-speaker bridging, accurate autoregression/readout, leakage controls, and TTE-style generation readiness — not around being the first EHR-JEPA. INSPECT is retained as an external stress test, not the active optimisation target.
 
 ## Executive summary
 
@@ -22,7 +22,7 @@ The strongest result so far is not a finished model; it is a staged chain of evi
 6. Scaling the mean-token v0B scaffold improved retrieval strongly, with 256d variants giving the best INSPECT transfer under candidate-normalized evaluation.
 7. First transformer+EMA variants were very strong on MIMIC and retained clear INSPECT signal, but did not yet beat the scaled mean-token scaffold under the demanding MIMIC→INSPECT zero-shot transfer gate.
 
-The current interpretation is: **Clinical-JEPA v0 supports a cautious representation-learning and source-transfer claim**, not a first-EHR-JEPA or clinical-utility claim. Scaled mean-token v0B is the current main evidence line because it is strongest under the MIMIC→INSPECT zero-shot transfer gate; transformer+EMA is a promising architecture diagnostic that already transfers clearly above controls, but needs transfer-aware regularisation or source-robust training before it becomes the mainline.
+The current interpretation is: **Clinical-JEPA v0 supports a cautious representation-learning and readout-engineering claim**, not a first-EHR-JEPA or clinical-utility claim. The next mainline decision should be made on accurate autoregression/readout under matched same-source target, time-shift, utilisation/contact-density, and negative controls; INSPECT transfer remains useful context but should not drive the next architecture choice.
 
 ---
 
@@ -44,7 +44,7 @@ For clinical data, that matters because EHRs are temporal event streams. A usefu
 
 ### Outcome
 
-This gave the v0 design principle: do not make v0 a FlatASCEND-only derivative, and do not overclaim JEPA as non-autoregressive. The later Clin-JEPA prior-art update adds a second rule: do not claim generic EHR-JEPA novelty. Instead, run a substrate/readout bake-off where the differentiator is governed external transfer, leakage controls, and an explicit route from latent states to clinical futures.
+This gave the v0 design principle: do not make v0 a FlatASCEND-only derivative, and do not overclaim JEPA as non-autoregressive. The later Clin-JEPA prior-art update adds a second rule: do not claim generic EHR-JEPA novelty. Instead, run a substrate/readout bake-off where the differentiator is accurate autoregression, leakage controls, and an explicit route from latent states to clinical futures.
 
 ### Rationale for next step
 
@@ -483,7 +483,7 @@ The final candidate-normalized comparison ranks the scaled mean-token models abo
 ### Best next steps
 
 1. Treat scaled mean-token v0B, especially 256d/25k and 256d/50k, as the current main evidence line.
-2. Treat transformer+EMA as a promising architecture diagnostic rather than the mainline until a transfer-aware regularised or source-balanced variant beats mean-token transfer.
+2. Treat transformer+EMA as a promising architecture diagnostic rather than the mainline until an autoregression/readout gate shows it gives more accurate future-state rollout or clinically plausible pseudo-rendered futures.
 3. Pause new Vast compute and write up the aggregate findings before designing another architecture sweep.
 4. If another experiment is needed later, make it targeted: regularised/source-balanced transformer+EMA or held-out-source-aware early stopping, not a broad scaling sweep.
 5. Keep v0C raw/MEDS-lite and outcome-proximal T2 labels gated until explicit approval.
@@ -492,4 +492,4 @@ The final candidate-normalized comparison ranks the scaled mean-token models abo
 
 ## Short version for a slide
 
-Clinical-JEPA v0 has moved from idea to controlled real-data pilot, while direct Clin-JEPA prior art now constrains the generic novelty claim. The JEPA objective learns non-collapsed future-block representations, beats frozen-FlatASCEND target-retrieval baselines under matched distractors, degrades sensibly with horizon, and transfers to INSPECT. Scaling the mean-token scaffold gives the strongest external-transfer results so far. First transformer+EMA variants are very strong on MIMIC and transfer clearly above controls, but do not yet beat the scaled mean-token scaffold under the hard MIMIC→INSPECT zero-shot gate, so they are promising architecture diagnostics rather than the current v0B mainline.
+Clinical-JEPA v0 has moved from idea to controlled real-data pilot, while direct Clin-JEPA prior art now constrains the generic novelty claim. The JEPA objective learns non-collapsed future-block representations, beats frozen-FlatASCEND target-retrieval baselines under matched distractors, degrades sensibly with horizon, and shows external stress-test signal. The next decision is no longer “which model transfers best to INSPECT”; it is “which model gives the most accurate autoregressive/readout path to clinically plausible futures.”

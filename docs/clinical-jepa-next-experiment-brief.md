@@ -6,7 +6,7 @@ Status: **do not run compute until after write-up review**.
 
 ## Prior-art update
 
-Yang et al. 2026 `Clin-JEPA` is now direct prior art for generic JEPA-style latent rollout over EHR patient trajectories: Qwen3-8B LoRA state/action text encoder, retained latent trajectory predictor, and autoregressive continuous-latent rollout on MIMIC-IV ICU. This brief therefore should **not** be read as claiming first-EHR-JEPA novelty. The local differentiator is explicit future readout/rendering, FlatASCEND/ORCA reader-speaker bridging, MIMIC→INSPECT/source-robust controls, and TTE-style specification discipline.
+Yang et al. 2026 `Clin-JEPA` is now direct prior art for generic JEPA-style latent rollout over EHR patient trajectories: Qwen3-8B LoRA state/action text encoder, retained latent trajectory predictor, and autoregressive continuous-latent rollout on MIMIC-IV ICU. This brief therefore should **not** be read as claiming first-EHR-JEPA novelty. The active local differentiator is accurate autoregression/readout and explicit future rendering/retrieval on governed tokenised EHR, with FlatASCEND/ORCA reader-speaker bridging and TTE-style specification discipline. INSPECT remains an external stress test, not the optimisation target.
 
 ## Why this replaces the transfer-optimisation brief
 
@@ -14,11 +14,11 @@ The previous follow-up brief jumped too quickly to transfer-aware transformer+EM
 
 The original local Clinical-JEPA question is broader than generic latent EHR rollout:
 
-> Can a JEPA-style latent patient-state reader help retrieve, condition, or render autoregressive clinical futures that are clinically reasonable under cross-site and TTE-style controls?
+> Can a JEPA-style latent patient-state reader help retrieve, condition, or render **accurate autoregressive clinical futures** that are clinically reasonable under TTE-style controls?
 
-The v0 work so far answered an upstream representation question: JEPA-style latent prediction learns a real future-block signal and transfers under a hard MIMIC→INSPECT zero-shot test. It did **not** yet answer whether the latent state can be rendered into clinically reasonable explicit event sequences.
+The v0 work so far answered an upstream representation question: JEPA-style latent prediction learns a real future-block signal and can survive external stress tests. It did **not** yet answer the main question: whether latent-state prediction can support accurate autoregressive futures or be rendered into clinically reasonable explicit event sequences.
 
-Therefore the next experiment should test **generation/readout readiness and TTE-style data quality**, not transfer optimisation.
+Therefore the next experiment should test **accurate autoregression, generation/readout readiness, and TTE-style data quality**, not transfer optimisation.
 
 ## How far we got technically
 
@@ -49,9 +49,9 @@ Current technical position:
 
 ## Next question
 
-Before another architecture or transfer-learning run, answer:
+Before another transfer-learning run, answer:
 
-> Are the available tokenised sequences and target blocks good enough to support clinically meaningful generation/readout tests, especially TTE-style incident-user or active-comparator scenarios?
+> Can the available tokenised sequences, target blocks, and latent predictions support accurate autoregressive futures, especially around TTE-style incident-user or active-comparator scenarios?
 
 ## Proposed next atom: metadata availability audit
 
@@ -105,9 +105,24 @@ For each source and split, write aggregate-only tables:
 
 No patient-level rows, examples, source identifiers, HDF5s, embeddings, checkpoints, or raw tokens should be copied into reports.
 
+## Proposed next atom: latent autoregression readiness gate
+
+Before any external-transfer optimisation, measure whether predicted latent rollouts stay aligned with observed future latent states over one or more horizons.
+
+Aggregate checks:
+
+- per-horizon cosine / L2 / MAE to aligned observed future embeddings;
+- per-horizon true-target retrieval rank among matched same-source candidate futures;
+- degradation or improvement from first to terminal horizon;
+- step-to-step transition-direction agreement for multi-horizon rollouts;
+- collapse/effective-rank checks per horizon;
+- query/target/time-shift controls to distinguish real autoregressive signal from static patient or utilisation matching.
+
+The active promotion gate is accurate same-source autoregression/readout. INSPECT can be reported later as an external stress test, but should not drive architecture selection before the autoregression gate passes.
+
 ## Proposed next atom: retrieval-based pseudo-rendering smoke test
 
-If the TTE/specification audit passes, use existing JEPA embeddings without training a new model:
+If the TTE/specification audit and autoregression readiness gate pass, use existing JEPA embeddings without training a new model:
 
 1. For each eligible context, predict a latent future state.
 2. Retrieve top-k observed target blocks under the existing matched/candidate-normalized policy.
@@ -149,8 +164,11 @@ The TTE/data-quality atom succeeds if:
 - action/intervention descriptors used for any future rollout are prefix-safe or explicitly labelled as proposed-policy / observed-future-action inputs;
 - exclusion reasons and source differences are reportable in aggregate.
 
-The pseudo-rendering atom succeeds if:
+The autoregression/pseudo-rendering atom succeeds if:
 
+- per-horizon latent alignment and true-target retrieval remain strong under same-source matched candidates;
+- terminal-horizon degradation is acceptable or clinically explainable;
+- predicted transition directions agree with observed future transition directions better than time/query-shift controls;
 - retrieved futures are far more specification-consistent than shuffle controls;
 - horizon/time and event-family distributions are plausible;
 - negative controls do not move in clinically nonsensical ways;
@@ -162,13 +180,13 @@ Stop before new model training if:
 
 - no clean incident-user/comparator scenario can be specified;
 - required outcome/proxy labels are not prefix-safe;
-- source differences make INSPECT uninterpretable for the scenario;
+- same-source autoregression fails under matched target/time controls;
 - controls suggest retrieval/pseudo-rendering is mostly utilisation or contact-density matching;
 - the task requires v0C raw/MEDS-lite or T2 outcome-proximal labels without explicit approval.
 
 ## Relation to transfer optimisation
 
-Transfer-aware transformer+EMA regularisation remains a plausible later experiment, but it should be downstream of the generation/readout question. If the substrate cannot yet support clinically meaningful TTE-style generation tests, improving MIMIC→INSPECT retrieval alone will not answer the core Clinical-JEPA/ORCA question.
+Transfer-aware transformer+EMA regularisation remains a plausible later experiment, but it should be downstream of accurate autoregression and generation/readout readiness. If the substrate cannot yet support clinically meaningful same-source autoregressive futures, improving MIMIC→INSPECT retrieval alone will not answer the core Clinical-JEPA/ORCA question.
 
 ## Governance boundary
 

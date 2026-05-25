@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-autoregression-readiness-v0",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "created_utc",
+    "scenario_id",
+    "aggregate_only",
+    "n_sequences",
+    "n_horizons",
+    "embedding_dim",
+    "retrieval_policy",
+    "per_horizon",
+    "rollout_summary",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-autoregression-readiness-v0"]},
+    "created_utc": {"type": "string"},
+    "scenario_id": {"type": "string"},
+    "aggregate_only": {"type": "boolean", "const": true},
+    "n_sequences": {"type": "integer", "minimum": 1},
+    "n_horizons": {"type": "integer", "minimum": 1},
+    "embedding_dim": {"type": "integer", "minimum": 1},
+    "retrieval_policy": {"type": "string"},
+    "max_candidates_per_group": {"type": "integer", "minimum": 0},
+    "min_candidates_per_group": {"type": "integer", "minimum": 0},
+    "per_horizon": {"type": "array", "items": {"type": "object"}},
+    "transition_dynamics": {"type": "array", "items": {"type": "object"}},
+    "rollout_summary": {"type": "object"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "string"}
+  }
+}

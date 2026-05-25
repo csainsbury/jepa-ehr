@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 WORK="${1:-/tmp/clinical_jepa_schema_check}"
 rm -rf "$WORK"
-mkdir -p "$WORK"/{splits,target-blocks,leakage,results,scenario,pseudo,v0A,v0B,v0D}
+mkdir -p "$WORK"/{splits,target-blocks,leakage,results,scenario,pseudo,autoreg,v0A,v0B,v0D}
 DATASET="configs/v0/dataset.example.yaml"
 ARMS="configs/v0/arms.example.yaml"
 METRICS="configs/v0/metrics.example.yaml"
@@ -83,6 +83,34 @@ for name in ["query-index.jsonl", "target-index.jsonl"]:
 PY
 python3 -m clinical_jepa.eval.pseudo_rendering --query-embeddings "$WORK/pseudo/query.npy" --query-index "$WORK/pseudo/query-index.jsonl" --target-embeddings "$WORK/pseudo/target.npy" --target-index "$WORK/pseudo/target-index.jsonl" --output-dir "$WORK/pseudo" --distractor-policy same_split_target_type --top-k 2
 python3 -m clinical_jepa.validation --file "$WORK/pseudo/pseudo-rendering-readiness.json"
+python3 - <<'PY' "$WORK/autoreg"
+import json
+import sys
+from pathlib import Path
+import numpy as np
+out = Path(sys.argv[1])
+out.mkdir(parents=True, exist_ok=True)
+arr = np.stack([np.eye(4, dtype=np.float32), np.roll(np.eye(4, dtype=np.float32), shift=1, axis=1)], axis=1)
+np.save(out / "predicted-rollout.npy", arr)
+np.save(out / "target-rollout.npy", arr)
+rows = []
+for i in range(4):
+    rows.append({
+        "block_id": f"synthetic-block-{i}",
+        "patient_hash": f"synthetic-patient-{i}",
+        "split": "dev",
+        "target_type": "T1",
+        "context_len": 16,
+        "target_len": 8,
+        "sequence_len": 64,
+        "context_med_count": 1,
+        "context_lab_count": 2,
+        "context_state_count": 0,
+    })
+(out / "index.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+PY
+python3 -m clinical_jepa.eval.autoregression_readiness --predicted-rollout "$WORK/autoreg/predicted-rollout.npy" --target-rollout "$WORK/autoreg/target-rollout.npy" --index "$WORK/autoreg/index.jsonl" --output-dir "$WORK/autoreg" --distractor-policy same_split_target_type
+python3 -m clinical_jepa.validation --file "$WORK/autoreg/autoregression-readiness.json"
 python3 -m clinical_jepa.eval.run_metrics --metrics-config "$METRICS" --split-manifest "$WORK/splits/split-manifest.json" --target-blocks "$WORK/target-blocks/target-block-manifest.json" --leakage-report "$WORK/leakage/leakage-audit-report.json" --output-dir "$WORK/results" --dry-run
 python3 -m clinical_jepa.validation --kind metrics-bundle --file "$WORK/results/baseline-results.json"
 python3 -m clinical_jepa.validation --kind metrics-bundle --file "$WORK/results/retrieval-results.json"
