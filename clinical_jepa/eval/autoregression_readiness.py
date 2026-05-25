@@ -14,6 +14,8 @@ from clinical_jepa.eval.retrieval import POLICIES, group_key, normalize, read_js
 from clinical_jepa.utils import ensure_dir, now_utc, write_json
 from clinical_jepa.validation import validate_artifact
 
+CONTROL_MODES = ("none", "query_shift", "target_shift", "time_shift", "all")
+
 
 def _as_rollout(x: np.ndarray, name: str) -> np.ndarray:
     if x.ndim == 2:
@@ -97,6 +99,27 @@ def _matched_random_indices(index: list[dict[str, Any]], policy: str, rng: rando
     return control, small_groups
 
 
+def _requested_controls(control_mode: str) -> list[str]:
+    if control_mode not in CONTROL_MODES:
+        raise ValueError(f"Unsupported control_mode={control_mode!r}; expected one of {CONTROL_MODES}")
+    if control_mode == "none":
+        return []
+    if control_mode == "all":
+        return ["query_shift", "target_shift", "time_shift"]
+    return [control_mode]
+
+
+def _control_summary(per_horizon: list[dict[str, Any]]) -> dict[str, Any]:
+    if not per_horizon:
+        return {"n_horizons": 0}
+    return {
+        "n_horizons": len(per_horizon),
+        "cosine_aligned_minus_control_mean": _mean([float(row["cosine_aligned_minus_control"]) for row in per_horizon]),
+        "mrr_aligned_minus_control_mean": _mean([float(row["mrr_aligned_minus_control"]) for row in per_horizon]),
+        "recall_at_10_aligned_minus_control_mean": _mean([float(row["recall_at_10_aligned_minus_control"]) for row in per_horizon]),
+    }
+
+
 def _retrieval_for_horizon(
     pred_h: np.ndarray,
     target_h: np.ndarray,
@@ -150,6 +173,52 @@ def _retrieval_for_horizon(
     return retrieval, candidate_summary
 
 
+def _control_metrics_for_horizon(
+    control_pred_h: np.ndarray,
+    control_target_h: np.ndarray,
+    index: list[dict[str, Any]],
+    *,
+    aligned_cosine_mean: float,
+    aligned_l2_mean: float,
+    aligned_mae_mean: float,
+    aligned_retrieval: dict[str, Any],
+    distractor_policy: str,
+    ks: tuple[int, ...],
+    max_candidates_per_group: int,
+    min_candidates_per_group: int,
+    rng: random.Random,
+    batch_size: int,
+) -> dict[str, Any]:
+    control_cos = _safe_cosine(control_pred_h, control_target_h)
+    control_l2 = np.linalg.norm(control_pred_h - control_target_h, axis=1)
+    control_mae = np.mean(np.abs(control_pred_h - control_target_h), axis=1)
+    control_retrieval, control_candidate_summary = _retrieval_for_horizon(
+        control_pred_h,
+        control_target_h,
+        index,
+        distractor_policy=distractor_policy,
+        ks=ks,
+        max_candidates_per_group=max_candidates_per_group,
+        min_candidates_per_group=min_candidates_per_group,
+        rng=rng,
+        batch_size=batch_size,
+    )
+    aligned_recall_10 = float(aligned_retrieval.get("recall_at_10", 0.0) or 0.0)
+    control_recall_10 = float(control_retrieval.get("recall_at_10", 0.0) or 0.0)
+    return {
+        "cosine_mean": float(np.mean(control_cos)),
+        "cosine_aligned_minus_control": float(aligned_cosine_mean - np.mean(control_cos)),
+        "l2_mean": float(np.mean(control_l2)),
+        "l2_aligned_minus_control": float(aligned_l2_mean - np.mean(control_l2)),
+        "mae_mean": float(np.mean(control_mae)),
+        "mae_aligned_minus_control": float(aligned_mae_mean - np.mean(control_mae)),
+        "retrieval": control_retrieval,
+        "candidate_summary": control_candidate_summary,
+        "mrr_aligned_minus_control": float(aligned_retrieval.get("mrr", 0.0) - control_retrieval.get("mrr", 0.0)),
+        "recall_at_10_aligned_minus_control": float(aligned_recall_10 - control_recall_10),
+    }
+
+
 def compute_autoregression_readiness_report(
     predicted_rollout: np.ndarray,
     target_rollout: np.ndarray,
@@ -162,6 +231,7 @@ def compute_autoregression_readiness_report(
     min_candidates_per_group: int = 0,
     seed: int = 20260523,
     batch_size: int = 256,
+    control_mode: str = "none",
 ) -> dict[str, Any]:
     """Aggregate-only latent autoregression readiness metrics.
 
@@ -182,9 +252,24 @@ def compute_autoregression_readiness_report(
         raise ValueError("rollout arrays contain non-finite values")
 
     rng = random.Random(seed)
+    control_rng = random.Random(seed + 1009)
     n, horizons, dim = pred.shape
     per_horizon: list[dict[str, Any]] = []
     warnings: list[str] = []
+    requested_controls = _requested_controls(control_mode)
+    shift_controls: dict[str, Any] = {"mode": control_mode, "controls": {}}
+    for name in requested_controls:
+        shift_controls["controls"][name] = {"per_horizon": []}
+    query_shift_indices: np.ndarray | None = None
+    target_shift_indices: np.ndarray | None = None
+    query_shift_small_groups = 0
+    target_shift_small_groups = 0
+    if "query_shift" in requested_controls:
+        query_shift_indices, query_shift_small_groups = _matched_random_indices(index, distractor_policy, control_rng)
+    if "target_shift" in requested_controls:
+        target_shift_indices, target_shift_small_groups = _matched_random_indices(index, distractor_policy, control_rng)
+    if "time_shift" in requested_controls and horizons < 2:
+        warnings.append("time_shift_control_requires_multiple_horizons")
 
     for h in range(horizons):
         pred_h = pred[:, h, :]
@@ -208,13 +293,16 @@ def compute_autoregression_readiness_report(
         control_cos = _safe_cosine(pred_h, control_target_h)
         control_l2 = np.linalg.norm(pred_h - control_target_h, axis=1)
         control_mae = np.mean(np.abs(pred_h - control_target_h), axis=1)
+        aligned_cosine_mean = float(np.mean(cos))
+        aligned_l2_mean = float(np.mean(l2))
+        aligned_mae_mean = float(np.mean(mae))
         per_horizon.append({
             "horizon_index": h,
             "n": int(n),
-            "cosine_mean": float(np.mean(cos)),
+            "cosine_mean": aligned_cosine_mean,
             "cosine_median": float(np.median(cos)),
-            "l2_mean": float(np.mean(l2)),
-            "mae_mean": float(np.mean(mae)),
+            "l2_mean": aligned_l2_mean,
+            "mae_mean": aligned_mae_mean,
             "pred_norm_mean": float(np.mean(np.linalg.norm(pred_h, axis=1))),
             "target_norm_mean": float(np.mean(np.linalg.norm(target_h, axis=1))),
             "pred_effective_rank": _effective_rank(pred_h),
@@ -232,6 +320,67 @@ def compute_autoregression_readiness_report(
                 "mae_delta": float(np.mean(mae) - np.mean(control_mae)),
             },
         })
+
+        if query_shift_indices is not None:
+            metrics = _control_metrics_for_horizon(
+                pred_h[query_shift_indices],
+                target_h,
+                index,
+                aligned_cosine_mean=aligned_cosine_mean,
+                aligned_l2_mean=aligned_l2_mean,
+                aligned_mae_mean=aligned_mae_mean,
+                aligned_retrieval=retrieval,
+                distractor_policy=distractor_policy,
+                ks=ks,
+                max_candidates_per_group=max_candidates_per_group,
+                min_candidates_per_group=min_candidates_per_group,
+                rng=control_rng,
+                batch_size=batch_size,
+            )
+            metrics.update({"horizon_index": h, "query_shift_small_group_rows": int(query_shift_small_groups)})
+            shift_controls["controls"]["query_shift"]["per_horizon"].append(metrics)
+
+        if target_shift_indices is not None:
+            metrics = _control_metrics_for_horizon(
+                pred_h,
+                target_h[target_shift_indices],
+                index,
+                aligned_cosine_mean=aligned_cosine_mean,
+                aligned_l2_mean=aligned_l2_mean,
+                aligned_mae_mean=aligned_mae_mean,
+                aligned_retrieval=retrieval,
+                distractor_policy=distractor_policy,
+                ks=ks,
+                max_candidates_per_group=max_candidates_per_group,
+                min_candidates_per_group=min_candidates_per_group,
+                rng=control_rng,
+                batch_size=batch_size,
+            )
+            metrics.update({"horizon_index": h, "target_shift_small_group_rows": int(target_shift_small_groups)})
+            shift_controls["controls"]["target_shift"]["per_horizon"].append(metrics)
+
+        if "time_shift" in requested_controls and horizons >= 2:
+            target_horizon_index = int((h + 1) % horizons)
+            metrics = _control_metrics_for_horizon(
+                pred_h,
+                target[:, target_horizon_index, :],
+                index,
+                aligned_cosine_mean=aligned_cosine_mean,
+                aligned_l2_mean=aligned_l2_mean,
+                aligned_mae_mean=aligned_mae_mean,
+                aligned_retrieval=retrieval,
+                distractor_policy=distractor_policy,
+                ks=ks,
+                max_candidates_per_group=max_candidates_per_group,
+                min_candidates_per_group=min_candidates_per_group,
+                rng=control_rng,
+                batch_size=batch_size,
+            )
+            metrics.update({"horizon_index": h, "target_horizon_index": target_horizon_index, "mode": "cyclic_next_horizon"})
+            shift_controls["controls"]["time_shift"]["per_horizon"].append(metrics)
+
+    for control in shift_controls["controls"].values():
+        control["summary"] = _control_summary(control.get("per_horizon", []))
 
     transitions: list[dict[str, Any]] = []
     if horizons < 2:
@@ -267,7 +416,9 @@ def compute_autoregression_readiness_report(
         "retrieval_policy": distractor_policy,
         "max_candidates_per_group": int(max_candidates_per_group),
         "min_candidates_per_group": int(min_candidates_per_group),
+        "control_mode": control_mode,
         "per_horizon": per_horizon,
+        "shift_controls": shift_controls,
         "transition_dynamics": transitions,
         "rollout_summary": {
             "cosine_first": cosine_values[0] if cosine_values else None,
@@ -284,7 +435,7 @@ def compute_autoregression_readiness_report(
             "recall_at_10_slope_per_horizon": _slope(recall10_values),
         },
         "warnings": warnings,
-        "notes": "Latent autoregression readiness only: predicted rollout embeddings are compared with aligned observed future embeddings and within-policy matched-random controls. This is not explicit event generation, not external transfer, and not treatment-effect estimation. No row IDs, patient hashes, raw tokens, examples, or embeddings are emitted.",
+        "notes": "Latent autoregression readiness only: predicted rollout embeddings are compared with aligned observed future embeddings, within-policy matched-random controls, and optional query/target/time-shift controls. This is not explicit event generation, not external transfer, and not treatment-effect estimation. No row IDs, patient hashes, raw tokens, examples, or embeddings are emitted.",
     }
     validate_artifact("autoregression-readiness", report)
     return report
@@ -312,6 +463,21 @@ def _summary_md(report: dict[str, Any]) -> str:
         lines.append(
             f"| {row['horizon_index']} | {row['cosine_mean']:.4f} | {control['cosine_mean']:.4f} | {control['cosine_delta']:.4f} | {retrieval.get('recall_at_10', 0.0):.4f} | {retrieval.get('mrr', 0.0):.4f} | {row['pred_effective_rank']:.2f} | {row['target_effective_rank']:.2f} |"
         )
+    controls = report.get("shift_controls", {}).get("controls", {})
+    if controls:
+        lines.extend([
+            "",
+            "## Shift controls",
+            "",
+            "| Control | Horizon | Cosine mean | Cosine delta | Recall@10 | Recall delta | MRR | MRR delta |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for name, control in controls.items():
+            for row in control.get("per_horizon", []):
+                retrieval = row["retrieval"]
+                lines.append(
+                    f"| `{name}` | {row['horizon_index']} | {row['cosine_mean']:.4f} | {row['cosine_aligned_minus_control']:.4f} | {retrieval.get('recall_at_10', 0.0):.4f} | {row['recall_at_10_aligned_minus_control']:.4f} | {retrieval.get('mrr', 0.0):.4f} | {row['mrr_aligned_minus_control']:.4f} |"
+                )
     summary = report["rollout_summary"]
     lines.extend([
         "",
@@ -338,6 +504,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-candidates-per-group", type=int, default=0)
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--seed", type=int, default=20260523)
+    ap.add_argument("--control-mode", default="none", choices=CONTROL_MODES, help="Optional aggregate shift controls to compute")
     args = ap.parse_args(argv)
 
     report = compute_autoregression_readiness_report(
@@ -350,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
         min_candidates_per_group=args.min_candidates_per_group,
         batch_size=args.batch_size,
         seed=args.seed,
+        control_mode=args.control_mode,
     )
     outdir = ensure_dir(args.output_dir)
     write_json(outdir / "autoregression-readiness.json", report)

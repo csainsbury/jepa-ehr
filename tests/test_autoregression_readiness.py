@@ -39,19 +39,23 @@ class AutoregressionReadinessTests(unittest.TestCase):
         for step in range(h):
             target[:, step, :] = np.roll(np.eye(d, dtype=np.float32), shift=step, axis=1)[:n]
         pred = target + 0.001
-        report = compute_autoregression_readiness_report(pred, target, _rows(n), distractor_policy="same_split_target_type")
+        report = compute_autoregression_readiness_report(pred, target, _rows(n), distractor_policy="same_split_target_type", control_mode="all")
         self.assertEqual(report["aggregate_only"], True)
         self.assertEqual(report["n_horizons"], 3)
         self.assertEqual(report["per_horizon"][0]["retrieval"]["recall_at_1"], 1.0)
         self.assertTrue(report["transition_dynamics"])
+        self.assertEqual(set(report["shift_controls"]["controls"]), {"query_shift", "target_shift", "time_shift"})
+        self.assertEqual(len(report["shift_controls"]["controls"]["time_shift"]["per_horizon"]), 3)
         dumped = json.dumps(report)
         self.assertNotIn("block-secret", dumped)
         self.assertNotIn("patient-secret", dumped)
 
     def test_single_horizon_warns_no_transition_check(self) -> None:
         arr = np.eye(4, dtype=np.float32)
-        report = compute_autoregression_readiness_report(arr, arr, _rows(4), distractor_policy="same_split_target_type")
+        report = compute_autoregression_readiness_report(arr, arr, _rows(4), distractor_policy="same_split_target_type", control_mode="time_shift")
         self.assertIn("single_horizon_no_autoregressive_transition_check", report["warnings"])
+        self.assertIn("time_shift_control_requires_multiple_horizons", report["warnings"])
+        self.assertEqual(report["shift_controls"]["controls"]["time_shift"]["per_horizon"], [])
 
     def test_cli_writes_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -78,9 +82,14 @@ class AutoregressionReadinessTests(unittest.TestCase):
                 str(out),
                 "--distractor-policy",
                 "same_split_target_type",
+                "--control-mode",
+                "all",
             ], cwd=ROOT, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             report = json.loads((out / "autoregression-readiness.json").read_text())
             self.assertEqual(report["aggregate_only"], True)
+            self.assertEqual(report["control_mode"], "all")
+            summary = (out / "summary.md").read_text()
+            self.assertIn("## Shift controls", summary)
             self.assertTrue((out / "summary.md").exists())
 
 

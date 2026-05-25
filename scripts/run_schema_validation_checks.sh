@@ -109,7 +109,7 @@ for i in range(4):
     })
 (out / "index.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
 PY
-python3 -m clinical_jepa.eval.autoregression_readiness --predicted-rollout "$WORK/autoreg/predicted-rollout.npy" --target-rollout "$WORK/autoreg/target-rollout.npy" --index "$WORK/autoreg/index.jsonl" --output-dir "$WORK/autoreg" --distractor-policy same_split_target_type
+python3 -m clinical_jepa.eval.autoregression_readiness --predicted-rollout "$WORK/autoreg/predicted-rollout.npy" --target-rollout "$WORK/autoreg/target-rollout.npy" --index "$WORK/autoreg/index.jsonl" --output-dir "$WORK/autoreg" --distractor-policy same_split_target_type --control-mode all
 python3 -m clinical_jepa.validation --file "$WORK/autoreg/autoregression-readiness.json"
 python3 -m clinical_jepa.eval.run_metrics --metrics-config "$METRICS" --split-manifest "$WORK/splits/split-manifest.json" --target-blocks "$WORK/target-blocks/target-block-manifest.json" --leakage-report "$WORK/leakage/leakage-audit-report.json" --output-dir "$WORK/results" --dry-run
 python3 -m clinical_jepa.validation --kind metrics-bundle --file "$WORK/results/baseline-results.json"
