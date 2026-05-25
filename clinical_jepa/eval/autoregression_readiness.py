@@ -79,6 +79,24 @@ def _candidate_groups(index: list[dict[str, Any]], policy: str) -> dict[tuple[An
     return groups
 
 
+def _matched_random_indices(index: list[dict[str, Any]], policy: str, rng: random.Random) -> tuple[np.ndarray, int]:
+    """Return a within-policy shuffled target row for each query row."""
+    groups = _candidate_groups(index, policy)
+    control = np.arange(len(index), dtype=np.int64)
+    small_groups = 0
+    for indices in groups.values():
+        if len(indices) <= 1:
+            small_groups += len(indices)
+            continue
+        shuffled = list(indices)
+        rng.shuffle(shuffled)
+        if len(shuffled) > 1 and all(a == b for a, b in zip(indices, shuffled)):
+            shuffled = shuffled[1:] + shuffled[:1]
+        for src, dst in zip(indices, shuffled):
+            control[src] = dst
+    return control, small_groups
+
+
 def _retrieval_for_horizon(
     pred_h: np.ndarray,
     target_h: np.ndarray,
@@ -185,6 +203,11 @@ def compute_autoregression_readiness_report(
             rng=rng,
             batch_size=batch_size,
         )
+        control_indices, control_small_groups = _matched_random_indices(index, distractor_policy, rng)
+        control_target_h = target_h[control_indices]
+        control_cos = _safe_cosine(pred_h, control_target_h)
+        control_l2 = np.linalg.norm(pred_h - control_target_h, axis=1)
+        control_mae = np.mean(np.abs(pred_h - control_target_h), axis=1)
         per_horizon.append({
             "horizon_index": h,
             "n": int(n),
@@ -198,6 +221,16 @@ def compute_autoregression_readiness_report(
             "target_effective_rank": _effective_rank(target_h),
             "retrieval": retrieval,
             "candidate_summary": candidate_summary,
+            "matched_random_control": {
+                "policy": distractor_policy,
+                "small_group_rows": int(control_small_groups),
+                "cosine_mean": float(np.mean(control_cos)),
+                "cosine_delta": float(np.mean(cos) - np.mean(control_cos)),
+                "l2_mean": float(np.mean(control_l2)),
+                "l2_delta": float(np.mean(l2) - np.mean(control_l2)),
+                "mae_mean": float(np.mean(control_mae)),
+                "mae_delta": float(np.mean(mae) - np.mean(control_mae)),
+            },
         })
 
     transitions: list[dict[str, Any]] = []
@@ -251,7 +284,7 @@ def compute_autoregression_readiness_report(
             "recall_at_10_slope_per_horizon": _slope(recall10_values),
         },
         "warnings": warnings,
-        "notes": "Latent autoregression readiness only: predicted rollout embeddings are compared with aligned observed future embeddings. This is not explicit event generation, not external transfer, and not treatment-effect estimation. No row IDs, patient hashes, raw tokens, examples, or embeddings are emitted.",
+        "notes": "Latent autoregression readiness only: predicted rollout embeddings are compared with aligned observed future embeddings and within-policy matched-random controls. This is not explicit event generation, not external transfer, and not treatment-effect estimation. No row IDs, patient hashes, raw tokens, examples, or embeddings are emitted.",
     }
     validate_artifact("autoregression-readiness", report)
     return report
@@ -270,13 +303,14 @@ def _summary_md(report: dict[str, Any]) -> str:
         "",
         "## Horizon metrics",
         "",
-        "| Horizon | Cosine mean | Recall@10 | MRR | Pred rank | Target rank |",
-        "|---:|---:|---:|---:|---:|---:|",
+        "| Horizon | Cosine mean | Matched-random cosine | Cosine delta | Recall@10 | MRR | Pred rank | Target rank |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in report["per_horizon"]:
         retrieval = row["retrieval"]
+        control = row["matched_random_control"]
         lines.append(
-            f"| {row['horizon_index']} | {row['cosine_mean']:.4f} | {retrieval.get('recall_at_10', 0.0):.4f} | {retrieval.get('mrr', 0.0):.4f} | {row['pred_effective_rank']:.2f} | {row['target_effective_rank']:.2f} |"
+            f"| {row['horizon_index']} | {row['cosine_mean']:.4f} | {control['cosine_mean']:.4f} | {control['cosine_delta']:.4f} | {retrieval.get('recall_at_10', 0.0):.4f} | {retrieval.get('mrr', 0.0):.4f} | {row['pred_effective_rank']:.2f} | {row['target_effective_rank']:.2f} |"
         )
     summary = report["rollout_summary"]
     lines.extend([
