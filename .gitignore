@@ -65,3 +65,6 @@ embeddings/
 # Logs / generated reports that may contain paths
 *.log
 latest*.txt
+# Local pi/cog runtime artifacts
+.pi/
+state/
