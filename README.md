@@ -4,7 +4,7 @@ Clinical-JEPA scaffolding for leakage-aware latent prediction experiments over t
 
 **Prior-art boundary:** Yang et al. 2026 `Clin-JEPA` is direct prior art for generic JEPA-style latent rollout over EHR patient trajectories. This repo should not be read as claiming first-EHR-JEPA novelty; the local focus is governed tokenised-EHR readout, FlatASCEND/ORCA reader-speaker bridging, accurate autoregression/readout, leakage controls, and TTE-style generation readiness. INSPECT remains an external stress test, not the active optimization target.
 
-**Current v0 claim, stated cautiously:** Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences. The current development focus is no longer optimizing external transfer; it is testing whether latent predictions can support accurate autoregressive futures through same-source matched rollout, pseudo-rendering, and eventually explicit renderer/speaker gates. BP-CLINJEPA-003 adds a safe-public horizon-conditioned mean-token path so the next local capped run can test whether explicit horizon heads beat time-shift controls before any renderer bridge is promoted.
+**Current v0 claim, stated cautiously:** Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences. The current development focus is no longer optimizing external transfer; it is testing whether latent predictions can support accurate autoregressive futures through same-source matched rollout, pseudo-rendering, and eventually explicit renderer/speaker gates. BP-CLINJEPA-005 adds safe-public horizon-specification diagnostics so target windows/strides can be tested for separability before any heavier autoregressive model or renderer bridge is promoted.
 
 This repository contains code, schemas, example configs, and aggregate/sanitized pilot notes. It does **not** contain clinical data, patient-level records, source identifiers, source-ID maps, token-level examples, embeddings, checkpoints, credentials, or download tokens.
 
@@ -12,7 +12,7 @@ This repository contains code, schemas, example configs, and aggregate/sanitized
 
 - `clinical_jepa/` — split manifests, target-block extraction, leakage audits, v0A/v0B/v0D scaffold code, aggregate TTE scenario feasibility, pseudo-rendering readiness, and latent autoregression readiness helpers.
 - `schemas/` — JSON schemas for manifests and aggregate result artifacts, including scenario-feasibility and pseudo-rendering-readiness outputs.
-- `configs/v0/*.example.yaml` — placeholder configs only.
+- `configs/v0/*.example.yaml` — placeholder configs only, including a BP005 horizon-spec candidate grid.
 - `scripts/` — preflight, synthetic checks, safe data-bundle preflight, and aggregate probe helpers.
 - `docs/` — design notes and sanitized aggregate pilot results, including:
   - `docs/clinical-jepa-v0-synthesis.html` — clean synthesis report with cautious claim, figure/table plan, and decisions.
@@ -42,6 +42,18 @@ python -m unittest tests/test_synthetic_pipeline.py tests/test_validation.py tes
 ```
 
 Real-data runs require an approved de-identified/tokenised local bundle and must keep outputs aggregate-only unless separately governed.
+
+## Horizon-spec scaffold
+
+BP-CLINJEPA-005 uses `clinical_jepa.eval.horizon_specs` to compare candidate target-window / stride / horizon-count specifications before heavier autoregressive modelling. The CLI emits aggregate target-horizon separability summaries and placeholder command plans for reviewed local runs only:
+
+```bash
+python -m clinical_jepa.eval.horizon_specs \
+  --spec-config configs/v0/horizon_specs.example.yaml \
+  --output-dir /tmp/clinical_jepa_horizon_specs
+```
+
+Do not replace placeholders with governed paths in committed configs, docs, or reports.
 
 ## Interpretation boundary
 

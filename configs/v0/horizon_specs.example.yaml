@@ -1,0 +1,57 @@
+# Clinical-JEPA BP005 horizon-spec candidate grid example.
+# Placeholder/specification-only config: contains no clinical data paths, row IDs,
+# checkpoints, embeddings, source-ID maps, or patient-level artifacts.
+
+schema_version: clinical-jepa-horizon-specs-v0
+
+horizon_specs:
+  - spec_id: event32_stride32
+    kind: event_count
+    target_window_events: 32
+    horizon_stride_events: 32
+    horizon_count: 9
+    diagnostic_distances: [1, 2, 4, 8]
+    rationale: BP004 baseline; adjacent windows were highly similar.
+
+  - spec_id: event32_stride64
+    kind: event_count
+    target_window_events: 32
+    horizon_stride_events: 64
+    horizon_count: 5
+    diagnostic_distances: [1, 2, 4]
+    rationale: Same target resolution with larger separation between horizons.
+
+  - spec_id: event32_stride128
+    kind: event_count
+    target_window_events: 32
+    horizon_stride_events: 128
+    horizon_count: 3
+    diagnostic_distances: [1, 2]
+    rationale: Stronger temporal separation while preserving a short target window.
+
+  - spec_id: event64_stride64
+    kind: event_count
+    target_window_events: 64
+    horizon_stride_events: 64
+    horizon_count: 5
+    diagnostic_distances: [1, 2, 4]
+    rationale: Smoother target state with moderate separation.
+
+  - spec_id: event64_stride128
+    kind: event_count
+    target_window_events: 64
+    horizon_stride_events: 128
+    horizon_count: 3
+    diagnostic_distances: [1, 2]
+    rationale: Smoother target state with stronger separation.
+
+  # Time-based specs are intentionally scaffolded only. Enable only after a
+  # reviewed local pass confirms the required event-time boundaries are safely
+  # available without a new raw-data extraction boundary.
+  # - spec_id: time24h_stride72h
+  #   kind: time_hours
+  #   target_window_hours: 24
+  #   horizon_stride_hours: 72
+  #   horizon_count: 3
+  #   diagnostic_distances: [1, 2]
+  #   rationale: Clinically interpretable separated short windows.
