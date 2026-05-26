@@ -1,0 +1,18 @@
+# BP-CLINJEPA-007 coded-event future-summary/readout example config.
+# Placeholder/specification-only: contains no clinical data paths, row IDs,
+# checkpoints, embeddings, source-ID maps, or patient-level artifacts.
+
+schema_version: clinical-jepa-future-summary-config-v0
+
+future_summary:
+  spec_id: coded_event_future_summary_v0
+  event_types: [MED, LAB, STATE]
+  label_depth: 2
+  top_k: 5
+  min_label_count: 1
+
+safety:
+  aggregate_only: true
+  no_event_generation: true
+  no_treatment_effect_claims: true
+  real_data_requires_reviewed_local_preextraction: true
