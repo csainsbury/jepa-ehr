@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 
 from clinical_jepa.arms.v0b.train_minimal_jepa import effective_rank
-from clinical_jepa.arms.v0e.transformer_autoreg import TransformerAutoregConfig, TransformerHorizonAutoregressor, checkpoint_metadata
+from clinical_jepa.arms.v0e.transformer_autoreg import TARGET_ENCODER_MODES, TransformerAutoregConfig, TransformerHorizonAutoregressor, checkpoint_metadata
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json
 
 
@@ -74,6 +74,7 @@ def _dry_run(args: argparse.Namespace, outdir: Path, vocab_size: int) -> int:
         heads=args.heads,
         max_len=max(args.max_context_tokens, args.target_window_events),
         dropout=args.dropout,
+        target_encoder_mode=args.target_encoder_mode,
     )
     report = {
         "schema_version": "clinical-jepa-transformer-autoreg-train-v0",
@@ -92,13 +93,42 @@ def _dry_run(args: argparse.Namespace, outdir: Path, vocab_size: int) -> int:
     return 0
 
 
+def _offdiag_cosine_mean_np(x: np.ndarray) -> float:
+    if x.shape[0] < 2:
+        return 1.0
+    denom = np.linalg.norm(x, axis=1, keepdims=True)
+    z = x / np.maximum(denom, 1e-8)
+    sim = z @ z.T
+    mask = ~np.eye(sim.shape[0], dtype=bool)
+    return float(sim[mask].mean())
+
+
+def _latent_diagnostics_np(x: np.ndarray) -> dict[str, float | list[str]]:
+    flat = x.reshape(-1, x.shape[-1]).astype(np.float32, copy=False)
+    diag: dict[str, float | list[str]] = {
+        "effective_rank": effective_rank(flat),
+        "variance_mean": float(flat.var(axis=0).mean()) if flat.size else 0.0,
+        "offdiag_cosine_mean": _offdiag_cosine_mean_np(flat),
+    }
+    warnings: list[str] = []
+    if float(diag["variance_mean"]) < 1e-4:
+        warnings.append("variance_below_1e-4")
+    if float(diag["effective_rank"]) < 2.0:
+        warnings.append("effective_rank_below_2")
+    if float(diag["offdiag_cosine_mean"]) > 0.95:
+        warnings.append("offdiag_cosine_above_0.95")
+    diag["warnings"] = warnings
+    return diag
+
+
 def _eval_split(model: Any, rows: list[tuple[np.ndarray, list[np.ndarray]]], *, batch_size: int, horizon_count: int, device: Any) -> dict[str, Any]:
     import torch
     import torch.nn.functional as F
 
     if not rows:
-        return {"n": 0, "cosine": 0.0, "effective_rank": 0.0}
+        return {"n": 0, "cosine": 0.0, "pred_diagnostics": {}, "target_diagnostics": {}, "collapse_warnings": ["empty_eval_split"]}
     preds = []
+    targets = []
     cosines = []
     model.eval()
     with torch.no_grad():
@@ -111,8 +141,20 @@ def _eval_split(model: Any, rows: list[tuple[np.ndarray, list[np.ndarray]]], *, 
             cos = F.cosine_similarity(pred.reshape(-1, pred.shape[-1]), target.reshape(-1, target.shape[-1]), dim=-1)
             cosines.extend(float(x) for x in cos.cpu())
             preds.append(pred.reshape(-1, pred.shape[-1]).detach().cpu().numpy())
+            targets.append(target.reshape(-1, target.shape[-1]).detach().cpu().numpy())
     pred_arr = np.concatenate(preds, axis=0) if preds else np.zeros((0, model.embedding_dim), dtype=np.float32)
-    return {"n": len(rows), "cosine": float(np.mean(cosines)), "effective_rank": effective_rank(pred_arr)}
+    target_arr = np.concatenate(targets, axis=0) if targets else np.zeros((0, model.embedding_dim), dtype=np.float32)
+    pred_diag = _latent_diagnostics_np(pred_arr)
+    target_diag = _latent_diagnostics_np(target_arr)
+    warnings = [f"pred_{w}" for w in pred_diag.get("warnings", [])] + [f"target_{w}" for w in target_diag.get("warnings", [])]
+    return {
+        "n": len(rows),
+        "cosine": float(np.mean(cosines)),
+        "effective_rank": float(pred_diag.get("effective_rank", 0.0)),
+        "pred_diagnostics": pred_diag,
+        "target_diagnostics": target_diag,
+        "collapse_warnings": warnings,
+    }
 
 
 def _real_run(args: argparse.Namespace, dataset: dict[str, Any], targets: dict[str, Any], outdir: Path) -> int:
@@ -146,6 +188,7 @@ def _real_run(args: argparse.Namespace, dataset: dict[str, Any], targets: dict[s
         max_len=max(args.max_context_tokens, args.target_window_events),
         dropout=args.dropout,
         predictor_hidden_mult=args.predictor_hidden_mult,
+        target_encoder_mode=args.target_encoder_mode,
     )
     model = TransformerHorizonAutoregressor(config).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
@@ -160,6 +203,7 @@ def _real_run(args: argparse.Namespace, dataset: dict[str, Any], targets: dict[s
             ctx,
             target_ids,
             variance_weight=args.variance_weight,
+            target_variance_weight=args.target_variance_weight,
             wrong_horizon_weight=args.wrong_horizon_weight,
         )
         opt.zero_grad(set_to_none=True)
@@ -173,6 +217,7 @@ def _real_run(args: argparse.Namespace, dataset: dict[str, Any], targets: dict[s
         "model_state_dict": model.state_dict(),
         **checkpoint_metadata(config, horizon_count_trained=args.horizon_count),
         "created_utc": now_utc(),
+        "target_encoder_mode": args.target_encoder_mode,
         "target_window_events": int(args.target_window_events),
         "horizon_stride_events": int(args.horizon_stride_events),
     }, ckpt_path)
@@ -191,9 +236,11 @@ def _real_run(args: argparse.Namespace, dataset: dict[str, Any], targets: dict[s
         "trained_steps": int(args.real_steps),
         "batch_size": int(args.batch_size),
         "device": str(device),
+        "target_encoder_mode": args.target_encoder_mode,
         "last_batch_metrics": metrics_last,
         "train_eval": train_eval,
         "dev_eval": dev_eval,
+        "collapse_warnings": sorted(set([*train_eval.get("collapse_warnings", []), *dev_eval.get("collapse_warnings", []), *metrics_last.get("collapse_warnings", [])])),
         "checkpoint_written": True,
         "checkpoint_name": ckpt_path.name,
         "notes": "Aggregate-only training manifest; checkpoint remains local governed artifact when run on governed data.",
@@ -214,8 +261,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--learning-rate", type=float, default=3e-4)
     ap.add_argument("--weight-decay", type=float, default=1e-4)
-    ap.add_argument("--variance-weight", type=float, default=0.01)
-    ap.add_argument("--wrong-horizon-weight", type=float, default=0.02)
+    ap.add_argument("--variance-weight", type=float, default=0.05)
+    ap.add_argument("--target-variance-weight", type=float, default=0.0)
+    ap.add_argument("--wrong-horizon-weight", type=float, default=0.05)
+    ap.add_argument("--target-encoder-mode", choices=TARGET_ENCODER_MODES, default="fixed_mean_token", help="fixed_mean_token prevents learned target-space collapse; shared_sequence_encoder_stop_gradient loads legacy behavior")
     ap.add_argument("--embedding-dim", type=int, default=128)
     ap.add_argument("--encoder-layers", type=int, default=2)
     ap.add_argument("--heads", type=int, default=4)

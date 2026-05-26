@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from clinical_jepa.arms.v0b.train_minimal_jepa import effective_rank
 from clinical_jepa.utils import ensure_dir, now_utc, write_json
 
 
@@ -71,6 +72,34 @@ def _pad(batch: list[np.ndarray], device: Any):
     for i, arr in enumerate(batch):
         out[i, : len(arr)] = torch.as_tensor(arr, dtype=torch.long, device=device)
     return out
+
+
+def _offdiag_cosine_mean(x: np.ndarray) -> float:
+    if x.shape[0] < 2:
+        return 1.0
+    z = x.astype(np.float32, copy=False)
+    z = z / np.maximum(np.linalg.norm(z, axis=1, keepdims=True), 1e-8)
+    sim = z @ z.T
+    mask = ~np.eye(sim.shape[0], dtype=bool)
+    return float(sim[mask].mean())
+
+
+def _latent_diagnostics(x: np.ndarray) -> dict[str, Any]:
+    flat = x.reshape(-1, x.shape[-1]).astype(np.float32, copy=False)
+    diag = {
+        "effective_rank": effective_rank(flat),
+        "variance_mean": float(flat.var(axis=0).mean()) if flat.size else 0.0,
+        "offdiag_cosine_mean": _offdiag_cosine_mean(flat),
+    }
+    warnings: list[str] = []
+    if diag["variance_mean"] < 1e-4:
+        warnings.append("variance_below_1e-4")
+    if diag["effective_rank"] < 2.0:
+        warnings.append("effective_rank_below_2")
+    if diag["offdiag_cosine_mean"] > 0.95:
+        warnings.append("offdiag_cosine_above_0.95")
+    diag["warnings"] = warnings
+    return diag
 
 
 def export_transformer_autoreg_rollouts(
@@ -198,6 +227,9 @@ def export_transformer_autoreg_rollouts(
     for row in rows:
         splits_out[str(row.get("split"))] = splits_out.get(str(row.get("split")), 0) + 1
         target_types_out[str(row.get("target_type"))] = target_types_out.get(str(row.get("target_type")), 0) + 1
+    pred_diag = _latent_diagnostics(pred_arr)
+    obs_diag = _latent_diagnostics(obs_arr)
+    collapse_warnings = [f"pred_{w}" for w in pred_diag.get("warnings", [])] + [f"target_{w}" for w in obs_diag.get("warnings", [])]
     report = {
         "created_utc": now_utc(),
         "aggregate_only": True,
@@ -212,12 +244,16 @@ def export_transformer_autoreg_rollouts(
         "splits": splits_out,
         "target_types": target_types_out,
         "embedding_dim": int(dim),
+        "target_encoder_mode": ckpt.get("target_encoder_mode") or ckpt.get("architecture", {}).get("target_encoder_mode", "shared_sequence_encoder_stop_gradient"),
         "horizon_count": int(horizon_count),
         "target_window_events": int(target_window_events),
         "horizon_stride_events": int(horizon_stride_events),
         "predicted_rollout_path": str(pred_path),
         "observed_rollout_path": str(obs_path),
         "index_path": str(index_path),
+        "predicted_latent_diagnostics": pred_diag,
+        "target_latent_diagnostics": obs_diag,
+        "collapse_warnings": collapse_warnings,
         "notes": "Local governed sidecar for autoregression readiness. Do not publish arrays or JSONL index. Index omits block IDs, patient hashes, sequence IDs, raw tokens, and examples.",
     }
     write_json(outdir / "rollout-export-manifest.json", report)

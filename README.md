@@ -57,7 +57,7 @@ Do not replace placeholders with governed paths in committed configs, docs, or r
 
 ## Transformer autoregressive scaffold
 
-BP-CLINJEPA-006 adds `clinical_jepa.arms.v0e` and `clinical_jepa.eval.export_transformer_autoreg_rollouts` for a small direct multi-horizon transformer latent predictor. It is designed for synthetic/public tests first and reviewed local governed capped runs later, using the BP005 `event32_stride128` primary gate and `event64_stride128` sensitivity gate.
+BP-CLINJEPA-006 adds `clinical_jepa.arms.v0e` and `clinical_jepa.eval.export_transformer_autoreg_rollouts` for a small direct multi-horizon transformer latent predictor. It is designed for synthetic/public tests first and reviewed local governed capped runs later, using the BP005 `event32_stride128` primary gate and `event64_stride128` sensitivity gate. The default repaired v0E path predicts into a fixed mean-token target space and emits prediction/target collapse diagnostics so high raw cosine cannot pass silently when target geometry is non-discriminative.
 
 Example dry run only:
 
@@ -67,6 +67,7 @@ python -m clinical_jepa.arms.v0e.train_transformer_autoreg \
   --target-blocks /tmp/synthetic-target-blocks.json \
   --leakage-report /tmp/synthetic-leakage-pass.json \
   --output-dir /tmp/clinical_jepa_transformer_autoreg \
+  --target-encoder-mode fixed_mean_token \
   --dry-run
 ```
 

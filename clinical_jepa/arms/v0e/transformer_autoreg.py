@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+TARGET_ENCODER_MODES = ("shared_sequence_encoder_stop_gradient", "fixed_mean_token")
+
 
 def _require_torch():
     try:
@@ -25,10 +27,16 @@ class TransformerAutoregConfig:
     dropout: float = 0.1
     use_layer_norm: bool = True
     predictor_hidden_mult: int = 2
+    target_encoder_mode: str = "shared_sequence_encoder_stop_gradient"
 
     @classmethod
     def from_checkpoint(cls, checkpoint: dict[str, Any]) -> "TransformerAutoregConfig":
         arch = checkpoint.get("architecture") or {}
+        target_encoder_mode = checkpoint.get("target_encoder_mode") or arch.get("target_encoder_mode")
+        if target_encoder_mode is None:
+            # Backward compatibility for 0aeda4a checkpoints, whose shared context/target
+            # encoder could collapse under the governed BP006 primary run.
+            target_encoder_mode = "shared_sequence_encoder_stop_gradient"
         return cls(
             vocab_size=int(checkpoint.get("vocab_size") or arch.get("vocab_size")),
             embedding_dim=int(checkpoint.get("embedding_dim") or checkpoint.get("dim") or arch.get("embedding_dim", 128)),
@@ -40,7 +48,12 @@ class TransformerAutoregConfig:
             dropout=float(checkpoint.get("dropout") if checkpoint.get("dropout") is not None else arch.get("dropout", 0.1)),
             use_layer_norm=bool(checkpoint.get("use_layer_norm") if checkpoint.get("use_layer_norm") is not None else arch.get("use_layer_norm", True)),
             predictor_hidden_mult=int(checkpoint.get("predictor_hidden_mult") or arch.get("predictor_hidden_mult", 2)),
+            target_encoder_mode=str(target_encoder_mode),
         )
+
+    def __post_init__(self) -> None:
+        if self.target_encoder_mode not in TARGET_ENCODER_MODES:
+            raise ValueError(f"target_encoder_mode must be one of {TARGET_ENCODER_MODES}; got {self.target_encoder_mode!r}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -55,9 +68,10 @@ class TransformerAutoregConfig:
             "dropout": float(self.dropout),
             "use_layer_norm": bool(self.use_layer_norm),
             "predictor_hidden_mult": int(self.predictor_hidden_mult),
+            "target_encoder_mode": self.target_encoder_mode,
             "autoregression_mode": "direct_multi_horizon_transformer_heads",
             "horizon_conditioning": "horizon_specific_mlp_heads",
-            "target_encoder": "shared_sequence_encoder_stop_gradient",
+            "target_encoder": self.target_encoder_mode,
         }
 
 
@@ -69,10 +83,12 @@ class TransformerHorizonAutoregressor:  # pragma: no cover - concrete class crea
     """Small direct multi-horizon latent autoregressor.
 
     The model is intentionally narrow for BP-CLINJEPA-006: a shared token
-    sequence encoder embeds context and observed future target windows, and
-    horizon-specific prediction heads map a context latent directly to each
-    future horizon. This tests latent autoregression/readout only; it is not a
-    renderer, decoder, generated-sequence model, or clinical/treatment model.
+    sequence encoder embeds context, and horizon-specific prediction heads map
+    a context latent directly to each future horizon. Target latents can use the
+    legacy shared encoder for backward compatibility or a fixed mean-token target
+    space that prevents the target geometry itself from collapsing. This tests
+    latent autoregression/readout only; it is not a renderer, decoder,
+    generated-sequence model, or clinical/treatment model.
     """
 
     def __new__(cls, config: TransformerAutoregConfig | None = None, **kwargs: Any):
@@ -116,11 +132,62 @@ class TransformerHorizonAutoregressor:  # pragma: no cover - concrete class crea
                 pooled = (x * mask.float().unsqueeze(-1)).sum(dim=1) / mask.float().sum(dim=1, keepdim=True).clamp_min(1.0)
                 return self.norm(pooled)
 
+        class _FixedMeanTokenTargetEncoder(nn.Module):
+            def __init__(self, cfg: TransformerAutoregConfig) -> None:
+                super().__init__()
+                self.cfg = cfg
+                self.token_embedding = nn.Embedding(cfg.vocab_size, cfg.embedding_dim, padding_idx=0)
+                generator = torch.Generator(device="cpu")
+                generator.manual_seed(20260526)
+                with torch.no_grad():
+                    weight = torch.randn((cfg.vocab_size, cfg.embedding_dim), generator=generator) / (cfg.embedding_dim ** 0.5)
+                    weight[0].zero_()
+                    weight[1:] = F.normalize(weight[1:], dim=1)
+                    self.token_embedding.weight.copy_(weight)
+                self.token_embedding.weight.requires_grad_(False)
+
+            def forward(self, ids: Any) -> Any:
+                mask = make_padding_mask(ids)
+                x = self.token_embedding(ids) * mask.float().unsqueeze(-1)
+                return x.sum(dim=1) / mask.float().sum(dim=1, keepdim=True).clamp_min(1.0)
+
+        def _effective_rank_torch(x: Any) -> Any:
+            if x.shape[0] < 2:
+                return torch.tensor(0.0, device=x.device)
+            centered = x - x.mean(dim=0, keepdim=True)
+            s = torch.linalg.svdvals(centered)
+            total = s.sum()
+            if float(total.detach().cpu()) <= 1e-12:
+                return torch.tensor(0.0, device=x.device)
+            p = s / total.clamp_min(1e-12)
+            return torch.exp(-(p * torch.log(p.clamp_min(1e-12))).sum())
+
+        def _offdiag_cosine_mean(x: Any) -> Any:
+            if x.shape[0] < 2:
+                return torch.tensor(1.0, device=x.device)
+            z = F.normalize(x, dim=1)
+            sim = z @ z.T
+            mask = ~torch.eye(sim.shape[0], dtype=torch.bool, device=sim.device)
+            return sim[mask].mean()
+
+        def _latent_diagnostics_torch(x: Any) -> dict[str, float]:
+            flat = x.reshape(-1, x.shape[-1])
+            variance = flat.var(dim=0).mean()
+            return {
+                "variance_mean": float(variance.detach().cpu()),
+                "effective_rank": float(_effective_rank_torch(flat).detach().cpu()),
+                "offdiag_cosine_mean": float(_offdiag_cosine_mean(flat).detach().cpu()),
+            }
+
         class _TransformerHorizonAutoregressor(nn.Module):
             def __init__(self, cfg: TransformerAutoregConfig) -> None:
                 super().__init__()
                 self.config = cfg
                 self.encoder = _SequenceEncoder(cfg)
+                if cfg.target_encoder_mode == "fixed_mean_token":
+                    self.target_encoder = _FixedMeanTokenTargetEncoder(cfg)
+                else:
+                    self.target_encoder = self.encoder
                 hidden = cfg.embedding_dim * cfg.predictor_hidden_mult
                 if cfg.predictor_hidden_mult <= 0:
                     self.horizon_heads = nn.ModuleList([nn.Linear(cfg.embedding_dim, cfg.embedding_dim) for _ in range(cfg.max_horizons)])
@@ -146,6 +213,9 @@ class TransformerHorizonAutoregressor:  # pragma: no cover - concrete class crea
             def encode_sequence(self, ids: Any) -> Any:
                 return self.encoder(ids)
 
+            def encode_target_sequence(self, ids: Any) -> Any:
+                return self.target_encoder(ids)
+
             def predict_rollout_from_latent(self, context_z: Any, horizon_count: int) -> Any:
                 horizon_count = int(horizon_count)
                 if horizon_count <= 0:
@@ -158,18 +228,44 @@ class TransformerHorizonAutoregressor:  # pragma: no cover - concrete class crea
                 return self.predict_rollout_from_latent(self.encode_sequence(context_ids), horizon_count)
 
             def encode_target_rollout_from_ids(self, target_ids_by_horizon: list[Any]) -> Any:
-                return torch.stack([self.encode_sequence(ids) for ids in target_ids_by_horizon], dim=1)
+                return torch.stack([self.encode_target_sequence(ids) for ids in target_ids_by_horizon], dim=1)
 
-            def training_loss(self, context_ids: Any, target_ids_by_horizon: list[Any], *, variance_floor: float = 0.05, variance_weight: float = 0.01, wrong_horizon_weight: float = 0.0) -> tuple[Any, dict[str, float]]:
+            def latent_diagnostics(self, pred: Any, target: Any) -> dict[str, dict[str, float] | list[str]]:
+                pred_diag = _latent_diagnostics_torch(pred)
+                target_diag = _latent_diagnostics_torch(target)
+                warnings: list[str] = []
+                for prefix, diag in (("pred", pred_diag), ("target", target_diag)):
+                    if diag["variance_mean"] < 1e-4:
+                        warnings.append(f"{prefix}_variance_below_1e-4")
+                    if diag["effective_rank"] < 2.0:
+                        warnings.append(f"{prefix}_effective_rank_below_2")
+                    if diag["offdiag_cosine_mean"] > 0.95:
+                        warnings.append(f"{prefix}_offdiag_cosine_above_0.95")
+                return {"pred": pred_diag, "target": target_diag, "warnings": warnings}
+
+            def training_loss(
+                self,
+                context_ids: Any,
+                target_ids_by_horizon: list[Any],
+                *,
+                variance_floor: float = 0.05,
+                variance_weight: float = 0.01,
+                target_variance_weight: float = 0.0,
+                wrong_horizon_weight: float = 0.0,
+            ) -> tuple[Any, dict[str, float | list[str]]]:
                 pred = self.predict_rollout_from_context_ids(context_ids, len(target_ids_by_horizon))
                 with torch.no_grad():
                     target = self.encode_target_rollout_from_ids(target_ids_by_horizon)
                 dim = pred.shape[-1]
                 cosine = F.cosine_similarity(pred.reshape(-1, dim), target.reshape(-1, dim), dim=-1)
                 cosine_loss = 1.0 - cosine.mean()
-                variance = pred.reshape(-1, dim).var(dim=0).mean()
-                variance_penalty = torch.relu(torch.tensor(float(variance_floor), device=pred.device) - variance)
-                loss = cosine_loss + float(variance_weight) * variance_penalty
+                pred_variance_tensor = pred.reshape(-1, dim).var(dim=0).mean()
+                target_variance_tensor = target.reshape(-1, dim).var(dim=0).mean()
+                pred_variance_penalty = torch.relu(torch.tensor(float(variance_floor), device=pred.device) - pred_variance_tensor)
+                target_variance_penalty = torch.relu(torch.tensor(float(variance_floor), device=pred.device) - target_variance_tensor)
+                loss = cosine_loss + float(variance_weight) * pred_variance_penalty + float(target_variance_weight) * target_variance_penalty
+                pred_diag = _latent_diagnostics_torch(pred.detach())
+                target_diag = _latent_diagnostics_torch(target.detach())
                 wrong_horizon_margin = torch.tensor(0.0, device=pred.device)
                 if wrong_horizon_weight and pred.shape[1] > 1:
                     aligned = cosine.reshape(pred.shape[0], pred.shape[1])
@@ -179,11 +275,18 @@ class TransformerHorizonAutoregressor:  # pragma: no cover - concrete class crea
                         wrong_terms.append(torch.relu(0.05 + wrong - aligned[:, h]).mean())
                     wrong_horizon_margin = torch.stack(wrong_terms).mean()
                     loss = loss + float(wrong_horizon_weight) * wrong_horizon_margin
-                metrics = {
+                collapse = self.latent_diagnostics(pred.detach(), target.detach())
+                metrics: dict[str, float | list[str]] = {
                     "loss": float(loss.detach().cpu()),
                     "cosine_mean": float(cosine.mean().detach().cpu()),
-                    "variance_mean": float(variance.detach().cpu()),
+                    "pred_variance_mean": float(pred_diag["variance_mean"]),
+                    "target_variance_mean": float(target_diag["variance_mean"]),
+                    "pred_effective_rank": float(pred_diag["effective_rank"]),
+                    "target_effective_rank": float(target_diag["effective_rank"]),
+                    "pred_offdiag_cosine_mean": float(pred_diag["offdiag_cosine_mean"]),
+                    "target_offdiag_cosine_mean": float(target_diag["offdiag_cosine_mean"]),
                     "wrong_horizon_margin": float(wrong_horizon_margin.detach().cpu()),
+                    "collapse_warnings": collapse["warnings"],
                 }
                 return loss, metrics
 
@@ -208,6 +311,7 @@ def checkpoint_metadata(config: TransformerAutoregConfig, *, horizon_count_train
         "embedding_dim": int(config.embedding_dim),
         "max_horizons": int(config.max_horizons),
         "horizon_count_trained": int(horizon_count_trained),
+        "target_encoder_mode": config.target_encoder_mode,
         "autoregression_mode": "direct_multi_horizon_transformer_heads",
         "aggregate_only": True,
     }
