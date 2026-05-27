@@ -1,0 +1,59 @@
+# BP-CLINJEPA-010 conditional future-event outcome example config.
+# Placeholder/specification-only: contains no clinical data paths, row IDs,
+# checkpoints, embeddings, source-ID maps, patient-level artifacts, or real
+# governed token examples. Prefixes below are synthetic/generic fixture names.
+
+schema_version: clinical-jepa-conditional-outcome-config-v0
+
+conditional_outcome:
+  spec_id: conditional_future_outcome_v0
+  context_event_keys: [context_events]
+  prior_context_event_keys: [prior_context_events]
+  target_event_key: target_events
+  control_event_keys: [matched_random_events, time_shift_target_events, negative_control_events]
+  readout_score_key: readout_scores
+  strata_fields: [utilization_bucket, context_presence, related_context_presence, prior_context_presence]
+  utilization_bins: [0, 4, 8, 16, 32]
+  top_k: 5
+  min_positive_count: 2
+  min_stratum_rows: 2
+
+  # Future-only targets. Context predicates below are used only for strata and
+  # readout scores, not for target-label definition. Reviewed local runs may map
+  # these roles to governed coded-family predicates locally, but should sync back
+  # only aggregate counts/metrics with target names and predicates suppressed.
+  target_families:
+    - name: synthetic_diuretic_future_presence
+      role: medication_future_presence
+      include_prefixes: [MED:SYN_DIURETIC]
+      related_prefixes: [MED:SYN_COMPARATOR]
+
+    - name: synthetic_renal_future_bucket
+      role: renal_future_bucket
+      include_prefixes: [LAB:SYN_RENAL, STATE:SYN_RENAL]
+      related_prefixes: [LAB:SYN_RENAL_BUCKET, STATE:SYN_RENAL_BUCKET]
+
+    - name: synthetic_electrolyte_future_bucket
+      role: electrolyte_future_bucket
+      include_prefixes: [LAB:SYN_ELECTROLYTE, STATE:SYN_ELECTROLYTE]
+      related_prefixes: [LAB:SYN_ELECTROLYTE_BUCKET, STATE:SYN_ELECTROLYTE_BUCKET]
+
+    - name: synthetic_process_density_probe
+      role: utilisation_control_probe
+      include_prefixes: [STATE:SYN_CONTACT]
+
+    - name: synthetic_glucose_negative_control
+      role: negative_control
+      negative_control: true
+      include_prefixes: [LAB:SYN_NEG_GLUCOSE]
+
+safety:
+  aggregate_only: true
+  no_event_generation: true
+  no_treatment_effect_claims: true
+  no_clinical_recommendations: true
+  future_only_targets: true
+  context_used_for_strata_not_target_definition: true
+  real_data_requires_reviewed_local_preextraction: true
+  suppress_target_names_in_aggregate_reports: true
+  suppress_predicates_in_aggregate_reports: true
