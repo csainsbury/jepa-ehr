@@ -4,13 +4,13 @@ Clinical-JEPA scaffolding for leakage-aware latent prediction experiments over t
 
 **Prior-art boundary:** Yang et al. 2026 `Clin-JEPA` is direct prior art for generic JEPA-style latent rollout over EHR patient trajectories. This repo should not be read as claiming first-EHR-JEPA novelty; the local focus is governed tokenised-EHR readout, FlatASCEND/ORCA reader-speaker bridging, accurate autoregression/readout, leakage controls, and TTE-style generation readiness. INSPECT remains an external stress test, not the active optimization target.
 
-**Current v0 claim, stated cautiously:** Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences. The current development focus is no longer optimizing external transfer; it is testing whether latent predictions can support accurate autoregressive futures through same-source matched rollout, pseudo-rendering, and eventually explicit renderer/speaker gates. BP-CLINJEPA-005 adds safe-public horizon-specification diagnostics so target windows/strides can be tested for separability before any heavier autoregressive model or renderer bridge is promoted. BP-CLINJEPA-006 adds a safe-public stronger autoregressive latent-predictor scaffold for that revised gate; it is still latent readout only, not event generation. BP-CLINJEPA-007 explores a differentiated coded-event future-summary/readout scaffold for a FlatASCEND-compatible speaker bridge, again without generated sequences or clinical/treatment claims.
+**Current v0 claim, stated cautiously:** Clinical-JEPA v0 shows robust latent future-block retrieval on governed, re-keyed tokenised EHR sequences. The current development focus is no longer optimizing external transfer; it is testing whether latent predictions can support accurate autoregressive futures through same-source matched rollout, pseudo-rendering, and eventually explicit renderer/speaker gates. BP-CLINJEPA-005 adds safe-public horizon-specification diagnostics so target windows/strides can be tested for separability before any heavier autoregressive model or renderer bridge is promoted. BP-CLINJEPA-006 adds a safe-public stronger autoregressive latent-predictor scaffold for that revised gate; it is still latent readout only, not event generation. BP-CLINJEPA-007 explores a differentiated coded-event future-summary/readout scaffold for a FlatASCEND-compatible speaker bridge, again without generated sequences or clinical/treatment claims. BP-CLINJEPA-008 refines that route with scenario-specific coded-summary ontology diagnostics so base-rate-dominated targets can be rejected before speaker/readout promotion.
 
 This repository contains code, schemas, example configs, and aggregate/sanitized pilot notes. It does **not** contain clinical data, patient-level records, source identifiers, source-ID maps, token-level examples, embeddings, checkpoints, credentials, or download tokens.
 
 ## What is here
 
-- `clinical_jepa/` — split manifests, target-block extraction, leakage audits, v0A/v0B/v0D/v0E scaffold code, aggregate TTE scenario feasibility, pseudo-rendering readiness, horizon-spec diagnostics, coded-event future-summary readout, and latent autoregression readiness helpers.
+- `clinical_jepa/` — split manifests, target-block extraction, leakage audits, v0A/v0B/v0D/v0E scaffold code, aggregate TTE scenario feasibility, pseudo-rendering readiness, horizon-spec diagnostics, coded-event future-summary/scenario-ontology readout, and latent autoregression readiness helpers.
 - `schemas/` — JSON schemas for manifests and aggregate result artifacts, including scenario-feasibility and pseudo-rendering-readiness outputs.
 - `configs/v0/*.example.yaml` — placeholder configs only, including a BP005 horizon-spec candidate grid.
 - `scripts/` — preflight, synthetic checks, safe data-bundle preflight, and aggregate probe helpers.
@@ -87,6 +87,21 @@ python -m clinical_jepa.speaker.future_summary \
 ```
 
 Real-data use requires reviewed local pre-extraction into governed sidecars and aggregate-only sync-back; do not commit local row summaries, raw tokens, sidecars, checkpoints, or governed paths.
+
+## Scenario-specific coded-summary ontology scaffold
+
+BP-CLINJEPA-008 adds `clinical_jepa.speaker.scenario_ontology` for synthetic/public testing of narrower coded-summary target ontologies after broad MED/LAB/STATE summaries proved base-rate dominated. It supports configurable target-family predicates, presence/start/continuation summary modes, empirical-prior/context/utilisation-control baselines, base-rate-domination diagnostics, and negative-control event hooks. It does **not** render or generate event sequences.
+
+Command-plan scaffold only:
+
+```bash
+python -m clinical_jepa.speaker.scenario_ontology \
+  --spec-config configs/v0/scenario_ontology.example.yaml \
+  --output-dir /tmp/clinical_jepa_scenario_ontology \
+  --emit-command-plan
+```
+
+Real-data use requires reviewed local pre-extraction into governed sidecars and aggregate-only sync-back; do not commit local row summaries, raw tokens, sidecars, checkpoints, or governed paths. Aggregate reports suppress target-family names and predicates by default.
 
 ## Interpretation boundary
 

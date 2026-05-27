@@ -1,0 +1,56 @@
+# BP-CLINJEPA-008 scenario-specific coded-summary ontology example config.
+# Placeholder/specification-only: contains no clinical data paths, row IDs,
+# checkpoints, embeddings, source-ID maps, patient-level artifacts, or real
+# governed token examples. Prefixes below are synthetic/generic fixture names.
+
+schema_version: clinical-jepa-scenario-ontology-config-v0
+
+scenario_ontology:
+  spec_id: scenario_coded_summary_v0
+  context_event_keys: [context_events]
+  target_event_key: target_events
+  control_event_keys: [matched_random_events, time_shift_target_events, negative_control_events]
+  top_k: 5
+  min_positive_count: 2
+  max_prior_micro_ap: 0.85
+  max_target_prevalence: 0.80
+  utilization_bins: [0, 4, 8, 16, 32]
+
+  # Synthetic/generic target families only. Reviewed local runs may map these
+  # roles to governed coded-family predicates locally, but should sync back only
+  # aggregate counts/metrics with target names and predicates suppressed.
+  target_families:
+    - name: synthetic_diuretic_med_family
+      role: medication_subclass
+      include_prefixes: [MED:SYN_DIURETIC]
+      summary_modes: [presence, start, continuation]
+
+    - name: synthetic_renal_lab_state_family
+      role: renal_lab_state
+      include_prefixes: [LAB:SYN_RENAL, STATE:SYN_RENAL]
+      summary_modes: [presence, start]
+
+    - name: synthetic_electrolyte_lab_state_family
+      role: renal_lab_state
+      include_prefixes: [LAB:SYN_ELECTROLYTE, STATE:SYN_ELECTROLYTE]
+      summary_modes: [presence, start]
+
+    - name: synthetic_process_density_family
+      role: utilisation_control_probe
+      include_prefixes: [STATE:SYN_CONTACT]
+      summary_modes: [presence]
+
+    - name: synthetic_glucose_negative_control
+      role: negative_control
+      negative_control: true
+      include_prefixes: [LAB:SYN_NEG_GLUCOSE]
+      summary_modes: [presence]
+
+safety:
+  aggregate_only: true
+  no_event_generation: true
+  no_treatment_effect_claims: true
+  no_clinical_recommendations: true
+  real_data_requires_reviewed_local_preextraction: true
+  suppress_target_names_in_aggregate_reports: true
+  suppress_predicates_in_aggregate_reports: true
