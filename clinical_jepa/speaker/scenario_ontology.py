@@ -17,6 +17,7 @@ from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, write_json
 VALID_ROLE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 DEFAULT_CONTEXT_KEYS = ("context_events",)
 DEFAULT_TARGET_KEY = "target_events"
+DEFAULT_PRIOR_CONTEXT_KEYS = ("prior_context_events",)
 DEFAULT_CONTROL_EVENT_KEYS = ("matched_random_events", "time_shift_target_events", "negative_control_events")
 
 
@@ -32,6 +33,7 @@ class TargetFamilySpec:
     name: str
     include_prefixes: tuple[str, ...]
     exclude_prefixes: tuple[str, ...] = ()
+    related_prefixes: tuple[str, ...] = ()
     role: str = "candidate"
     summary_modes: tuple[str, ...] = ("presence", "start")
     negative_control: bool = False
@@ -45,13 +47,14 @@ class TargetFamilySpec:
         if not include_prefixes:
             raise ValueError(f"Target family {name!r} must define include_prefixes")
         exclude_prefixes = tuple(_normalise_prefix(x) for x in row.get("exclude_prefixes", []))
+        related_prefixes = tuple(_normalise_prefix(x) for x in row.get("related_prefixes", []))
         role = str(row.get("role", "candidate")).strip() or "candidate"
         if not VALID_ROLE_RE.fullmatch(role):
             raise ValueError(f"Invalid target-family role {role!r}")
         modes = tuple(str(x).strip().lower() for x in row.get("summary_modes", ("presence", "start")))
         if not modes:
             raise ValueError(f"Target family {name!r} must define at least one summary mode")
-        allowed_modes = {"presence", "start", "continuation", "absence"}
+        allowed_modes = {"presence", "start", "continuation", "absence", "drop", "change", "restart"}
         unknown = [mode for mode in modes if mode not in allowed_modes]
         if unknown:
             raise ValueError(f"Unknown summary_modes for {name!r}: {unknown}")
@@ -59,6 +62,7 @@ class TargetFamilySpec:
             name=name,
             include_prefixes=include_prefixes,
             exclude_prefixes=exclude_prefixes,
+            related_prefixes=related_prefixes,
             role=role,
             summary_modes=modes,
             negative_control=bool(row.get("negative_control", role == "negative_control")),
@@ -70,18 +74,20 @@ class TargetFamilySpec:
             "role": self.role,
             "negative_control": bool(self.negative_control),
             "summary_modes": list(self.summary_modes),
+            "has_related_predicates": bool(self.related_prefixes),
             "predicate_names_suppressed": True,
         }
 
 
 @dataclass(frozen=True)
 class ScenarioOntologySpec:
-    """BP008 scenario-specific aggregate target ontology specification."""
+    """BP008/BP009 scenario-specific aggregate target ontology specification."""
 
     spec_id: str = "scenario_coded_summary_v0"
     target_families: tuple[TargetFamilySpec, ...] = field(default_factory=tuple)
     context_event_keys: tuple[str, ...] = DEFAULT_CONTEXT_KEYS
     target_event_key: str = DEFAULT_TARGET_KEY
+    prior_context_event_keys: tuple[str, ...] = DEFAULT_PRIOR_CONTEXT_KEYS
     control_event_keys: tuple[str, ...] = DEFAULT_CONTROL_EVENT_KEYS
     top_k: int = 5
     min_positive_count: int = 2
@@ -99,6 +105,7 @@ class ScenarioOntologySpec:
             raise ValueError("scenario ontology requires at least one target_family")
         context_event_keys = tuple(str(x).strip() for x in row.get("context_event_keys", DEFAULT_CONTEXT_KEYS))
         target_event_key = str(row.get("target_event_key", DEFAULT_TARGET_KEY)).strip()
+        prior_context_event_keys = tuple(str(x).strip() for x in row.get("prior_context_event_keys", DEFAULT_PRIOR_CONTEXT_KEYS))
         control_event_keys = tuple(str(x).strip() for x in row.get("control_event_keys", DEFAULT_CONTROL_EVENT_KEYS))
         top_k = int(row.get("top_k", 5))
         if top_k <= 0:
@@ -120,6 +127,7 @@ class ScenarioOntologySpec:
             target_families=families,
             context_event_keys=context_event_keys,
             target_event_key=target_event_key,
+            prior_context_event_keys=prior_context_event_keys,
             control_event_keys=control_event_keys,
             top_k=top_k,
             min_positive_count=min_positive_count,
@@ -135,6 +143,7 @@ class ScenarioOntologySpec:
             "target_families": [family.to_safe_dict(i) for i, family in enumerate(self.target_families)],
             "context_event_keys": list(self.context_event_keys),
             "target_event_key": self.target_event_key,
+            "prior_context_event_keys": list(self.prior_context_event_keys),
             "control_event_keys": list(self.control_event_keys),
             "top_k": int(self.top_k),
             "min_positive_count": int(self.min_positive_count),
@@ -163,20 +172,23 @@ def default_diuretic_synthetic_spec() -> ScenarioOntologySpec:
             TargetFamilySpec(
                 name="synthetic_diuretic_med_family",
                 include_prefixes=("MED:SYN_DIURETIC",),
+                related_prefixes=("MED:SYN_COMPARATOR",),
                 role="medication_subclass",
-                summary_modes=("presence", "start", "continuation"),
+                summary_modes=("presence", "start", "change", "drop", "restart", "continuation"),
             ),
             TargetFamilySpec(
                 name="synthetic_renal_lab_family",
                 include_prefixes=("LAB:SYN_RENAL", "STATE:SYN_RENAL"),
+                related_prefixes=("LAB:SYN_RENAL_BUCKET", "STATE:SYN_RENAL_BUCKET"),
                 role="renal_lab_state",
-                summary_modes=("presence", "start"),
+                summary_modes=("presence", "change"),
             ),
             TargetFamilySpec(
                 name="synthetic_electrolyte_lab_family",
                 include_prefixes=("LAB:SYN_ELECTROLYTE", "STATE:SYN_ELECTROLYTE"),
+                related_prefixes=("LAB:SYN_ELECTROLYTE_BUCKET", "STATE:SYN_ELECTROLYTE_BUCKET"),
                 role="renal_lab_state",
-                summary_modes=("presence", "start"),
+                summary_modes=("presence", "change"),
             ),
             TargetFamilySpec(
                 name="synthetic_glucose_negative_control",
@@ -223,18 +235,46 @@ def count_family(events: Iterable[str], family: TargetFamilySpec) -> int:
     return int(sum(1 for event in events if matches_family(event, family)))
 
 
-def family_features(context_events: list[str], target_events: list[str], family: TargetFamilySpec) -> dict[str, int]:
+def count_prefixes(events: Iterable[str], prefixes: tuple[str, ...]) -> int:
+    if not prefixes:
+        return 0
+    normalised = tuple(_normalise_prefix(prefix) for prefix in prefixes)
+    return int(sum(1 for event in events if any(str(event).strip().upper().startswith(prefix) for prefix in normalised)))
+
+
+def family_features(
+    context_events: list[str],
+    target_events: list[str],
+    family: TargetFamilySpec,
+    *,
+    prior_context_events: list[str] | None = None,
+) -> dict[str, int]:
+    prior_context_events = prior_context_events or []
     context_count = count_family(context_events, family)
     target_count = count_family(target_events, family)
+    prior_context_count = count_family(prior_context_events, family)
+    related_context_count = count_prefixes(context_events, family.related_prefixes)
+    related_target_count = count_prefixes(target_events, family.related_prefixes)
     context_present = int(context_count > 0)
     target_present = int(target_count > 0)
+    prior_context_present = int(prior_context_count > 0)
+    related_context_present = int(related_context_count > 0)
+    related_target_present = int(related_target_count > 0)
     return {
         "context_count": context_count,
         "target_count": target_count,
+        "prior_context_count": prior_context_count,
+        "related_context_count": related_context_count,
+        "related_target_count": related_target_count,
         "presence": target_present,
         "start": int(target_present == 1 and context_present == 0),
         "continuation": int(target_present == 1 and context_present == 1),
         "absence": int(target_present == 0),
+        "drop": int(target_present == 0 and context_present == 1),
+        "change": int(target_present == 1 and context_present == 0 and related_context_present == 1),
+        "restart": int(target_present == 1 and context_present == 0 and prior_context_present == 1),
+        "related_context_present": related_context_present,
+        "related_target_present": related_target_present,
     }
 
 
@@ -254,9 +294,10 @@ def scenario_target_matrix(rows: list[dict[str, Any]], spec: ScenarioOntologySpe
     for r, row in enumerate(rows):
         context_events = collect_events(row, spec.context_event_keys)
         target_events = _events(row, spec.target_event_key)
+        prior_context_events = collect_events(row, spec.prior_context_event_keys)
         for c, (family_idx, mode) in enumerate(columns):
             family = spec.target_families[family_idx]
-            features = family_features(context_events, target_events, family)
+            features = family_features(context_events, target_events, family, prior_context_events=prior_context_events)
             y[r, c] = float(features[mode])
             target_counts[r, c] = float(features["target_count"])
             if mode == "presence":
@@ -267,6 +308,12 @@ def scenario_target_matrix(rows: list[dict[str, Any]], spec: ScenarioOntologySpe
                 context_scores[r, c] = float(features["context_count"] > 0)
             elif mode == "absence":
                 context_scores[r, c] = float(features["context_count"] == 0)
+            elif mode == "drop":
+                context_scores[r, c] = float(features["context_count"] > 0)
+            elif mode == "change":
+                context_scores[r, c] = float(features["related_context_present"] == 1 and features["context_count"] == 0)
+            elif mode == "restart":
+                context_scores[r, c] = float(features["prior_context_count"] > 0 and features["context_count"] == 0)
     return y, context_scores, target_counts, columns
 
 
@@ -301,6 +348,65 @@ def utilization_bucket(count: int, bins: tuple[int, ...]) -> int:
     return bucket
 
 
+def utilization_buckets(rows: list[dict[str, Any]], spec: ScenarioOntologySpec) -> np.ndarray:
+    return np.asarray([utilization_bucket(len(collect_events(row, spec.context_event_keys)), spec.utilization_bins) for row in rows], dtype=np.int32)
+
+
+def residualized_context_scores(context_scores: np.ndarray, utilization_control_scores: np.ndarray) -> np.ndarray:
+    """Rank targets by context signal after subtracting utilisation-stratified prior.
+
+    Scores are used only for aggregate diagnostics; they are not calibrated
+    probabilities or clinical decision scores.
+    """
+
+    return (np.asarray(context_scores, dtype=np.float32) - np.asarray(utilization_control_scores, dtype=np.float32)).astype(np.float32)
+
+
+def within_utilization_stratum_diagnostics(
+    rows: list[dict[str, Any]],
+    y: np.ndarray,
+    context_scores: np.ndarray,
+    columns: list[tuple[int, str]],
+    spec: ScenarioOntologySpec,
+) -> list[dict[str, Any]]:
+    if y.size == 0:
+        return []
+    buckets = utilization_buckets(rows, spec)
+    out: list[dict[str, Any]] = []
+    for c, (family_idx, mode) in enumerate(columns):
+        deltas: list[float] = []
+        weights: list[int] = []
+        evaluated = 0
+        for bucket in sorted(set(int(x) for x in buckets.tolist())):
+            mask = buckets == bucket
+            n = int(mask.sum())
+            positives = int(y[mask, c].sum())
+            if n < 2 or positives == 0:
+                continue
+            evaluated += 1
+            stratum_prior = np.repeat(np.asarray([[float(y[mask, c].mean())]], dtype=np.float32), n, axis=0).reshape(-1)
+            context_ap = _average_precision(y[mask, c], context_scores[mask, c])
+            prior_ap = _average_precision(y[mask, c], stratum_prior)
+            delta = _safe_delta(context_ap, prior_ap)
+            if delta is not None:
+                deltas.append(delta)
+                weights.append(n)
+        weighted_delta = float(np.average(deltas, weights=weights)) if deltas and weights else None
+        out.append(
+            {
+                "target_index": int(c),
+                "family_index": int(family_idx),
+                "mode": mode,
+                "role": spec.target_families[family_idx].role,
+                "negative_control": bool(spec.target_families[family_idx].negative_control),
+                "n_utilization_strata_evaluable": int(evaluated),
+                "weighted_context_minus_stratum_prior_ap": weighted_delta,
+                "target_name_suppressed": True,
+            }
+        )
+    return out
+
+
 def _average_precision(y_true: np.ndarray, y_score: np.ndarray) -> float | None:
     y = np.asarray(y_true, dtype=np.float32)
     s = np.asarray(y_score, dtype=np.float32)
@@ -322,19 +428,29 @@ def per_target_diagnostics(
     utilization_control_scores: np.ndarray,
     columns: list[tuple[int, str]],
     spec: ScenarioOntologySpec,
+    *,
+    residual_scores: np.ndarray | None = None,
+    within_stratum: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
+    residual_scores = residual_scores if residual_scores is not None else residualized_context_scores(context_scores, utilization_control_scores)
+    within_by_target = {int(row["target_index"]): row for row in (within_stratum or [])}
     for c, (family_idx, mode) in enumerate(columns):
         prevalence = float(y[:, c].mean()) if len(y) else 0.0
         positives = int(y[:, c].sum()) if len(y) else 0
         prior_ap = _average_precision(y[:, c], prior_scores[:, c]) if len(y) else None
         context_ap = _average_precision(y[:, c], context_scores[:, c]) if len(y) else None
         utilization_ap = _average_precision(y[:, c], utilization_control_scores[:, c]) if len(y) else None
+        residual_ap = _average_precision(y[:, c], residual_scores[:, c]) if len(y) else None
         family = spec.target_families[family_idx]
         high_prevalence = prevalence > spec.max_target_prevalence
         low_support = positives < spec.min_positive_count
         context_delta = _safe_delta(context_ap, prior_ap)
         utilization_delta = _safe_delta(context_ap, utilization_ap)
+        residual_delta = _safe_delta(residual_ap, utilization_ap)
+        within_delta = within_by_target.get(c, {}).get("weighted_context_minus_stratum_prior_ap")
+        definition_adjacent = mode in {"start", "continuation", "absence", "drop", "change", "restart"}
+        definition_adjacent_control = mode in {"continuation", "absence"}
         prior_dominant = bool(
             high_prevalence
             or (prior_ap is not None and prior_ap >= spec.max_prior_micro_ap)
@@ -354,6 +470,12 @@ def per_target_diagnostics(
                 "utilization_average_precision": utilization_ap,
                 "context_minus_prior_ap": context_delta,
                 "context_minus_utilization_ap": utilization_delta,
+                "residualized_context_average_precision": residual_ap,
+                "residual_minus_utilization_ap": residual_delta,
+                "weighted_context_minus_stratum_prior_ap": within_delta,
+                "n_utilization_strata_evaluable": int(within_by_target.get(c, {}).get("n_utilization_strata_evaluable", 0)),
+                "definition_adjacent_mode": bool(definition_adjacent),
+                "definition_adjacent_control": bool(definition_adjacent_control),
                 "high_prevalence": bool(high_prevalence),
                 "low_support": bool(low_support),
                 "prior_dominant": bool(prior_dominant),
@@ -374,12 +496,17 @@ def base_rate_domination_summary(diagnostics: list[dict[str, Any]], spec: Scenar
         for d in candidates
         if not d["prior_dominant"]
         and not d["low_support"]
+        and not d.get("definition_adjacent_control", False)
         and (d["context_minus_prior_ap"] is not None and d["context_minus_prior_ap"] > 0.0)
         and (d["context_minus_utilization_ap"] is None or d["context_minus_utilization_ap"] >= -0.02)
+        and (d.get("weighted_context_minus_stratum_prior_ap") is None or d["weighted_context_minus_stratum_prior_ap"] >= -0.02)
     ]
     prior_micro = baseline_metrics["empirical_prior"]["micro_average_precision"]
     context_micro = baseline_metrics["context_summary"]["micro_average_precision"]
     utilization_micro = baseline_metrics["utilization_control"]["micro_average_precision"]
+    residual_micro = baseline_metrics.get("residualized_context", {}).get("micro_average_precision")
+    definition_controls = [d for d in diagnostics if d.get("definition_adjacent_control")]
+    strata_evaluable = [d for d in diagnostics if d.get("n_utilization_strata_evaluable", 0) > 0]
     return {
         "n_targets": int(n),
         "n_prior_dominant": int(len(dominated)),
@@ -392,6 +519,10 @@ def base_rate_domination_summary(diagnostics: list[dict[str, Any]], spec: Scenar
         "utilization_micro_ap": utilization_micro,
         "context_minus_prior_micro_ap": _safe_delta(context_micro, prior_micro),
         "context_minus_utilization_micro_ap": _safe_delta(context_micro, utilization_micro),
+        "residualized_context_micro_ap": residual_micro,
+        "residual_minus_utilization_micro_ap": _safe_delta(residual_micro, utilization_micro),
+        "n_definition_adjacent_control_targets": int(len(definition_controls)),
+        "n_targets_with_utilization_strata": int(len(strata_evaluable)),
         "prior_micro_ap_threshold": float(spec.max_prior_micro_ap),
         "base_rate_domination_flag": bool(len(dominated) == n or (prior_micro is not None and prior_micro >= spec.max_prior_micro_ap and _safe_delta(context_micro, prior_micro) is not None and _safe_delta(context_micro, prior_micro) <= 0.0)),
         "recommendation": "promising_for_local_feasibility_scan" if viable else "refine_or_park_if_local_scan_repeats_base_rate_domination",
@@ -431,13 +562,25 @@ def build_scenario_ontology_report(rows: list[dict[str, Any]], spec: ScenarioOnt
     y, context_scores, target_counts, columns = scenario_target_matrix(rows, spec)
     prior_scores = empirical_prior_scores(y, len(rows))
     utilization_control = utilization_scores(rows, y, spec)
+    residual_scores = residualized_context_scores(context_scores, utilization_control)
+    within_stratum = within_utilization_stratum_diagnostics(rows, y, context_scores, columns, spec)
     labels = [f"target_{i:03d}" for i in range(y.shape[1])]
     baseline_metrics = {
         "empirical_prior": evaluate_multilabel(y, prior_scores, labels, top_k=spec.top_k),
         "context_summary": evaluate_multilabel(y, context_scores, labels, top_k=spec.top_k),
         "utilization_control": evaluate_multilabel(y, utilization_control, labels, top_k=spec.top_k),
+        "residualized_context": evaluate_multilabel(y, residual_scores, labels, top_k=spec.top_k),
     }
-    diagnostics = per_target_diagnostics(y, prior_scores, context_scores, utilization_control, columns, spec)
+    diagnostics = per_target_diagnostics(
+        y,
+        prior_scores,
+        context_scores,
+        utilization_control,
+        columns,
+        spec,
+        residual_scores=residual_scores,
+        within_stratum=within_stratum,
+    )
     row_context_counts = [len(collect_events(row, spec.context_event_keys)) for row in rows]
     row_target_counts = [len(_events(row, spec.target_event_key)) for row in rows]
     report = {
@@ -458,6 +601,7 @@ def build_scenario_ontology_report(rows: list[dict[str, Any]], spec: ScenarioOnt
         },
         "baseline_metrics": baseline_metrics,
         "target_diagnostics": diagnostics,
+        "within_utilization_strata": within_stratum,
         "base_rate_domination": base_rate_domination_summary(diagnostics, spec, baseline_metrics),
         "negative_control_hooks": {
             "configured_negative_control_targets": int(sum(1 for family in spec.target_families if family.negative_control)),
@@ -477,7 +621,7 @@ def bridge_contract(spec: ScenarioOntologySpec) -> dict[str, Any]:
         "input": "prefix/context coded-summary vector or latent readout scores from reviewed local extraction",
         "output": "aggregate scenario-specific future-summary metrics, not event sequences",
         "target_family_count": int(len(spec.target_families)),
-        "supported_baselines": ["empirical_prior", "context_summary", "utilization_control"],
+        "supported_baselines": ["empirical_prior", "context_summary", "utilization_control", "residualized_context", "within_utilization_strata"],
         "negative_control_hooks": list(spec.control_event_keys),
         "local_extraction_required": "reviewed governed local pre-extraction for real data; no HDF5/checkpoint/sidecar paths or raw token examples in public artifacts",
     }
@@ -486,18 +630,19 @@ def bridge_contract(spec: ScenarioOntologySpec) -> dict[str, Any]:
 def command_plan(spec: ScenarioOntologySpec, *, output_root_placeholder: str = "<LOCAL_OUTPUT_ROOT>") -> str:
     return "\n".join(
         [
-            "# Placeholder-only BP008 local command plan",
+            "# Placeholder-only BP008/BP009 local command plan",
             "# Replace placeholders only in reviewed local governed context; do not commit local paths or row-level outputs.",
             "python -m clinical_jepa.speaker.scenario_ontology \\",
             "  --spec-config configs/v0/scenario_ontology.example.yaml \\",
             "  --input-json <LOCAL_PREEXTRACTED_SCENARIO_CODED_SUMMARY_ROWS.json> \\",
             f"  --output-dir {output_root_placeholder}/scenario-coded-summary-readout \\",
-            "  --scenario-id bp008_local_scenario_coded_summary",
+            "  --scenario-id bp009_local_utilization_residualized_coded_summary",
             "",
             "# Expected local input rows contain reviewed pre-extracted context_events and target_events lists,",
             "# optionally matched_random_events/time_shift_target_events/negative_control_events for controls.",
             "# The CLI emits aggregate metrics only and does not render/generate event sequences,",
             "# estimate treatment effects, or make clinical recommendations.",
+            "# BP009 diagnostics include utilisation-stratified/residualized controls and definition-adjacent checks.",
             f"# Configured target families: {len(spec.target_families)} (names/predicates suppressed in aggregate reports).",
         ]
     )
@@ -532,6 +677,7 @@ def _summary_md(report: dict[str, Any]) -> str:
         ("empirical_prior", baseline["empirical_prior"]),
         ("context_summary", baseline["context_summary"]),
         ("utilization_control", baseline["utilization_control"]),
+        ("residualized_context", baseline.get("residualized_context", {})),
     ):
         lines.append(
             f"| `{name}` | {_fmt(metrics.get('macro_average_precision'))} | {_fmt(metrics.get('micro_average_precision'))} | {_fmt(metrics.get('top_k_recall_mean'))} | {_fmt(metrics.get('top_k_precision_mean'))} |"
@@ -543,6 +689,8 @@ def _summary_md(report: dict[str, Any]) -> str:
             "",
             f"- Prior-dominant targets: {domination['n_prior_dominant']} / {domination['n_targets']}",
             f"- Viable candidate targets: {domination['n_viable_candidate_targets']} / {domination['n_candidate_targets']}",
+            f"- Definition-adjacent control targets: {domination.get('n_definition_adjacent_control_targets', 0)}",
+            f"- Targets with utilisation strata: {domination.get('n_targets_with_utilization_strata', 0)}",
             f"- Flag: `{domination['base_rate_domination_flag']}`",
             f"- Recommendation: `{domination['recommendation']}`",
             "",
@@ -558,7 +706,7 @@ def _summary_md(report: dict[str, Any]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Safe-public BP008 scenario-specific coded-summary ontology scaffold")
+    ap = argparse.ArgumentParser(description="Safe-public BP008/BP009 scenario-specific coded-summary ontology scaffold")
     ap.add_argument("--spec-config", help="YAML/JSON scenario_ontology config; defaults to a synthetic diuretic-style scaffold")
     ap.add_argument("--input-json", help="Synthetic or reviewed local pre-extracted rows with context_events and target_events")
     ap.add_argument("--output-dir", required=True)

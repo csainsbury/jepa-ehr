@@ -1,4 +1,4 @@
-# BP-CLINJEPA-008 scenario-specific coded-summary ontology example config.
+# BP-CLINJEPA-008/009 scenario-specific coded-summary ontology example config.
 # Placeholder/specification-only: contains no clinical data paths, row IDs,
 # checkpoints, embeddings, source-ID maps, patient-level artifacts, or real
 # governed token examples. Prefixes below are synthetic/generic fixture names.
@@ -9,6 +9,7 @@ scenario_ontology:
   spec_id: scenario_coded_summary_v0
   context_event_keys: [context_events]
   target_event_key: target_events
+  prior_context_event_keys: [prior_context_events]
   control_event_keys: [matched_random_events, time_shift_target_events, negative_control_events]
   top_k: 5
   min_positive_count: 2
@@ -23,17 +24,24 @@ scenario_ontology:
     - name: synthetic_diuretic_med_family
       role: medication_subclass
       include_prefixes: [MED:SYN_DIURETIC]
-      summary_modes: [presence, start, continuation]
+      related_prefixes: [MED:SYN_COMPARATOR]
+      # BP009 refined modes: change means target family appears after a related
+      # context family; drop means context family disappears; restart uses the
+      # optional prior_context_events key. Continuation is definition-adjacent
+      # and should be treated as a control, not a promotion target.
+      summary_modes: [presence, start, change, drop, restart, continuation]
 
     - name: synthetic_renal_lab_state_family
       role: renal_lab_state
       include_prefixes: [LAB:SYN_RENAL, STATE:SYN_RENAL]
-      summary_modes: [presence, start]
+      related_prefixes: [LAB:SYN_RENAL_BUCKET, STATE:SYN_RENAL_BUCKET]
+      summary_modes: [presence, change]
 
     - name: synthetic_electrolyte_lab_state_family
       role: renal_lab_state
       include_prefixes: [LAB:SYN_ELECTROLYTE, STATE:SYN_ELECTROLYTE]
-      summary_modes: [presence, start]
+      related_prefixes: [LAB:SYN_ELECTROLYTE_BUCKET, STATE:SYN_ELECTROLYTE_BUCKET]
+      summary_modes: [presence, change]
 
     - name: synthetic_process_density_family
       role: utilisation_control_probe
@@ -54,3 +62,5 @@ safety:
   real_data_requires_reviewed_local_preextraction: true
   suppress_target_names_in_aggregate_reports: true
   suppress_predicates_in_aggregate_reports: true
+  include_utilisation_stratified_controls: true
+  include_definition_adjacent_checks: true

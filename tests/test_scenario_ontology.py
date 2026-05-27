@@ -16,6 +16,7 @@ from clinical_jepa.speaker.scenario_ontology import (
     family_features,
     load_scenario_ontology_spec,
     matches_family,
+    scenario_target_matrix,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +28,8 @@ def _signal_rows() -> list[dict]:
     for _ in range(4):
         rows.append(
             {
-                "context_events": ["MED:SYN_DIURETIC:LOOP", "LAB:SYN_RENAL:HIGH", "STATE:SYN_CONTACT:HIGH"],
+                "prior_context_events": ["MED:SYN_DIURETIC:LOOP"],
+                "context_events": ["MED:SYN_COMPARATOR:ALT", "LAB:SYN_RENAL_BUCKET:HIGH", "STATE:SYN_CONTACT:HIGH"],
                 "target_events": ["MED:SYN_DIURETIC:LOOP", "LAB:SYN_RENAL:HIGH"],
                 "matched_random_events": ["LAB:SYN_NEG_GLUCOSE:HIGH"],
             }
@@ -79,7 +81,35 @@ class ScenarioOntologyTests(unittest.TestCase):
         self.assertEqual(features["presence"], 1)
         self.assertEqual(features["continuation"], 1)
         self.assertEqual(features["start"], 0)
+        self.assertEqual(features["drop"], 0)
         self.assertEqual(count_family(["MED:SYN_DIURETIC:LOOP", "MED:SYN_DIURETIC:THIAZIDE"], family), 2)
+
+    def test_refined_change_drop_and_restart_modes_are_explicit(self) -> None:
+        family = TargetFamilySpec(
+            name="synthetic_med_change",
+            include_prefixes=("MED:SYN_NEW",),
+            related_prefixes=("MED:SYN_RELATED",),
+            summary_modes=("change", "drop", "restart"),
+        )
+        change = family_features(["MED:SYN_RELATED:OLD"], ["MED:SYN_NEW:START"], family)
+        self.assertEqual(change["change"], 1)
+        dropped = family_features(["MED:SYN_NEW:OLD"], [], family)
+        self.assertEqual(dropped["drop"], 1)
+        restarted = family_features([], ["MED:SYN_NEW:START"], family, prior_context_events=["MED:SYN_NEW:REMOTE"])
+        self.assertEqual(restarted["restart"], 1)
+
+        spec = ScenarioOntologySpec(target_families=(family,), min_positive_count=1)
+        y, context_scores, _target_counts, columns = scenario_target_matrix(
+            [
+                {"context_events": ["MED:SYN_RELATED:OLD"], "target_events": ["MED:SYN_NEW:START"]},
+                {"context_events": ["MED:SYN_NEW:OLD"], "target_events": []},
+                {"prior_context_events": ["MED:SYN_NEW:REMOTE"], "context_events": [], "target_events": ["MED:SYN_NEW:START"]},
+            ],
+            spec,
+        )
+        self.assertEqual(columns, [(0, "change"), (0, "drop"), (0, "restart")])
+        self.assertEqual(y.tolist(), [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        self.assertEqual(context_scores.tolist(), y.tolist())
 
     def test_scenario_report_scores_signal_controls_and_suppresses_predicates(self) -> None:
         report = build_scenario_ontology_report(_signal_rows(), default_diuretic_synthetic_spec(), scenario_id="synthetic_signal")
@@ -88,12 +118,16 @@ class ScenarioOntologyTests(unittest.TestCase):
         self.assertTrue(report["not_generation"])
         self.assertTrue(report["target_names_suppressed"])
         self.assertGreater(report["n_targets"], 4)
+        self.assertIn("residualized_context", baseline)
+        self.assertIn("within_utilization_strata", report)
         self.assertGreater(
             baseline["context_summary"]["macro_average_precision"],
             baseline["empirical_prior"]["macro_average_precision"],
         )
         self.assertIn("matched_random_events", report["negative_control_hooks"]["observed_control_event_sets"])
         self.assertGreaterEqual(report["base_rate_domination"]["n_viable_candidate_targets"], 1)
+        self.assertGreaterEqual(report["base_rate_domination"]["n_definition_adjacent_control_targets"], 1)
+        self.assertTrue(any("weighted_context_minus_stratum_prior_ap" in row for row in report["target_diagnostics"]))
         dumped = json.dumps(report)
         self.assertNotIn("SYN_DIURETIC:LOOP", dumped)
         self.assertNotIn("MED:SYN_DIURETIC", dumped)
@@ -142,6 +176,7 @@ class ScenarioOntologyTests(unittest.TestCase):
             plan = (out / "command-plan.md").read_text()
             self.assertIn("<LOCAL_PREEXTRACTED_SCENARIO_CODED_SUMMARY_ROWS.json>", plan)
             self.assertIn("does not render/generate event sequences", plan)
+            self.assertIn("utilisation-stratified/residualized controls", plan)
             self.assertIn("no HDF5/checkpoint/sidecar paths", json.dumps(report["bridge_contract"]))
 
 
