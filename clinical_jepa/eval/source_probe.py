@@ -84,6 +84,14 @@ def source_prediction_probe(
         "majority_source": str(majority_source),
         "majority_base_rate": float(majority_count / n) if n else 0.0,
         "tolerance": float(tolerance),
+        # Pi round 2: this probe is an ALARM/REPORT ONLY. MIMIC and SCI-D differ
+        # distributionally, so source can stay predictable even after a correct
+        # mask; near-base-rate is NOT required as proof of no leakage. The hard
+        # control is source-matched candidates (retrieval `same_source_*`), not
+        # this probe. Nothing may gate pass/fail on `near_base_rate`.
+        "role": "alarm_report_only",
+        "is_pass_fail_gate": False,
+        "near_base_rate_required": False,
         "aggregate_only": True,
     }
 

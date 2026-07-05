@@ -51,8 +51,13 @@ leakage:
 
 # Source-shortcut mask: strip DATASET:* (idx 0) + [BOS] (idx 1) from the
 # encoder/predictor input; source retained ONLY for evaluator stratification.
+# `require_source_mask` makes the leakage audit FAIL-HARD (Pi round 2): an absent
+# mask or `source_prefix_len < min_source_prefix_len` (2 = DATASET token + [BOS])
+# is a failure, not a pass-by-absence.
 mask:
   source_prefix_len: 2
+  require_source_mask: true
+  min_source_prefix_len: 2
 source_token_ids:
   SCID: 1048
   MIMIC: 1049
@@ -94,9 +99,17 @@ sources:
     role: locked_stress_no_tuning
 
 # Rung -1 readiness gate (fail-closed): the readiness emitter raises if either
-# source contributes fewer than this many valid matched windows per split.
+# source contributes fewer than this many valid *matched* windows per split, or
+# if an expected source / required split is absent (Pi round 2 — absence fails,
+# it does not silently drop from per_source). The floor is counted on windows
+# that are primary_T0-feasible AND land in a source-stratified (length, event-
+# rate)-matched candidate group with >= min_matched_candidates peers — not merely
+# "a T0-feasible sequence exists".
 readiness:
-  min_valid_windows_per_source_per_split: 500   # proposed floor — confirm with Pi
+  min_valid_windows_per_source_per_split: 500   # confirmed floor (Pi round 2)
+  min_matched_candidates: 2                      # a matched window needs >= this many length/rate peers
+  expected_sources: [SCID, MIMIC]                # both must be present in every required split
+  required_splits: [train, dev, test]
   t0_gap_events: 0
   candidate_windows: [8, 16, 32]
 

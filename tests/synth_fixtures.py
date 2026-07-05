@@ -118,16 +118,23 @@ def joint_dataset_config(
     vocab_path: str,
     index_dir: str | Path,
     source_prefix_len: int = 2,
+    require_source_mask: bool = True,
     min_valid_windows: int = 500,
+    min_matched_candidates: int = 2,
     candidate_windows: list[int] | None = None,
 ) -> dict[str, Any]:
     index_dir = Path(index_dir)
     return {
         "schema_version": "clinical-jepa-dataset-config-v0",
-        "vocabulary": {"vocab_name": "joint-test", "vocab_size": 1050, "vocab_json_path": vocab_path},
+        "vocabulary": {
+            "vocab_name": "joint-test",
+            "vocab_size": 1050,
+            "vocab_json_path": vocab_path,
+            "family_ranges": {"medication": [951, 1032]},
+        },
         "time_channel": "cumulative_days",
         "leakage": {"outcome_label_dataset": "is_outcome_label"},
-        "mask": {"source_prefix_len": source_prefix_len},
+        "mask": {"source_prefix_len": source_prefix_len, "require_source_mask": require_source_mask},
         "source_token_ids": {"SCID": SCID_TOKEN, "MIMIC": MIMIC_TOKEN},
         "verify_source_token": True,
         "sources": {
@@ -148,6 +155,7 @@ def joint_dataset_config(
         },
         "readiness": {
             "min_valid_windows_per_source_per_split": min_valid_windows,
+            "min_matched_candidates": min_matched_candidates,
             "t0_gap_events": 0,
             "candidate_windows": candidate_windows or [8, 16, 32],
         },

@@ -22,7 +22,9 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
+
+import numpy as np
 
 from clinical_jepa.utils import ensure_dir, now_utc, write_json
 
@@ -50,6 +52,63 @@ def _derive_source_for_group(
                 return str(name)
         return None
     return str(source_entry["name"])
+
+
+def _load_id_to_token(vocab_json_path: str | None) -> dict[int, str]:
+    if not vocab_json_path:
+        return {}
+    p = Path(vocab_json_path)
+    if not p.exists():
+        return {}
+    raw = json.loads(p.read_text())
+    if "id_to_token" in raw:
+        return {int(k): str(v) for k, v in raw["id_to_token"].items()}
+    if "token_to_id" in raw:
+        return {int(v): str(k) for k, v in raw["token_to_id"].items()}
+    return {int(k): str(v) for k, v in raw.items() if str(k).isdigit()}
+
+
+def _candidate_action_counter(
+    dataset_cfg: dict[str, Any],
+) -> tuple[Callable[[Any, int], int] | None, dict[str, Any]]:
+    """Return a (counter, descriptor) that counts candidate-action tokens.
+
+    Candidate actions are medication tokens (the T1 anchors that later action /
+    operator work conditions on). The count is taken over positions at/after the
+    masked source prefix so it reflects usable anchors. Resolution order:
+      1. ``vocabulary.family_ranges.medication`` half-open [start, end) — fast.
+      2. ``MED:`` prefixed ids from the vocab json — fallback.
+    If neither is available the counter is ``None`` (candidate-action frequency
+    is reported as unavailable rather than silently zero).
+    """
+    vocab = dataset_cfg.get("vocabulary", {}) or {}
+    ranges = vocab.get("family_ranges", {}) or {}
+    med = ranges.get("medication")
+    if med and len(med) == 2:
+        lo, hi = int(med[0]), int(med[1])
+
+        def _count_range(arr: Any, start: int) -> int:
+            sub = np.asarray(arr[max(0, start):])
+            if sub.size == 0:
+                return 0
+            return int(((sub >= lo) & (sub < hi)).sum())
+
+        return _count_range, {"kind": "family_range", "range": [lo, hi]}
+
+    id_to_token = _load_id_to_token(vocab.get("vocab_json_path"))
+    med_ids = sorted(tid for tid, tok in id_to_token.items() if str(tok).startswith("MED:"))
+    if med_ids:
+        med_arr = np.asarray(med_ids)
+
+        def _count_ids(arr: Any, start: int) -> int:
+            sub = np.asarray(arr[max(0, start):])
+            if sub.size == 0:
+                return 0
+            return int(np.isin(sub, med_arr).sum())
+
+        return _count_ids, {"kind": "med_prefix", "n_med_tokens": len(med_ids)}
+
+    return None, {"kind": "unavailable"}
 
 
 def _verify_token_source(
@@ -82,6 +141,8 @@ def build_index_for_split(
     time_channel = dataset_cfg.get("time_channel")
     source_token_ids = {str(k): int(v) for k, v in (dataset_cfg.get("source_token_ids", {}) or {}).items()}
     verify_source_token = bool(dataset_cfg.get("verify_source_token", False))
+    source_prefix_len = max(0, int((dataset_cfg.get("mask", {}) or {}).get("source_prefix_len", 0)))
+    action_counter, action_descriptor = _candidate_action_counter(dataset_cfg)
 
     rows: list[dict[str, Any]] = []
     per_source_counts: dict[str, int] = {}
@@ -121,6 +182,8 @@ def build_index_for_split(
                     cdays = grp[time_channel][:]
                     if len(cdays) > 0:
                         row["wall_clock_span_days"] = float(cdays[-1]) - float(cdays[0])
+                if action_counter is not None:
+                    row["n_candidate_actions"] = action_counter(token_ids[:], source_prefix_len)
                 rows.append(row)
                 per_source_counts[source_dataset] = per_source_counts.get(source_dataset, 0) + 1
                 emitted += 1
@@ -132,6 +195,8 @@ def build_index_for_split(
         "per_source_token_mismatch": per_source_token_mismatch,
         "verify_source_token": verify_source_token,
         "time_channel": time_channel,
+        "source_prefix_len": int(source_prefix_len),
+        "candidate_action": action_descriptor,
         "aggregate_only": True,
     }
     return rows, report
