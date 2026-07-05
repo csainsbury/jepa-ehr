@@ -9,6 +9,7 @@ extends:
   - docs/clinical-jepa-next-experiment-brief.md (generation / readout / TTE readiness)
 consult: fable5 (external, pure-abstract ML methods consult; two rounds)
 consult_transcript: ascend-flat:coordination/fable5_jepa_thread.md (titan; verbatim two-round thread)
+substrate: joint MIMIC+SCI-D corrected 350M flex (step_150000, vocab 1050) — see §1a; supersedes old B1a/85M
 Pi-reviewed: pending
 ---
 
@@ -26,7 +27,7 @@ v0 established a real, well-controlled result at the **representation/retrieval*
 
 - The JEPA latent future-block prediction objective learns **non-collapsed** representations on governed re-keyed tokenised EHR.
 - Predicted latents **retrieve** the true future block above frozen-FlatASCEND and utilisation baselines under matched/candidate-normalised distractors.
-- Retrieval **degrades monotonically with horizon**, survives shuffle / query-shuffle / time-shift controls, and shows MIMIC→INSPECT transfer.
+- Retrieval **degrades monotonically with horizon**, survives shuffle / query-shuffle / time-shift controls, and shows MIMIC→INSPECT transfer *(on the retired old-tokeniser B1a substrate — see §1a)*.
 
 What v0 did **not** touch — and what this note is about:
 
@@ -36,6 +37,17 @@ What v0 did **not** touch — and what this note is about:
 - action-conditioned / counterfactual latent transition (blueprint Part C) is parked, with the standing guardrail against calling latent shifts "treatment effects."
 
 **Frontier restated:** latent future-state *retrieval* → accurate *autoregressive generation* → *counterfactual* (action-conditioned) generation. The retrieval win does **not** automatically transfer to generation (see P5).
+
+## 1a. Substrate update (2026-07-05) — re-base on the joint MIMIC+SCI-D corrected model
+
+The v0 pilot above ran on the **old tokeniser** (the re-keyed B1a MIMIC+INSPECT bundle + the frozen FlatASCEND-85M `step_100000`). Those are **retired** for the go-forward plan. This note's live substrate is the **from-scratch joint MIMIC+SCI-D corrected 350M "flex" model** (~318M params, checkpoint `step_150000`, 2026-07-02; joint vocab hash `4b57b210…`; concrete checkpoint/substrate paths kept local per the safety boundary):
+
+- **Larger vocabulary: 1,050 tokens** (vigintile-factored; 43 lab measures × 20 vigintiles), with B1-corrected lab attribution, floor-gated richer drug classes, complication-DX presence tokens, and TYPE / DURATION / SIMD anchors — vs the old ~220-token MIMIC tokenisation.
+- **Substrate:** the joint corrected build — per-source vigintile boundaries and a `DATASET:SCID / DATASET:MIMIC` source token at sequence start (concrete local paths uncommitted). The flat-token JEPA arm trains on these tokens; any frozen-teacher arm uses the 350M flex model's hidden states (not the 85M).
+- **The P4 two-source asset changes: MIMIC (US ICU) ↔ SCI-D (Scottish outpatient diabetes registry)**, replacing MIMIC/INSPECT. This is a *stronger, cleaner behaviour-policy contrast* for fable5's cross-environment invariance test (§3.2 P4 / §6 rung 4), and the `DATASET` token + per-source boundaries make source-stratified counterfactual tests clean. **INSPECT is not in this substrate.**
+- **Not the 3-way aggregate.** A newer MIMIC+SCI-D+**CPRD** aggregate (vocab 1071, 2026-07-05) has far more rare-drug power, but CPRD is a **2-month LOCF panel** whose coarse timing would undermine the continuous-time / marked-TPP core (P3). Per-event MIMIC + SCI-D is the better substrate for *this* generation work; revisit the aggregate only if a drug-power-limited counterfactual arm specifically needs it (and then handle CPRD's coarse timing explicitly).
+
+Read every "MIMIC/INSPECT" / "FlatASCEND-85M" reference below as the **retired-substrate record**; the live substrate is the joint MIMIC+SCI-D corrected 350M model and its 1,050-token vocab.
 
 ## 2. The five methodological problems (extraction)
 
@@ -62,7 +74,7 @@ Standing hazard fable5 flagged: a fully-latent process risks **self-referential 
 - **P1:** never decode the predictor's *mean* — decode a **sampled** latent (`ctx → p(z|ctx) → sample → read-out`). Make the latent decodable via **sequence-of-latents** or **VQ/discrete** targets (VQ also turns "distribution over latents" into a categorical that is stable against the moving EMA target and kills mean-collapse for free). Cheapest discriminator: freeze encoder, train only a read-out `D`; `D(z⁺)` can't reconstruct ⇒ representation bottleneck (change targets); `D(z⁺)` fine but `D(mean)` blurs while `D(sample)` is crisp ⇒ predictor bottleneck (go distributional).
 - **P2 (latent-first):** **stochastic predictor + dynamics-level (k-step, rolled-out) variance regulariser** is the highest-value move (fixes both drift and attractor-collapse); add rollout-in-the-loop consistency to encoded ground truth, a learned latent projection-to-manifold, and/or an invertible/structured operator. **Two-phase: EMA-learn representation → freeze `f_ξ` → learn dynamics/read-out.** Obs-space (decode→re-encode) rollout is a **concession** (defeats the thesis) kept only as a diagnostic upper bound / optional every-K-step re-grounding. Cheapest discriminator: a no-training rollout sweep recording `d_t` (distance to nearest true latent) and `v_t` (ensemble variance) — `d_t`↑ ⇒ drift, `v_t`→0 ⇒ collapse, blows up only under a live EMA ⇒ two-phase freeze.
 - **P3:** separate "what/where" (latent) from "when" (a continuous-time head). Prefer **wall-clock horizons** (or "latent state at query timestamp `t`") over **event-count** (which leaks rate and confounds counterfactuals). Head: **marked TPP on the latent** > ZILN/mixture > CT-state (ODE/CT-RNN) > time-tokens. Carry **absolute/cumulative time anchored to a scheduled clock**, not summed `Δt`. Evaluate with the **time-rescaling theorem** (QQ/KS of rescaled inter-event times vs Exp(1)), teacher-forced vs rollout.
-- **P4 (where the latent route pays off):** the counterfactual is **only partially identified** — deliver an **overlap-gated, sensitivity-bounded latent operator with an explicit abstention region and validity horizon**. Combine **overlap-restriction (report it) + a structural constraint on `T_a`** (additive/factored/invertible/composable). **Strongest diagnostic = cross-environment invariance** (a genuine operator is invariant across policies; a re-encoded propensity is not) — fit the effect on env A, test counterfactual accuracy on env B; **near-free using the existing MIMIC/INSPECT two-source asset.** Off-support **compounds multiplicatively** over rollout → per-step overlap gate with abstain.
+- **P4 (where the latent route pays off):** the counterfactual is **only partially identified** — deliver an **overlap-gated, sensitivity-bounded latent operator with an explicit abstention region and validity horizon**. Combine **overlap-restriction (report it) + a structural constraint on `T_a`** (additive/factored/invertible/composable). **Strongest diagnostic = cross-environment invariance** (a genuine operator is invariant across policies; a re-encoded propensity is not) — fit the effect on env A, test counterfactual accuracy on env B; **near-free using the MIMIC (US ICU) / SCI-D (Scottish outpatient) two-source asset** (see §1a; a stronger policy contrast than the retired MIMIC/INSPECT). Off-support **compounds multiplicatively** over rollout → per-step overlap gate with abstain.
 - **P5 (load-bearing):** retrieval rewards *between*-cluster discriminability; generation needs *within*-cluster fidelity. Battery: frozen-latent decode ceiling; order/time-perturbation hard-negative retrieval; targeted decodability probes. Non-circular validation axes (strongest→weakest): **forward-prediction of never-encoded raw quantities** > semi-synthetic known-effect env (the only interventional yardstick for P4) > held-out modality > external labels; **anything in the encoder's own latent is inside the circle** (dev signal only). Run the **obs-space-forward-prediction vs latent-retrieval "scissors" as a standing alarm.**
 
 ### 3.3 Round 2 — hierarchy, the falsifier, and the refutation
@@ -108,7 +120,7 @@ fable5's refutation is sound and is the most important output of the consult, bu
 | 1 | **Frozen-decode ceiling** `D(z⁺)` — exact order/count/timing recon | Is the latent decodable at all (P1)? Upper-bounds any generator | `D(z⁺)` recon adequate ⇒ latent is generation-capable; else change targets (VQ / seq-of-latents) |
 | 2 | **No-training rollout `d_t` / `v_t` sweep** | Drift vs attractor-collapse vs EMA-nonstationarity (P2) | Signatures identify which stabiliser is needed before training dynamics |
 | 3 | **Falsifier ladder** — latent-corruption sensitivity curve + `D(z⁺)`-vs-`D(ẑ)` split + decoder-free summary heads | Is the validation channel trustworthy (R2.2/P5)? | Sensitivity curve non-flat ⇒ falsifier can see degradation; else add summary heads before trusting any generation metric |
-| 4 | **Cross-environment invariance** (MIMIC→INSPECT), overlap-decay curve | Genuine operator vs re-encoded propensity (P4) | Effect transfers A→B ⇒ operator is causal-ish and worth rolling out; report validity horizon |
+| 4 | **Cross-environment invariance** (MIMIC ↔ SCI-D), overlap-decay curve | Genuine operator vs re-encoded propensity (P4) | Effect transfers A→B ⇒ operator is causal-ish and worth rolling out; report validity horizon |
 | 5 | **Three-arm benchmark** — flat AR / pure-latent / hybrid — on (a) raw-generation metrics and (b) validated counterfactual accuracy (semi-synthetic + cross-env), plus a **counterfactual-render-faithfulness probe** on the hybrid boundary | Which renderer; is the pure-latent bet justified (§4.1 bar) | Pure-latent must clear parity-plus-counterfactual-win; else adopt the hybrid |
 
 Rungs 0–3 are largely training-free / reuse existing machinery; rung 4 uses an existing asset; rung 5 is the only new-training investment and is deferred behind the gates.

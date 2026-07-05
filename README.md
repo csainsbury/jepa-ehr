@@ -8,6 +8,18 @@ Clinical-JEPA scaffolding for leakage-aware latent prediction experiments over t
 
 This repository contains code, schemas, example configs, and aggregate/sanitized pilot notes. It does **not** contain clinical data, patient-level records, source identifiers, source-ID maps, token-level examples, embeddings, checkpoints, credentials, or download tokens.
 
+## Current design direction (2026-07): latent-native generation & counterfactual
+
+A design/decision record — `docs/clinical-jepa-native-generation-design.md` — now sets the architecture direction for turning latent future-block prediction into **autoregressive** and **counterfactual (action-conditioned)** generation. It consolidates five extracted methodological problems (latent→sequence decoding + conditional-mean collapse; multi-step latent-rollout stability; continuous-time / irregular-Δt modelling; interventional identifiability from policy-confounded data; retrieval-as-proxy + validation circularity) and a two-round external methods consult that pressure-tested them.
+
+Key decisions recorded there (a plan, not new results, and not approval to run compute):
+
+- **Benchmark, don't bet.** The latent *plan* + a plan-level action operator is the common spine; the *renderer* (pure-latent read-out vs a fresh AR speaker conditioned on the plan — **not** a reuse of FlatASCEND) is an empirical open variable, decided by a three-arm benchmark against a hard parity-plus-counterfactual-win bar.
+- **A cheapest-first, gated experiment ladder** (horizon-decay pre-test → frozen-decode ceiling → rollout drift/collapse sweep → falsifier ladder → cross-environment counterfactual test → three-arm benchmark), most rungs training-free or reusing existing evals.
+- **Substrate rebase.** The go-forward substrate is the current larger-vocab **joint MIMIC+SCI-D corrected 350M model (1,050-token vigintile vocab)**; the old re-keyed B1a / INSPECT bundle and the FlatASCEND-85M teacher are retired. The cross-environment counterfactual-validity contrast is now **MIMIC ↔ SCI-D**.
+
+This supersedes the INSPECT-as-external-stress-test framing below for the go-forward plan; the BP-CLINJEPA-005–010 scaffolds and v0 pilot notes remain the record of how the retrieval/readout gates were built.
+
 ## What is here
 
 - `clinical_jepa/` — split manifests, target-block extraction, leakage audits, v0A/v0B/v0D/v0E scaffold code, aggregate TTE scenario feasibility, pseudo-rendering readiness, horizon-spec diagnostics, coded-event future-summary/scenario/conditional-outcome readout, and latent autoregression readiness helpers.
@@ -19,6 +31,7 @@ This repository contains code, schemas, example configs, and aggregate/sanitized
   - `docs/clinical-jepa-v0-research-narrative.md` — longer aggregate research narrative.
   - `docs/b1a-real-pilot-progress-report.md` — detailed aggregate progress report.
   - `docs/clinical-jepa-next-experiment-brief.md` — single targeted follow-up experiment brief, not approval to run it.
+  - `docs/clinical-jepa-native-generation-design.md` — latent-native generation & counterfactual design + decision record (five-problem analysis, external methods consult, plan-vs-renderer decision, gated experiment ladder, substrate rebase); a plan, not approval to run compute.
 
 ## Safety boundary
 
@@ -120,4 +133,4 @@ Real-data use requires reviewed local pre-extraction into governed sidecars and 
 
 ## Interpretation boundary
 
-The v0 results support a representation-learning/readout-engineering claim, not a clinical utility, novelty-over-Clin-JEPA, or causal treatment-effect claim. The current development gate is accurate autoregression/readout on governed same-source target windows with leakage, time-shift, utilisation/contact-density, and negative controls. INSPECT transfer is useful later as an external stress test, but should not displace the autoregression objective.
+The v0 results support a representation-learning/readout-engineering claim, not a clinical utility, novelty-over-Clin-JEPA, or causal treatment-effect claim. The current development gate is accurate autoregression/readout on governed same-source target windows with leakage, time-shift, utilisation/contact-density, and negative controls. INSPECT transfer is useful later as an external stress test, but should not displace the autoregression objective. _(Update 2026-07: the go-forward substrate is the joint MIMIC+SCI-D corrected 350M model, and the cross-environment contrast is now MIMIC↔SCI-D — see `docs/clinical-jepa-native-generation-design.md`; INSPECT was the v0 external stress test on the now-retired old-tokeniser substrate.)_
