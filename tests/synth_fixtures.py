@@ -26,6 +26,8 @@ def make_sequence(
     outcome_at: Iterable[int] = (),
     med_at: Iterable[int] = (),
     med_token: int = MED_TOKEN,
+    cumulative_days: np.ndarray | list[float] | None = None,
+    segment_ids: np.ndarray | list[int] | None = None,
 ) -> dict[str, np.ndarray]:
     length = int(length)
     token_ids = np.full(length, BENIGN_TOKEN, dtype=np.int64)
@@ -37,17 +39,23 @@ def make_sequence(
             token_ids[int(i)] = med_token
     time_deltas = np.ones(length, dtype=np.float32)
     time_deltas[0] = 0.0
-    cumulative_days = np.arange(length, dtype=np.float32)
+    if cumulative_days is None:
+        cdays = np.arange(length, dtype=np.float32)
+    else:
+        cdays = np.asarray(cumulative_days, dtype=np.float32)
     is_outcome_label = np.zeros(length, dtype=np.int8)
     for i in outcome_at:
         if 0 <= int(i) < length:
             is_outcome_label[int(i)] = 1
-    return {
+    out: dict[str, np.ndarray] = {
         "token_ids": token_ids,
         "time_deltas": time_deltas,
-        "cumulative_days": cumulative_days,
+        "cumulative_days": cdays,
         "is_outcome_label": is_outcome_label,
     }
+    if segment_ids is not None:
+        out["segment_ids"] = np.asarray(segment_ids, dtype=np.int64)
+    return out
 
 
 def write_h5(path: str | Path, groups: dict[str, dict[str, np.ndarray]]) -> str:
@@ -172,9 +180,25 @@ def joint_arms_config() -> dict[str, Any]:
                     "enabled": True,
                     "event_count_window": 32,
                     "min_context": 8,
+                    # Wall-clock mode: source-specific windows for yield; common
+                    # horizons for the cross-source hierarchy comparison (rung 0).
+                    "wall_clock": {
+                        "window_days": 90.0,
+                        "gap_days": 0.0,
+                        "common_horizons_days": [30.0, 90.0],
+                    },
                     "per_source": {
-                        "SCID": {"event_count_window": 32, "min_context": 8},
-                        "MIMIC": {"event_count_window": 8, "min_context": 4},
+                        "SCID": {
+                            "event_count_window": 32,
+                            "min_context": 8,
+                            "wall_clock": {"window_days": 90.0, "min_context": 8},
+                        },
+                        "MIMIC": {
+                            "event_count_window": 8,
+                            "min_context": 4,
+                            # Short per-admission MIMIC: narrower window + gap.
+                            "wall_clock": {"window_days": 5.0, "gap_days": 0.0, "min_context": 4},
+                        },
                     },
                 },
                 "T1": {

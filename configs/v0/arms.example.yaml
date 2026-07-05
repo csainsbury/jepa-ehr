@@ -8,9 +8,26 @@ common:
   target_blocks:
     T0:
       enabled: true
-      event_count_window: 32
+      event_count_window: 32          # event-index mode (default extractor unit)
       time_window_hours: 24
       require_context_before_target: true
+      # Wall-clock mode (extract_blocks --unit wall_clock; Pi spec 2026-07-05,
+      # rung0_1_run_specs.md "Wall-clock target-block definition"). Target = the
+      # half-open interval [t_query, t_query + window_days) over cumulative_days,
+      # with t_query = cumulative_days at context end + gap_days (scheduled).
+      # Source-specific windows are allowed for YIELD; the cross-source hierarchy
+      # claim (rung 0) is made only at the shared common_horizons_days.
+      wall_clock:
+        window_days: 90
+        gap_days: 0
+        common_horizons_days: [30, 90, 180]
+      # Per-source overrides live at the T0 level (not inside wall_clock): MIMIC
+      # is per-admission + short -> a narrower window (documented so it is not
+      # silently dropped); SCI-D is long. `min_context` is read at the source
+      # level; the wall-clock window/gap under each source's `wall_clock`.
+      per_source:
+        MIMIC: {min_context: 4, wall_clock: {window_days: 7}}
+        SCID: {min_context: 8, wall_clock: {window_days: 90}}
     T1:
       enabled: true
       medication_family_mapping_path: /PLACEHOLDER/safe/config/medication_families.yaml

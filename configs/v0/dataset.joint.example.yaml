@@ -46,6 +46,13 @@ vocabulary:
 
 # Extra per-token channels present in the joint h5 (read by build_index / extractor / audit).
 time_channel: cumulative_days              # wall-clock days since sequence start
+# Boundary-respect hook (wall-clock mode; Pi spec item 4). Optional per-event
+# channel declaring admission/segment ids: if present, a wall-clock block will
+# NOT cross a boundary (target is truncated at the first differing segment).
+# LEAVE UNSET for the decided per-admission MIMIC approach (each sequence is a
+# single admission => within-sequence default; no crossing possible). Set it only
+# if patient-level concatenation with explicit segment ids is later adopted.
+# segment_channel: segment_ids
 leakage:
   outcome_label_dataset: is_outcome_label  # per-token MACE label channel; excluded from context
 

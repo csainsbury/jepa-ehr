@@ -23,7 +23,17 @@
           "target_start_ref": {"type": "integer"},
           "target_end_ref": {"type": "integer"},
           "horizon_descriptor": {"type": "string"},
-          "source_dataset": {"type": "string"}
+          "source_dataset": {"type": "string"},
+          "unit": {"type": "string", "enum": ["event_index", "wall_clock_days"]},
+          "window_days": {"type": "number", "minimum": 0},
+          "gap_days": {"type": "number", "minimum": 0},
+          "t_query": {"type": "number"},
+          "t_context_end_day": {"type": "number"},
+          "empty_target": {"type": "boolean"},
+          "n_target_events": {"type": "integer", "minimum": 0},
+          "boundary_respect": {"type": "boolean"},
+          "is_common_horizon": {"type": "boolean"},
+          "common_horizons_days": {"type": "array", "items": {"type": "number"}}
         }
       }
     }

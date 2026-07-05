@@ -18,6 +18,21 @@ from clinical_jepa.validation import validate_artifact
 DEFAULT_SOURCE_PREFIX_LEN = 0
 DEFAULT_MIN_CONTEXT = 8
 
+# Wall-clock target-block defaults (Pi-specified 2026-07-05, rung0_1_run_specs.md
+# "Wall-clock target-block definition"). Blocks are built on absolute cumulative
+# time (`cumulative_days`), not event count:
+#   - target interval = half-open [t_query, t_query + W)
+#   - t_query = cumulative_days at context end + a fixed wall-clock gap (scheduled)
+#   - W (window) and gap are wall-clock days, configurable per source
+# These are conservative fallbacks; real values come from the arms config
+# (target_blocks.<type>.wall_clock.{window_days,gap_days} + per_source overrides).
+DEFAULT_WALL_CLOCK_WINDOW_DAYS = 90.0
+DEFAULT_WALL_CLOCK_GAP_DAYS = 0.0
+# Sentinel event-index ref used when a wall-clock target interval contains no
+# events. The block is retained and flagged (`empty_target: true`) — NOT dropped
+# (dropping zero-event intervals biases rate/horizon tests; Pi spec item 3).
+EMPTY_TARGET_REF = -1
+
 
 def fake_hash(split: str, idx: int) -> str:
     return stable_hmac(f"{split}-{idx}", "synthetic-target-salt")
@@ -210,6 +225,208 @@ def _resolve_windows(common: dict[str, Any], target_type: str, source_dataset: s
     return max(1, window), max(1, min_context)
 
 
+def is_monotone_nondecreasing(values: Any) -> bool:
+    """True iff ``values`` is monotone nondecreasing (no negative resets).
+
+    Wall-clock blocks require ``cumulative_days`` to be monotone nondecreasing so
+    that the half-open interval [t_query, t_query + W) maps to a contiguous event
+    range and the early-``break`` scan is sound (Pi spec item 5). Simultaneous
+    events (equal ``cumulative_days``) are allowed — only a strict *decrease*
+    (a negative reset) is rejected.
+    """
+    prev: float | None = None
+    for v in values:
+        fv = float(v)
+        if prev is not None and fv < prev:
+            return False
+        prev = fv
+    return True
+
+
+def wall_clock_feasible(
+    seq_len: int,
+    *,
+    context_start: int = 0,
+    min_context: int = DEFAULT_MIN_CONTEXT,
+) -> bool:
+    """Whether a wall-clock T0 block can be carved from ``seq_len`` events.
+
+    Unlike the event-index path, the wall-clock target may legitimately be empty
+    (a zero-event interval is encoded + flagged, not dropped), so feasibility
+    only requires enough context plus at least one candidate future position.
+    """
+    context_start = max(0, int(context_start))
+    min_context = max(1, int(min_context))
+    seq_len = int(seq_len)
+    lowest_context_end = context_start + min_context - 1
+    max_context_end = seq_len - 2  # leave >= 1 potential future event position
+    return lowest_context_end <= max_context_end
+
+
+def _resolve_wall_clock_params(
+    common: dict[str, Any], target_type: str, source_dataset: str | None
+) -> dict[str, Any]:
+    """Resolve wall-clock (W, gap, min_context, common horizons) per type + source.
+
+    Config lives under ``target_blocks.<type>.wall_clock`` with per-source
+    overrides under ``target_blocks.<type>.per_source.<SOURCE>.wall_clock`` so
+    short per-admission MIMIC sequences can use a narrower wall-clock window for
+    yield while the cross-source hierarchy claim is still made at *common*
+    horizons (Pi spec item 6; MIMIC windowing).
+    """
+    tcfg = common.get("target_blocks", {}) or {}
+    tspec = tcfg.get(target_type, {})
+    if not isinstance(tspec, dict):
+        tspec = {}
+    wc = tspec.get("wall_clock", {}) or {}
+    default_window = float(wc.get("window_days", DEFAULT_WALL_CLOCK_WINDOW_DAYS))
+    default_gap = float(wc.get("gap_days", DEFAULT_WALL_CLOCK_GAP_DAYS))
+    default_min_context = int(tspec.get("min_context", DEFAULT_MIN_CONTEXT))
+    common_horizons = [float(h) for h in (wc.get("common_horizons_days") or [])]
+
+    per_source = (tspec.get("per_source", {}) or {}).get(source_dataset or "", {}) or {}
+    ps_wc = per_source.get("wall_clock", {}) or {}
+    window = float(ps_wc.get("window_days", default_window))
+    gap = float(ps_wc.get("gap_days", default_gap))
+    min_context = int(per_source.get("min_context", default_min_context))
+    return {
+        "window_days": max(1e-9, window),
+        "gap_days": max(0.0, gap),
+        "min_context": max(1, min_context),
+        "common_horizons_days": common_horizons,
+    }
+
+
+def _wall_clock_target_span(
+    cumulative_days: Any,
+    seq_len: int,
+    context_end: int,
+    t_query: float,
+    window_days: float,
+    *,
+    segment_ids: Any = None,
+) -> tuple[int, int, int]:
+    """Event-index span for the half-open interval [t_query, t_query + window_days).
+
+    Membership rules (Pi spec items 1, 4, 5):
+      - half-open: an event at exactly ``t_query`` is *included*; one at exactly
+        ``t_query + window_days`` is *excluded*.
+      - only events strictly after ``context_end`` are eligible (the target is the
+        future relative to context; this also keeps the context-end event out of
+        the target when gap == 0).
+      - boundary-respect: if ``segment_ids`` is provided, the scan stops at the
+        first event whose segment differs from the context-end segment — a block
+        must not cross a declared admission/segment boundary. Segments are assumed
+        contiguous (admission concatenation), so the first differing segment ends
+        eligibility.
+    Returns ``(target_start_ref, target_end_ref, n_events)``; an empty interval
+    returns ``(EMPTY_TARGET_REF, EMPTY_TARGET_REF, 0)``.
+    """
+    hi = t_query + window_days
+    seg_of_context = None
+    if segment_ids is not None:
+        seg_of_context = segment_ids[context_end]
+    first_idx = -1
+    last_idx = -1
+    n_events = 0
+    for i in range(context_end + 1, int(seq_len)):
+        if segment_ids is not None and segment_ids[i] != seg_of_context:
+            break  # do not cross a declared segment boundary
+        day = float(cumulative_days[i])
+        if day >= hi:
+            break  # monotone: nothing further can fall inside the upper bound
+        if day >= t_query:
+            if first_idx < 0:
+                first_idx = i
+            last_idx = i
+            n_events += 1
+        # day < t_query (gap skipped past this near event): keep scanning
+    if n_events == 0:
+        return EMPTY_TARGET_REF, EMPTY_TARGET_REF, 0
+    return first_idx, last_idx, n_events
+
+
+def _t0_wall_clock_block(
+    seq_id: str,
+    split: str,
+    seq_len: int,
+    source_dataset: str,
+    ordinal: int,
+    cumulative_days: Any,
+    window_days: float,
+    gap_days: float,
+    *,
+    context_start: int = 0,
+    min_context: int = DEFAULT_MIN_CONTEXT,
+    segment_ids: Any = None,
+    common_horizons: list[float] | None = None,
+) -> dict[str, Any] | None:
+    """Build a wall-clock T0 target block, or None if infeasible / non-monotone.
+
+    Returns None (a *rejection*, counted by the caller) when the window config is
+    invalid, the sequence is too short, or ``cumulative_days`` is not monotone
+    nondecreasing (negative reset). A zero-event target is NOT a rejection: the
+    block is returned with ``empty_target: true`` so it can be counted downstream.
+    """
+    context_start = max(0, int(context_start))
+    min_context = max(1, int(min_context))
+    window_days = float(window_days)
+    gap_days = max(0.0, float(gap_days))
+    if window_days <= 0:
+        return None
+    n = len(cumulative_days)
+    seq_len = min(int(seq_len), n)
+    if seq_len <= 0:
+        return None
+    if not is_monotone_nondecreasing([cumulative_days[i] for i in range(seq_len)]):
+        return None  # negative reset — reject (Pi spec item 5)
+    if not wall_clock_feasible(seq_len, context_start=context_start, min_context=min_context):
+        return None
+    lowest_context_end = context_start + min_context - 1
+    max_context_end = seq_len - 2
+    midpoint = (context_start + seq_len) // 2
+    context_end = min(max(lowest_context_end, midpoint), max_context_end)
+    if context_end < context_start or context_end < lowest_context_end:
+        return None
+    t_context_end = float(cumulative_days[context_end])
+    t_query = t_context_end + gap_days
+    target_start_ref, target_end_ref, n_target = _wall_clock_target_span(
+        cumulative_days, seq_len, context_end, t_query, window_days, segment_ids=segment_ids
+    )
+    empty_target = n_target == 0
+    block: dict[str, Any] = {
+        "block_id": stable_hmac(
+            f"T0W|{seq_id}|{context_start}|{context_end}|{t_query:.6f}|W{window_days:.6f}|gap{gap_days:.6f}|{ordinal}",
+            "clinical-jepa-real-block-v0",
+        ),
+        "patient_hash": stable_hmac(seq_id, "clinical-jepa-rekeyed-seq"),
+        "sequence_id": seq_id,
+        "sequence_group": seq_id,
+        "split": split,
+        "target_type": "T0",
+        "context_start_ref": int(context_start),
+        "context_end_ref": int(context_end),
+        "target_start_ref": int(target_start_ref),
+        "target_end_ref": int(target_end_ref),
+        "horizon_descriptor": f"wall_clock_gap_{gap_days:g}d_window_{window_days:g}d",
+        "source_dataset": source_dataset,
+        "unit": "wall_clock_days",
+        "window_days": float(window_days),
+        "gap_days": float(gap_days),
+        "t_query": float(t_query),
+        "t_context_end_day": float(t_context_end),
+        "empty_target": bool(empty_target),
+        "n_target_events": int(n_target),
+        "boundary_respect": bool(segment_ids is not None),
+    }
+    if common_horizons:
+        block["common_horizons_days"] = [float(h) for h in common_horizons]
+        block["is_common_horizon"] = bool(
+            any(abs(float(h) - window_days) < 1e-9 for h in common_horizons)
+        )
+    return block
+
+
 def _outcome_positions_in_span(outcome: Any, start: int, end: int) -> int:
     """Count is_outcome==1 positions in the inclusive span [start, end]."""
     if outcome is None:
@@ -237,6 +454,15 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
     outcome_channel = _resolve_outcome_channel(dataset_cfg)
     endpoint_margin = max(0, int(args.endpoint_proximal_margin))
 
+    # Unit mode: "event_index" (default, unchanged) or "wall_clock" (Pi spec).
+    # getattr keeps hand-built argparse.Namespaces in tests backward-compatible.
+    unit = str(getattr(args, "unit", "event_index"))
+    time_channel = str(dataset_cfg.get("time_channel") or "cumulative_days")
+    # Boundary-respect hook (Pi spec item 4): an optional per-event segment/admission
+    # id channel. If a sequence declares boundaries, a wall-clock block must not
+    # cross one. Default (per-admission sequence => one segment) = within-sequence.
+    segment_channel = getattr(args, "segment_channel", None) or dataset_cfg.get("segment_channel")
+
     blocks: list[dict[str, Any]] = []
     counts: dict[str, dict[str, int]] = {}
     source_spec = _source_spec(split_manifest, args.source_role)
@@ -247,6 +473,15 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
     t1_no_anchor = {"train": 0, "dev": 0, "test": 0}
     refused_outcome_in_context = {"train": 0, "dev": 0, "test": 0}
     blocks_by_source: dict[str, int] = {}
+    # Wall-clock diagnostics (Pi spec items 3, 5): count — never silently drop —
+    # zero-event targets and monotonicity (negative-reset) rejections.
+    monotonicity_violations = {"train": 0, "dev": 0, "test": 0}
+    missing_time_channel = {"train": 0, "dev": 0, "test": 0}
+    empty_target_blocks = {"train": 0, "dev": 0, "test": 0}
+    wall_clock_blocks = {"train": 0, "dev": 0, "test": 0}
+    boundary_respected_sequences = {"train": 0, "dev": 0, "test": 0}
+    wall_clock_windows_by_source: dict[str, float] = {}
+    wall_clock_common_horizons: list[float] = []
 
     for split in ["train", "dev", "test"]:
         index_path, split_h5_path = _source_paths(source_spec, split)
@@ -275,10 +510,63 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
                 if outcome_channel and grp is not None and outcome_channel in grp:
                     outcome = grp[outcome_channel][:]
 
+                made = False
+
+                if unit == "wall_clock":
+                    if grp is None or time_channel not in grp:
+                        missing_time_channel[split] += 1
+                        skipped_short[split] += 1
+                        continue
+                    cumulative_days = grp[time_channel][:]
+                    segment_ids = (
+                        grp[segment_channel][:]
+                        if (segment_channel and segment_channel in grp)
+                        else None
+                    )
+                    if "T0" in args.targets:
+                        wc = _resolve_wall_clock_params(common, "T0", source_dataset)
+                        wall_clock_windows_by_source[source_dataset] = wc["window_days"]
+                        if wc["common_horizons_days"] and not wall_clock_common_horizons:
+                            wall_clock_common_horizons = wc["common_horizons_days"]
+                        block = _t0_wall_clock_block(
+                            seq_id, split, seq_len, source_dataset, 0,
+                            cumulative_days, wc["window_days"], wc["gap_days"],
+                            context_start=source_prefix_len, min_context=wc["min_context"],
+                            segment_ids=segment_ids, common_horizons=wc["common_horizons_days"],
+                        )
+                        if block is None:
+                            # Distinguish a monotonicity rejection from plain infeasibility.
+                            if not is_monotone_nondecreasing(
+                                [cumulative_days[i] for i in range(min(int(seq_len), len(cumulative_days)))]
+                            ):
+                                monotonicity_violations[split] += 1
+                        else:
+                            leak = _outcome_positions_in_span(
+                                outcome, block["context_start_ref"], block["context_end_ref"] + endpoint_margin
+                            )
+                            if leak > 0:
+                                refused_outcome_in_context[split] += 1
+                            else:
+                                block["sequence_file"] = h5_path
+                                block["endpoint_safe"] = True
+                                block["context_outcome_positions"] = 0
+                                blocks.append(block)
+                                counts.setdefault(split, {}).setdefault("T0", 0)
+                                counts[split]["T0"] += 1
+                                blocks_by_source[source_dataset] = blocks_by_source.get(source_dataset, 0) + 1
+                                wall_clock_blocks[split] += 1
+                                if block["empty_target"]:
+                                    empty_target_blocks[split] += 1
+                                if segment_ids is not None:
+                                    boundary_respected_sequences[split] += 1
+                                made = True
+                    if not made:
+                        skipped_short[split] += 1
+                    continue
+
                 t0_window, t0_min_context = _resolve_windows(common, "T0", source_dataset)
                 t1_window, t1_min_context = _resolve_windows(common, "T1", source_dataset)
 
-                made = False
                 if "T0" in args.targets:
                     block = _t0_block(
                         seq_id, split, seq_len, source_dataset, 0, t0_window, args.t0_gap_events,
@@ -347,12 +635,106 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
         "endpoint_proximal_margin": int(endpoint_margin),
         "outcome_label_channel": outcome_channel,
         "source_role": args.source_role,
+        "unit": unit,
         "aggregate_only": True,
+    }
+    if unit == "wall_clock":
+        total_wc = sum(wall_clock_blocks.values())
+        total_empty = sum(empty_target_blocks.values())
+        report["wall_clock"] = {
+            "time_channel": time_channel,
+            "segment_channel": segment_channel,
+            "wall_clock_blocks": wall_clock_blocks,
+            "empty_target_blocks": empty_target_blocks,
+            # Empty intervals are ENCODED (flagged empty_target) not dropped; the
+            # rate is also surfaced so the wall-clock rung can be treated as
+            # conditional/incomplete if empties dominate (Pi spec item 3).
+            "empty_target_rate": (total_empty / total_wc) if total_wc else 0.0,
+            "monotonicity_violations": monotonicity_violations,
+            "missing_time_channel": missing_time_channel,
+            "boundary_respected_sequences": boundary_respected_sequences,
+            # Source-specific windows are allowed for yield; the cross-source
+            # hierarchy claim (rung 0) is made only at common horizons (item 6).
+            "windows_days_by_source": wall_clock_windows_by_source,
+            "common_horizons_days": wall_clock_common_horizons,
+        }
+    return blocks, {"counts": counts, "report": report}
+
+
+def _synthetic_wall_clock_blocks(args: argparse.Namespace, split_manifest: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Dry-run wall-clock blocks (no h5): synthetic block refs + wall-clock metadata.
+
+    Emits both populated and empty-target blocks so the empty-target flag and the
+    rate report are exercised end-to-end without governed data (Pi spec item 3).
+    """
+    count_map = {
+        "train": int(split_manifest["counts"].get("patients_train", 0)),
+        "dev": int(split_manifest["counts"].get("patients_dev", 0)),
+        "test": int(split_manifest["counts"].get("patients_test", 0)),
+    }
+    window_days = float(getattr(args, "wall_clock_window_days", DEFAULT_WALL_CLOCK_WINDOW_DAYS))
+    gap_days = float(getattr(args, "wall_clock_gap_days", DEFAULT_WALL_CLOCK_GAP_DAYS))
+    source = split_manifest.get("dataset", "synthetic")
+    blocks: list[dict[str, Any]] = []
+    empty_target_blocks = {"train": 0, "dev": 0, "test": 0}
+    wall_clock_blocks = {"train": 0, "dev": 0, "test": 0}
+    for split, n in count_map.items():
+        for i in range(min(n, args.max_synthetic_per_split)):
+            ph = fake_hash(split, i)
+            context_end = 10 + i
+            t_context_end = float(context_end)
+            t_query = t_context_end + gap_days
+            empty = i % 4 == 0  # ~1 in 4 intervals empty, encoded (not dropped)
+            n_target = 0 if empty else 3
+            target_start = EMPTY_TARGET_REF if empty else context_end + 1
+            target_end = EMPTY_TARGET_REF if empty else context_end + n_target
+            blocks.append({
+                "block_id": stable_hmac(f"T0W-{split}-{i}", "synthetic-block"),
+                "patient_hash": ph,
+                "split": split,
+                "target_type": "T0",
+                "context_start_ref": 0,
+                "context_end_ref": context_end,
+                "target_start_ref": target_start,
+                "target_end_ref": target_end,
+                "horizon_descriptor": f"wall_clock_gap_{gap_days:g}d_window_{window_days:g}d",
+                "source_dataset": source,
+                "unit": "wall_clock_days",
+                "window_days": window_days,
+                "gap_days": gap_days,
+                "t_query": t_query,
+                "t_context_end_day": t_context_end,
+                "empty_target": bool(empty),
+                "n_target_events": int(n_target),
+                "boundary_respect": False,
+            })
+            wall_clock_blocks[split] += 1
+            if empty:
+                empty_target_blocks[split] += 1
+    counts: dict[str, dict[str, int]] = {}
+    for b in blocks:
+        counts.setdefault(b["split"], {}).setdefault(b["target_type"], 0)
+        counts[b["split"]][b["target_type"]] += 1
+    total_wc = sum(wall_clock_blocks.values())
+    total_empty = sum(empty_target_blocks.values())
+    report = {
+        "dry_run": True,
+        "unit": "wall_clock",
+        "aggregate_only": True,
+        "wall_clock": {
+            "wall_clock_blocks": wall_clock_blocks,
+            "empty_target_blocks": empty_target_blocks,
+            "empty_target_rate": (total_empty / total_wc) if total_wc else 0.0,
+            "windows_days_by_source": {source: window_days},
+            "common_horizons_days": [],
+        },
     }
     return blocks, {"counts": counts, "report": report}
 
 
 def _synthetic_blocks(args: argparse.Namespace, split_manifest: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if str(getattr(args, "unit", "event_index")) == "wall_clock":
+        return _synthetic_wall_clock_blocks(args, split_manifest)
     count_map = {
         "train": int(split_manifest["counts"].get("patients_train", 0)),
         "dev": int(split_manifest["counts"].get("patients_dev", 0)),
@@ -390,6 +772,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--t0-gap-events", type=int, default=0, help="Number of events to skip between context end and T0 target start")
     ap.add_argument("--endpoint-proximal-margin", type=int, default=0, help="Additional events after context end that must also be free of is_outcome==1 (endpoint-proximal exclusion)")
     ap.add_argument("--source-role", default="primary", choices=["primary", "external_validation"], help="Source to extract from when the split manifest includes external validation metadata")
+    ap.add_argument("--unit", default="event_index", choices=["event_index", "wall_clock"], help="Target-block definition: event_index (default) or wall_clock (absolute cumulative_days half-open [t_query, t_query+W) windows; W/gap from arms config target_blocks.<type>.wall_clock)")
+    ap.add_argument("--segment-channel", default=None, help="Optional per-event h5 channel declaring admission/segment boundaries; wall-clock blocks will not cross a boundary. Defaults to dataset_config.segment_channel.")
+    ap.add_argument("--wall-clock-window-days", type=float, default=DEFAULT_WALL_CLOCK_WINDOW_DAYS, help="Dry-run only: synthetic wall-clock window W in days")
+    ap.add_argument("--wall-clock-gap-days", type=float, default=DEFAULT_WALL_CLOCK_GAP_DAYS, help="Dry-run only: synthetic wall-clock scheduled gap in days")
     args = ap.parse_args(argv)
 
     dataset_cfg = load_yaml(args.dataset_config)
@@ -397,14 +783,19 @@ def main(argv: list[str] | None = None) -> int:
     split_manifest = read_json(args.split_manifest)
     outdir = ensure_dir(args.output_dir)
 
+    wc_note = (
+        " Wall-clock blocks carry t_query/window as RELATIVE day offsets (days since"
+        " sequence start), not absolute calendar timestamps."
+        if args.unit == "wall_clock" else ""
+    )
     if args.dry_run:
         blocks, details = _synthetic_blocks(args, split_manifest)
         dry_run = True
-        notes = "synthetic block refs only; no raw tokens or timestamps"
+        notes = "synthetic block refs only; no raw tokens or absolute timestamps." + wc_note
     else:
         blocks, details = _real_blocks(args, dataset_cfg, split_manifest)
         dry_run = False
-        notes = "Real re-keyed bundle block refs only; no raw tokens, source ids, timestamps, or patient examples."
+        notes = "Real re-keyed bundle block refs only; no raw tokens, source ids, absolute timestamps, or patient examples." + wc_note
 
     manifest = {
         "schema_version": "clinical-jepa-target-block-manifest-v0",
