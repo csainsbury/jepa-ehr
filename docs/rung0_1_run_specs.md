@@ -22,7 +22,7 @@ Operationalises the readiness gate and the two cheapest diagnostic rungs, with P
 ## Rung −1 — substrate / eval-readiness gate (fail-closed; gates everything)
 
 - **Do:** build the JSONL index carrying per-sequence `source_dataset`; emit a **per-source manifest** — patients/sequences/windows, token-count median/quantiles, wall-clock span, candidate-action frequency, **block yield under each proposed (source-specific) horizon**, split counts.
-- **Fail-closed rule:** if either source contributes fewer than **[FREEZE: N_min]** valid matched windows per split, the indexer errors — no silent near-all-SCID result.
+- **Fail-closed rule:** if either source contributes fewer than **500** valid matched windows per source per split (*proposed floor — confirm with Pi*), the indexer errors — no silent near-all-SCID result.
 - **Also:** the two leakage guards above pass their unit tests.
 - **Gate:** both sources yield adequate matched windows + audits green ⇒ proceed to rung 0.
 
@@ -30,14 +30,14 @@ Operationalises the readiness gate and the two cheapest diagnostic rungs, with P
 
 - **Objective:** does a timescale separation exist → build a hierarchical JEPA (fable5 R2.1)?
 - **Method:** predicted-latent retrieval accuracy vs **wall-clock** horizon at coarse (block) vs fine (event) granularity, **source-stratified** (within MIMIC, within SCI-D); add count/rate probes and **length-matched hard negatives** (Pi: horizon-decay alone is necessary-not-sufficient); the round-1 `d_t` drift sweep at each level; a 2-level-vs-flat matched-compute drift ablation.
-- **Pre-registered gate [FREEZE before running]:** build the hierarchy iff coarse per-unit-wall-clock decay is slower than fine by ≥ **[Δ, with CI]** in **both** sources; else single-scale.
+- **Pre-registered gate [proposed — confirm with Pi before running]:** build the hierarchy iff coarse Recall@10 at the median wall-clock horizon exceeds fine by **≥ 0.10 with non-overlapping 95% CIs, in both MIMIC and SCI-D**; else single-scale.
 - **Scope:** gates **hierarchy only**, not the programme.
 
 ## Rung 1 — frozen-decode ceiling (is the latent decodable?)
 
 - **Objective:** can pooled `z⁺` decode to exact `(token, Δt)` order/count/timing (P1/P5)? Upper-bounds any generator.
 - **Method:** freeze the JEPA target encoder; train only a read-out decoder `D` on `(z⁺ → future)`; contrast `D(mean z⁺)` vs `D(sampled z⁺)`.
-- **Metrics + pre-registered "adequate decode" criteria [FREEZE]:** exact-order recon ≥ **[x]**; exact-count recon ≥ **[x]**; timing via time-rescaling QQ within **[band]**; mean-vs-sample crispness gap ≥ **[x]**.
+- **Metrics + pre-registered "adequate decode" criteria [proposed — confirm with Pi]:** exact-order recon **≥ 0.70**; exact-count recon **≥ 0.80**; timing = time-rescaling KS not rejected at α=0.05; mean-vs-sample crispness gap **≥ 0.15**.
 - **Decoder-free cross-check:** predict raw summary statistics (counts, type marginals, inter-event-time quantiles) straight from `z⁺` vs the data — bounds the decoder's generative-prior masking (falsifier ladder).
 - **Attribution:** `D(z⁺)` fails ⇒ representation bottleneck (change targets: VQ / seq-of-latents); `D(z⁺)` fine but `D(mean)` blurs while `D(sample)` crisp ⇒ predictor bottleneck (go distributional).
 
