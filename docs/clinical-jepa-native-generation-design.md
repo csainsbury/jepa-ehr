@@ -10,7 +10,7 @@ extends:
 consult: fable5 (external, pure-abstract ML methods consult; two rounds)
 consult_transcript: ascend-flat:coordination/fable5_jepa_thread.md (titan; verbatim two-round thread)
 substrate: joint MIMIC+SCI-D corrected 350M flex (step_150000, vocab 1050) — see §1a; supersedes old B1a/85M
-Pi-reviewed: pending
+Pi-reviewed: GO-WITH-CHANGES (2026-07-05) — required changes incorporated (§4a); verdict in coordination/jepa_pi_thread.md
 ---
 
 # Clinical-JEPA latent-native generation & counterfactual — design + decision record
@@ -104,6 +104,23 @@ fable5's refutation is sound and is the most important output of the consult, bu
 - **Exclusion clarified (Chris, 2026-07-05):** the constraint excludes only **reuse of the existing FlatASCEND** speaker. A **fresh** AR renderer conditioned on the JEPA plan is admissible. Therefore the **hybrid arm and the three-arm benchmark are in-bounds.**
 - **Stance: benchmark, don't bet.** Do not commit to pure-latent rendering on priors. The **latent plan + plan-level operator is the common spine** of every arm and is where JEPA earns its keep (P4). The **renderer is the open variable** — pure-latent vs fresh AR speaker — to be settled by the three-arm benchmark against the §4.1 hard bar, augmented with the counterfactual-render-faithfulness probe from §4.2.
 
+## 4a. Gate outcome (Pi, 2026-07-05): GO-WITH-CHANGES — incorporated
+
+Full verdict in `coordination/jepa_pi_thread.md`. Direction endorsed; 8 changes are required before rung 0 and are now binding on this plan:
+
+1. **Rung −1 substrate/eval-readiness gate** — a per-source manifest (patients/sequences/windows, token & wall-clock quantiles, candidate-action frequency, block yield per horizon, split counts); the indexer **fails closed** if a source under-contributes. (See `rung0_1_run_specs.md`.)
+2. **MIMIC windowing — decided (Chris, 2026-07-05):** source-specific shorter MIMIC wall-clock windows for representation/generation; **MIMIC↔SCI-D demoted to a *supporting* transportability diagnostic**; the **semi-synthetic oracle is the *primary*** counterfactual yardstick.
+3. **Mask source shortcuts** — `DATASET:*` and source-only anchors are unavailable to the encoder/predictor/operator (eval-only, for stratification); source-matched/within-source distractors + a source-prediction probe from latents.
+4. **Real `is_outcome` leakage audit now** — exclude `is_outcome==1` and endpoint-proximal positions from context/target/eval, with unit tests + a manifest (replaces the stub).
+5. **Latent-space:** fresh minimal v0B JEPA is the primary first latent; frozen 350M states are a comparator/teacher arm only.
+6. **Pre-register numeric gates** before looking at results — concrete effect-size/CI for "substantially slower" (rung 0), "adequate decode" (rung 1), non-flat sensitivity, `d_t/v_t` failure, overlap thresholds, abstention horizons.
+7. **Pre-register the three arms + metrics now** — flat AR / pure-latent / **hybrid (starts immediately as a design/benchmark arm, not a fallback)**; the AR-renderer/hybrid interface + faithfulness probes designed from the start (heavy training stays gated).
+8. **Specify the semi-synthetic oracle before arm training** — known action effects, a confounded behaviour policy, overlap failures, no-effect controls, source-like rate/length distributions.
+
+**Correction to §4.2 (Pi):** counterfactual-render faithfulness is **not** unique to pure-latent — the hybrid can be given it via plan-faithfulness losses + re-encode/contrast probes. So the pure-latent bet must beat that **strengthened** hybrid; the §4.1 bar is raised accordingly.
+
+**Language / scope discipline (Pi):** no "treatment effect" / "causal accuracy" — use "overlap-gated associational operator," "transportability diagnostic," "semi-synthetic known-effect accuracy." **Abstention coverage is a headline metric.** Per-source vigintile effects are **rank-scale, not raw-scale**. Candidate normalisation matches source + wall-clock horizon + length + event rate.
+
 ## 5. Architecture direction (common spine + open variable)
 
 - **Latent plan (spine):** distributional predictor `p(z|context)`; VQ/discrete or sequence-of-latents targets for decodability; two-phase EMA-freeze; stochastic predictor + k-step variance regulariser for rollout stability; **hierarchy iff the horizon-decay gate passes.**
@@ -116,14 +133,15 @@ fable5's refutation is sound and is the most important output of the consult, bu
 
 | Rung | Test | Decides | Gate to proceed |
 |---|---|---|---|
+| −1 | **Substrate/eval-readiness manifest** (per-source counts, token & wall-clock quantiles, block yield per horizon, split counts; indexer **fails closed** if a source under-contributes) + **leakage guards live** (`DATASET:*` masked to eval-only; real `is_outcome` audit + unit tests) | Is the joint substrate valid & leakage-safe to run on? | Both sources yield adequate matched windows and audits pass; else fix before rung 0 |
 | 0 | **Coarse-vs-fine horizon-decay curve vs wall-clock** (reuses existing retrieval eval at two granularities) | Does a timescale separation / abstraction edge exist? | Coarse decays substantially slower per unit time ⇒ hierarchy worth building; else single-scale |
 | 1 | **Frozen-decode ceiling** `D(z⁺)` — exact order/count/timing recon | Is the latent decodable at all (P1)? Upper-bounds any generator | `D(z⁺)` recon adequate ⇒ latent is generation-capable; else change targets (VQ / seq-of-latents) |
 | 2 | **No-training rollout `d_t` / `v_t` sweep** | Drift vs attractor-collapse vs EMA-nonstationarity (P2) | Signatures identify which stabiliser is needed before training dynamics |
 | 3 | **Falsifier ladder** — latent-corruption sensitivity curve + `D(z⁺)`-vs-`D(ẑ)` split + decoder-free summary heads | Is the validation channel trustworthy (R2.2/P5)? | Sensitivity curve non-flat ⇒ falsifier can see degradation; else add summary heads before trusting any generation metric |
-| 4 | **Cross-environment invariance** (MIMIC ↔ SCI-D), overlap-decay curve | Genuine operator vs re-encoded propensity (P4) | Effect transfers A→B ⇒ operator is causal-ish and worth rolling out; report validity horizon |
+| 4 | **Transportability diagnostic** (MIMIC↔SCI-D, *supporting* not primary; source-matched windows + overlap-decay) | Does the operator transport across sources (supporting evidence only) | Not near-free — requires common actions, matched wall-clock horizons, overlap, and source-balanced windows first; the **semi-synthetic oracle (rung 5) is the primary** counterfactual yardstick |
 | 5 | **Three-arm benchmark** — flat AR / pure-latent / hybrid — on (a) raw-generation metrics and (b) validated counterfactual accuracy (semi-synthetic + cross-env), plus a **counterfactual-render-faithfulness probe** on the hybrid boundary | Which renderer; is the pure-latent bet justified (§4.1 bar) | Pure-latent must clear parity-plus-counterfactual-win; else adopt the hybrid |
 
-Rungs 0–3 are largely training-free / reuse existing machinery; rung 4 uses an existing asset; rung 5 is the only new-training investment and is deferred behind the gates.
+Rung −1 gates all others (fail-closed readiness + live leakage guards). Rungs 0–3 are largely training-free; **rung 0 gates hierarchy only**, not the whole programme. Rung 4 is a *supporting* transportability diagnostic (not near-free — see the row). The **semi-synthetic oracle spec is pre-registered before rung 5** (the only new-training investment), and the **three arms + numeric gates are pre-registered now** (§4a), with the hybrid an immediate design arm.
 
 ## 7. Governance / safety boundary
 
