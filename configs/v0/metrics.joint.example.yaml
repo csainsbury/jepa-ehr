@@ -1,0 +1,56 @@
+# Clinical-JEPA v0 metrics config — joint MIMIC + SCI-D corrected substrate.
+# Copy to metrics.joint.yaml after implementation choices are approved.
+# Source-aware distractor grouping is mandatory on the joint substrate so SCID
+# and MIMIC are never each other's distractors (removes the DATASET source
+# shortcut from retrieval; rung specs candidate normalisation).
+
+schema_version: clinical-jepa-metrics-config-v0
+
+requirements:
+  require_passing_leakage_audit: true
+  aggregate_only_outputs: true
+  patient_level_aggregation: true
+  confidence_intervals: bootstrap_by_patient_if_available
+
+splits:
+  tune_on: dev
+  final_report_on: test
+
+retrieval:
+  enabled: true
+  metrics: [recall_at_1, recall_at_5, recall_at_10, mrr, true_target_percentile]
+  # These map to clinical_jepa.eval.retrieval POLICIES (source-aware variants).
+  distractor_policies:
+    - same_source_split_target_type
+    - same_source_split_target_type_len_seq_util_bin
+  report_by_target_type: [T0, T1]
+  report_by_source: [SCID, MIMIC]
+  require_horizon_in_metric_record: true
+
+collapse_diagnostics:
+  enabled: true
+  metrics:
+    - effective_rank
+    - per_dimension_variance
+    - nearest_neighbour_patient_diversity
+    - average_target_predictor_delta
+
+source_shortcut_diagnostics:
+  enabled: true
+  # Reported by clinical_jepa.eval.source_probe on pooled context latents.
+  probe: source_prediction_probe_from_latents
+  pass_if: accuracy_near_source_base_rate
+
+utilisation_diagnostics:
+  enabled: true
+  features:
+    - prefix_sequence_length
+    - lab_count
+    - medication_count
+    - measurement_density
+
+reporting:
+  output_dir: run-workspace/state/task-work/clinical-jepa-pilot/v0/results-joint
+  write_markdown_summary: true
+  write_json_records: true
+  log_patient_level_predictions: false

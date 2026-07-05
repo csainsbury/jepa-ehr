@@ -1,0 +1,127 @@
+# Clinical-JEPA v0 arms config — joint MIMIC + SCI-D corrected substrate.
+# Copy to arms.joint.yaml and replace placeholders only after human approval.
+#
+# vocab_size is NOT set here: the v0B / v0E encoders read vocabulary.vocab_size
+# (=1050) from the dataset config. (train_minimal_jepa.resolve_vocab_size warns
+# and would OOB-crash if the dataset config omitted it.)
+
+schema_version: clinical-jepa-arms-config-v0
+
+common:
+  target_blocks:
+    T0:
+      enabled: true
+      event_count_window: 32
+      min_context: 8
+      time_window_hours: 24
+      require_context_before_target: true
+      # Per-source window sizing: short per-admission MIMIC sequences use a
+      # smaller window so they are not all silently dropped (A10 / rung specs).
+      per_source:
+        SCID:
+          event_count_window: 32
+          min_context: 8
+        MIMIC:
+          event_count_window: 8
+          min_context: 4
+    T1:
+      enabled: true
+      event_count_window: 32
+      min_context: 8
+      per_source:
+        SCID: {event_count_window: 32, min_context: 8}
+        MIMIC: {event_count_window: 8, min_context: 4}
+      medication_family_mapping_path: /PLACEHOLDER/safe/config/medication_families.yaml
+      anchors: [new_start, switch]
+      target_window_hours: 72
+    T2:
+      enabled: false
+      # is_outcome_label channel is wired (leakage audit excludes it from
+      # context). DEFERRED: the wall-clock endpoint target-block DEFINITION is a
+      # design decision (clean seam left in extract_blocks: unit=event_index today).
+      reason: endpoint target-block definition (wall-clock horizon) deferred; is_outcome_label channel wired for exclusion
+  horizons:
+    - name: short
+      hours: 24
+    - name: medium
+      hours: 72
+    - name: long
+      days: 30
+  max_windows_per_patient:
+    train: 32
+    dev: 16
+    test: 16
+
+v0A_flatascend_scaffold:
+  # Re-pointed to a corrected joint 350M checkpoint. Kept gated: a reviewed
+  # governed run sets enabled: true after confirming the checkpoint + source_root.
+  enabled: false
+  requires_human_approval_before_execution: true
+  checkpoint_path: /PLACEHOLDER/approved/joint_corrected_350m/checkpoint.pt
+  source_root: /PLACEHOLDER/approved/ascend-flat-src
+  tokenizer_version: flatascend_joint_corrected_v1
+  prefix_only_embeddings: true
+  target_layers: [final]
+  pooling: [mean, final_token]
+  predictors:
+    - linear
+    - mlp
+  ablations:
+    horizon_descriptor: [present, absent]
+
+v0B_minimal_jepa:
+  enabled: false
+  requires_human_approval_before_execution: true
+  token_embedding_dim: 128
+  time_embedding_dim: 32
+  encoder_type: small_transformer
+  context_encoder:
+    layers: 2
+    heads: 4
+    hidden_dim: 256
+  target_encoder:
+    ema_decay: 0.996
+    stop_gradient: true
+  predictor:
+    layers: 2
+    hidden_dim: 256
+    use_horizon_descriptor: true
+  losses:
+    latent_prediction: cosine_or_mse_placeholder
+    variance_regularization_weight: 1.0
+    covariance_regularization_weight: 0.04
+  training:
+    batch_size: 128
+    max_steps: 1000
+    learning_rate: 0.0003
+    dry_run_steps: 2
+
+v0C_raw_meds_lite:
+  enabled: false
+  requires_explicit_raw_lite_approval: true
+  status: gated
+  minimal_schema_only: true
+
+v0D_query_baseline:
+  enabled: false
+  requires_human_approval_before_execution: true
+  query_descriptors:
+    - query_id: next_med_family
+      target_type: T0
+      task_type: multiclass
+    - query_id: next_lab_direction
+      target_type: T0
+      task_type: multiclass
+    - query_id: medication_change_followup
+      target_type: T1
+      task_type: binary_or_multiclass
+  models:
+    - empirical_prior
+    - bag_count_time
+    - utilisation_intensity
+    - logistic_or_linear_probe
+
+safety:
+  require_passing_leakage_audit: true
+  no_patient_level_logging: true
+  no_external_upload: true

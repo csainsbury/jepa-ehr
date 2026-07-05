@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-rung-minus1-readiness-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "gate_status", "min_valid_windows_per_source_per_split", "split_counts", "per_source", "aggregate_only"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-rung-minus1-readiness-v0"]},
+    "created_utc": {"type": "string"},
+    "gate_status": {"type": "string", "enum": ["pass", "fail"]},
+    "min_valid_windows_per_source_per_split": {"type": "integer", "minimum": 0},
+    "source_prefix_len": {"type": "integer", "minimum": 0},
+    "t0_gap_events": {"type": "integer", "minimum": 0},
+    "split_counts": {"type": "object"},
+    "per_source": {"type": "object"},
+    "under_floor": {"type": "array", "items": {"type": "object"}},
+    "aggregate_only": {"type": "boolean"}
+  }
+}

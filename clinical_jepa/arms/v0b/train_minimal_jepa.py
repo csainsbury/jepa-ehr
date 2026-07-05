@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import random
 import sys
 from pathlib import Path
@@ -11,6 +12,43 @@ import numpy as np
 
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json
 from clinical_jepa.validation import validate_artifact
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_VOCAB_SIZE = 438
+
+
+def resolve_vocab_size(dataset: dict[str, Any]) -> int:
+    """Resolve the JEPA embedding vocab size from the dataset config.
+
+    The joint substrate has vocab_size=1050. If the config omits
+    ``vocabulary.vocab_size`` the old default (438) is used but a warning is
+    emitted — silently defaulting to 438 causes an embedding out-of-bounds crash
+    on the joint substrate (token ids up to 1049).
+    """
+    vocab = dataset.get("vocabulary", {}) or {}
+    vs = vocab.get("vocab_size")
+    if vs:
+        return int(vs)
+    logger.warning(
+        "dataset config has no vocabulary.vocab_size; falling back to %d. "
+        "Set vocabulary.vocab_size (e.g. 1050 for the joint MIMIC+SCI-D substrate) "
+        "to avoid an embedding out-of-bounds crash.",
+        DEFAULT_VOCAB_SIZE,
+    )
+    return DEFAULT_VOCAB_SIZE
+
+
+def max_token_id_in_examples(examples: list[tuple[str, np.ndarray, list[np.ndarray]]]) -> int:
+    """Largest token id across all context/target windows (or -1 if empty)."""
+    max_id = -1
+    for _split, ctx, targets in examples:
+        if len(ctx):
+            max_id = max(max_id, int(np.max(ctx)))
+        for t in targets:
+            if len(t):
+                max_id = max(max_id, int(np.max(t)))
+    return max_id
 
 
 def effective_rank(x: np.ndarray) -> float:
@@ -138,7 +176,7 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
     np.random.seed(seed)
     torch.manual_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
-    vocab_size = int(dataset.get("vocabulary", {}).get("vocab_size") or 438)
+    vocab_size = resolve_vocab_size(dataset)
     dim = int(args.embedding_dim)
 
     examples = _read_examples(
@@ -150,6 +188,12 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
         horizon_count=args.horizon_count,
         horizon_stride_tokens=args.horizon_stride_tokens,
     )
+    max_id = max_token_id_in_examples(examples)
+    if max_id >= vocab_size:
+        raise SystemExit(
+            f"Token id {max_id} exceeds vocab_size {vocab_size}; set the dataset "
+            "config vocabulary.vocab_size to cover the substrate (joint = 1050)."
+        )
     train = [(c, t) for split, c, t in examples if split == "train"]
     dev = [(c, t) for split, c, t in examples if split == "dev"]
     if not train:

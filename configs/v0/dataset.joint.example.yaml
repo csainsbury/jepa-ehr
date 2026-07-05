@@ -1,0 +1,118 @@
+# Clinical-JEPA v0 dataset config — joint MIMIC + SCI-D corrected substrate.
+# Copy to dataset.joint.yaml and replace placeholders only after human approval.
+# Do not put real patient identifiers, credentials, or governed h5 paths in a
+# committed config. Vocab metadata (token names / family boundaries) is safe to
+# reference; sequence h5 files are governed.
+#
+# Substrate facts (see substrate_port_scoping.md / clinical-jepa-native-generation-design.md §1a):
+#   - vocab 1050 (vigintile-factored: 43 lab measures x 20 levels)
+#   - per-token channels: token_ids, time_deltas, cumulative_days (NEW, wall-clock),
+#     is_outcome_label (NEW, per-token MACE label)
+#   - seq index 0 = DATASET:SCID(1048)/DATASET:MIMIC(1049); index 1 = [BOS]
+#   - MIMIC is per-admission and short; SCI-D is long.
+
+schema_version: clinical-jepa-dataset-config-v0
+
+run:
+  seed: 20260523
+  artifact_root: run-workspace/state/task-work/clinical-jepa-pilot
+  dry_run_default: true
+
+data_tier:
+  selected: tokenised_placeholder
+  requires_human_approval_before_execution: true
+  governance_status: governed-joint-corrected-substrate-confirm-before-use
+
+# Vocabulary metadata only (names + boundaries). Real metadata lives at:
+#   ascend-flat/outputs/joint_flat_corrected_v1/{vocabulary.json, vocab_manifest.json}
+vocabulary:
+  vocab_name: flatascend_joint_corrected_v1
+  vocab_size: 1050
+  vocab_json_path: /PLACEHOLDER/approved/joint_flat_corrected_v1/vocabulary.json
+  vocab_manifest_path: /PLACEHOLDER/approved/joint_flat_corrected_v1/vocab_manifest.json
+  factored:
+    factored_token_start: 91
+    factored_token_end: 951
+    n_measures: 43
+    max_ordinal_levels: 20
+  family_ranges:            # [start, end) per family
+    special: [0, 4]
+    demographic: [4, 51]
+    diagnosis: [51, 91]
+    lab: [91, 951]
+    medication: [951, 1032]
+    state: [1032, 1048]
+    dataset_context: [1048, 1050]
+
+# Extra per-token channels present in the joint h5 (read by build_index / extractor / audit).
+time_channel: cumulative_days              # wall-clock days since sequence start
+leakage:
+  outcome_label_dataset: is_outcome_label  # per-token MACE label channel; excluded from context
+
+# Source-shortcut mask: strip DATASET:* (idx 0) + [BOS] (idx 1) from the
+# encoder/predictor input; source retained ONLY for evaluator stratification.
+mask:
+  source_prefix_len: 2
+source_token_ids:
+  SCID: 1048
+  MIMIC: 1049
+verify_source_token: true
+
+sources:
+  primary:
+    name: flatascend-joint-corrected-v1
+    role: train_dev_test
+    # The joint substrate ships per-source h5 files and no JSONL index. Run
+    # clinical_jepa.splits.build_index to emit the combined per-split index
+    # below (carrying per-sequence source_dataset + source_h5_path). NOTE: the
+    # substrate splits are named train/val/test; the code pipeline uses
+    # train/dev/test, so `dev` maps to the substrate `*_val.h5`.
+    source_datasets:
+      - name: SCID
+        kind: per_source
+        h5_paths:
+          train: /PLACEHOLDER/approved/joint_flat_corrected_v1/scid_train.h5
+          dev: /PLACEHOLDER/approved/joint_flat_corrected_v1/scid_val.h5
+          test: /PLACEHOLDER/approved/joint_flat_corrected_v1/scid_test.h5
+      - name: MIMIC
+        kind: per_source
+        h5_paths:
+          train: /PLACEHOLDER/approved/joint_flat_corrected_v1/mimic_train.h5
+          dev: /PLACEHOLDER/approved/joint_flat_corrected_v1/mimic_val.h5
+          test: /PLACEHOLDER/approved/joint_flat_corrected_v1/mimic_test.h5
+      # Alternative for the single merged file (joint_corrected_merged/{train,val}.h5),
+      # whose group keys are prefixed (mimic_*, scid_*):
+      #   - kind: merged
+      #     group_prefixes: {SCID: "scid_", MIMIC: "mimic_"}
+      #     h5_paths: {train: .../merged/train.h5, dev: .../merged/val.h5}
+    split_index_paths:      # combined per-split JSONL from build_index
+      train: /PLACEHOLDER/run-workspace/joint_index/train.index.jsonl
+      dev: /PLACEHOLDER/run-workspace/joint_index/dev.index.jsonl
+      test: /PLACEHOLDER/run-workspace/joint_index/test.index.jsonl
+  locked_stress:
+    name: none-staged
+    role: locked_stress_no_tuning
+
+# Rung -1 readiness gate (fail-closed): the readiness emitter raises if either
+# source contributes fewer than this many valid matched windows per split.
+readiness:
+  min_valid_windows_per_source_per_split: 500   # proposed floor — confirm with Pi
+  t0_gap_events: 0
+  candidate_windows: [8, 16, 32]
+
+split:
+  policy: inherited-source-splits-no-resplitting
+  hash_method: none-exported-rekeyed-sequence-ids-only
+  write_hashed_lists: false
+
+logging:
+  aggregate_only: true
+  log_patient_examples: false
+  log_raw_tokens: false
+  log_direct_identifiers: false
+
+safety:
+  no_external_upload: true
+  stop_if_disk_free_gb_below: 100
+  stop_if_governance_unclear: true
+  stop_if_patient_linkage_missing: true

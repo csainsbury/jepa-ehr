@@ -16,6 +16,13 @@ POLICIES = [
     "same_split_target_type",
     "same_split_target_type_len_bin",
     "same_split_target_type_len_seq_util_bin",
+    # Source-aware policies: SCID and MIMIC are never each other's distractors,
+    # so the DATASET source shortcut cannot inflate retrieval recall on the joint
+    # substrate (rung0_1_run_specs.md candidate normalisation; design §4a #3).
+    "same_source_split",
+    "same_source_split_target_type",
+    "same_source_split_target_type_len_bin",
+    "same_source_split_target_type_len_seq_util_bin",
 ]
 
 
@@ -98,6 +105,32 @@ def group_key(row: dict[str, Any], policy: str) -> tuple[Any, ...]:
         )
     if policy == "same_split_target_type_len_seq_util_bin":
         return (
+            row.get("split"),
+            row.get("target_type"),
+            length_bin(row.get("context_len")),
+            length_bin(row.get("target_len")),
+            length_bin(row.get("sequence_len")),
+            count_bin(row.get("context_med_count")),
+            count_bin(row.get("context_lab_count")),
+            count_bin(row.get("context_state_count")),
+        )
+    # Source-aware policies prepend source_dataset so distractor pools never mix
+    # SCID and MIMIC (removes the DATASET source shortcut from retrieval).
+    if policy == "same_source_split":
+        return (row.get("source_dataset"), row.get("split"))
+    if policy == "same_source_split_target_type":
+        return (row.get("source_dataset"), row.get("split"), row.get("target_type"))
+    if policy == "same_source_split_target_type_len_bin":
+        return (
+            row.get("source_dataset"),
+            row.get("split"),
+            row.get("target_type"),
+            length_bin(row.get("context_len")),
+            length_bin(row.get("target_len")),
+        )
+    if policy == "same_source_split_target_type_len_seq_util_bin":
+        return (
+            row.get("source_dataset"),
             row.get("split"),
             row.get("target_type"),
             length_bin(row.get("context_len")),

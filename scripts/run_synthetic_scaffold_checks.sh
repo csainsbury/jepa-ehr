@@ -5,9 +5,16 @@ cd "$ROOT"
 WORK="${1:-/tmp/clinical_jepa_synthetic_check}"
 rm -rf "$WORK"
 mkdir -p "$WORK"/{splits,target-blocks,leakage,results,v0A,v0B,v0D}
-DATASET="run-workspace/state/task-work/clinical-jepa-pilot/configs/v0/dataset.example.yaml"
-ARMS="run-workspace/state/task-work/clinical-jepa-pilot/configs/v0/arms.example.yaml"
-METRICS="run-workspace/state/task-work/clinical-jepa-pilot/configs/v0/metrics.example.yaml"
+
+# Bootstrap the (gitignored) run-workspace example configs from the tracked
+# configs/v0 so the synthetic check runs on a fresh checkout.
+WS_CFG="run-workspace/state/task-work/clinical-jepa-pilot/configs/v0"
+mkdir -p "$WS_CFG"
+cp configs/v0/*.yaml "$WS_CFG"/
+
+DATASET="$WS_CFG/dataset.example.yaml"
+ARMS="$WS_CFG/arms.example.yaml"
+METRICS="$WS_CFG/metrics.example.yaml"
 
 python3 -m compileall -q clinical_jepa
 python3 -m unittest discover -s tests

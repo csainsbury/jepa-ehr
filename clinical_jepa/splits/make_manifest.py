@@ -19,12 +19,14 @@ def _count_jsonl(path: str | Path) -> int:
         return sum(1 for _ in f)
 
 
-def _split_paths(source_cfg: dict[str, Any], key: str) -> dict[str, str]:
+def _split_paths(source_cfg: dict[str, Any], key: str, *, optional: bool = False) -> dict[str, str]:
     paths = source_cfg.get(key, {}) or {}
+    if optional and not paths:
+        return {}
     required = ["train", "dev", "test"]
     missing = [s for s in required if not paths.get(s)]
     if missing:
-        raise ValueError(f"source {source_cfg.get(name)} missing {key}: {missing}")
+        raise ValueError(f"source {source_cfg.get('name')} missing {key}: {missing}")
     return {s: str(paths[s]) for s in required}
 
 
@@ -54,7 +56,10 @@ def build_real_manifest(dataset_cfg: dict[str, Any], seed: int) -> dict[str, Any
     if not primary:
         raise ValueError("dataset config missing sources.primary")
     index_paths = _split_paths(primary, "split_index_paths")
-    h5_paths = _split_paths(primary, "h5_paths")
+    # Joint / multi-source substrate: per-source h5 files live in the combined
+    # index rows (source_h5_path), so a single split-level h5 path is optional.
+    multi_source = bool(primary.get("source_datasets"))
+    h5_paths = _split_paths(primary, "h5_paths", optional=multi_source)
     seq_counts = {split: _count_jsonl(path) for split, path in index_paths.items()}
 
     split_cfg = dataset_cfg.get("split", {}) or {}
@@ -84,6 +89,7 @@ def build_real_manifest(dataset_cfg: dict[str, Any], seed: int) -> dict[str, Any
         "source_kind": primary.get("source_kind"),
         "source_index_paths": index_paths,
         "source_h5_paths": h5_paths,
+        "source_datasets": [str(s.get("name", s.get("kind", "unknown"))) for s in (primary.get("source_datasets") or [])],
         "bundle": {
             "name": bundle.get("name"),
             "root": bundle.get("root"),
