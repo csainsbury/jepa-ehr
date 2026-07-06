@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "clinical-jepa-rung-minus1-composite-v0",
+  "type": "object",
+  "required": ["schema_version", "created_utc", "composite_status", "component_status", "checks", "aggregate_only"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["clinical-jepa-rung-minus1-composite-v0"]},
+    "created_utc": {"type": "string"},
+    "composite_status": {"type": "string", "enum": ["pass", "fail"]},
+    "component_status": {"type": "object"},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": {"type": "string"},
+          "status": {"type": "string", "enum": ["pass", "fail"]},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "failed_checks": {"type": "array", "items": {"type": "string"}},
+    "inputs": {"type": "object"},
+    "aggregate_only": {"type": "boolean"},
+    "notes": {"type": "string"}
+  }
+}

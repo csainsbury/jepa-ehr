@@ -22,6 +22,7 @@ KIND_TO_SCHEMA = {
     "pseudo-rendering-readiness": "clinical-jepa-pseudo-rendering-readiness-v0.schema.json",
     "autoregression-readiness": "clinical-jepa-autoregression-readiness-v0.schema.json",
     "rung-minus1-readiness": "clinical-jepa-rung-minus1-readiness-v0.schema.json",
+    "rung-minus1-composite": "clinical-jepa-rung-minus1-composite-v0.schema.json",
 }
 
 VERSION_TO_KIND = {
@@ -36,6 +37,7 @@ VERSION_TO_KIND = {
     "clinical-jepa-pseudo-rendering-readiness-v0": "pseudo-rendering-readiness",
     "clinical-jepa-autoregression-readiness-v0": "autoregression-readiness",
     "clinical-jepa-rung-minus1-readiness-v0": "rung-minus1-readiness",
+    "clinical-jepa-rung-minus1-composite-v0": "rung-minus1-composite",
 }
 
 TYPE_MAP = {
@@ -48,7 +50,7 @@ TYPE_MAP = {
     "null": type(None),
 }
 
-AGGREGATE_ONLY_KINDS = {"metadata-availability", "scenario-feasibility", "pseudo-rendering-readiness", "autoregression-readiness", "rung-minus1-readiness"}
+AGGREGATE_ONLY_KINDS = {"metadata-availability", "scenario-feasibility", "pseudo-rendering-readiness", "autoregression-readiness", "rung-minus1-readiness", "rung-minus1-composite"}
 FORBIDDEN_AGGREGATE_KEYS = {
     "block_id",
     "block_ids",
@@ -70,6 +72,36 @@ FORBIDDEN_AGGREGATE_KEYS = {
     "embeddings",
     "checkpoint",
     "checkpoints",
+    # Direct patient / row-level identifiers (clinical PII). A denylist is
+    # inherently incomplete, but these are the obvious ones for this substrate
+    # (MIMIC subject_id/hadm_id, UK nhs_number, generic mrn/patient_id/dob/...).
+    "mrn",
+    "patient_id",
+    "patient_ids",
+    "subject_id",
+    "subject_ids",
+    "hadm_id",
+    "hadm_ids",
+    "admission_id",
+    "admission_ids",
+    "stay_id",
+    "icustay_id",
+    "nhs_number",
+    "dob",
+    "date_of_birth",
+    "ssn",
+    "patient_name",
+    "postcode",
+    "stay_ids",
+    "icustay_ids",
+    "encounter_id",
+    "encounter_ids",
+    "visit_id",
+    "visit_ids",
+    "email",
+    "phone",
+    "zip",
+    "zipcode",
 }
 
 
