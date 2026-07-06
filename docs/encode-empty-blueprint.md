@@ -1,12 +1,54 @@
 ---
 title: Encode-empty (Option A) — design blueprint (design-panel synthesis)
 created: 2026-07-06
-status: BLUEPRINT — awaiting Pi blueprint gate before latent-side implementation
+status: Pi-GATED GO-WITH-CHANGES (2026-07-06) — cleared to implement with the conditions below
 produced_by: 3-proposal design panel + adversarial critique + synthesis (workflow encode-empty-design)
 scope: make a zero-event wall-clock target a first-class, collapse-safe, decodable latent in the v0B MeanToken JEPA
 ---
 
 # Encode-empty blueprint
+
+## Pi R4 gate — GO-WITH-CHANGES (conditions, must be honored in implementation)
+Pi approved Option A + the HYBRID. Binding conditions (jepa_pi_thread.md R4):
+1. **Authority hierarchy:** the **occupancy/count hurdle head is the AUTHORITATIVE
+   semantic owner** of empty/non-empty + count-0; **z_empty is AUXILIARY** latent
+   geometry only — never a retrieval-inflation device. Scalar-occupancy vs z_empty-
+   cosine disagreement is a **collapse alarm** (do NOT average away). **Report empty
+   and non-empty retrieval SEPARATELY** (empty-class retrieval must not dominate R@k
+   or horizon-decay).
+2. **Frozen z_empty:** `register_buffer`, not a Parameter, no separation reg by
+   default. Tests: is a buffer, unit-norm, checkpoint-stable, **excluded from
+   optimizer params**, constructed under `no_grad`. Reseed check compares against a
+   **sample/centroids of non-empty target latents** (a single centroid can be near-
+   zero and falsely reassuring), threshold `|cos| > 0.15`.
+3. **Empty-class gates:** report empty recall **AND** false-positive-rate/precision
+   (recall alone is gameable). Gates apply **only in source×horizon cells with enough
+   empty pos/neg**; sparse-empty cells are **report-only** (MIMIC 0.25–1 d is ~0.4%
+   empty → report-only there). Defaults: empty recall ≥0.95 (where evaluable), empty-
+   vs-populated cosine margin ≥0.15, occupancy AUC/Brier > per-cell marginal, and
+   **empty-vs-1-event AUC ≥0.80** (pre-registered).
+4. **Frozen-350M comparator:** external occupancy probe on the frozen context state is
+   the fair emptiness comparison; token-generation metrics on 350M are **non-empty
+   only** with empty coverage denominators per source×horizon; do **not** manufacture
+   a 350M NO_EVENT or compare its decoder to v0B z_empty.
+5. **Calibration (capping biases the prior):** balanced sampling / empty-fraction cap
+   allowed for training stability, BUT report **natural-prevalence calibration** on the
+   **uncapped** validation distribution (Brier, calibration curves/ECE, + prior/logit
+   correction if needed); **val/test use natural prevalence, not the capped sampler**.
+6. **Horizons:** `horizon_count=1` for the first wall-clock rung; per-horizon
+   occupancy/count heads for multi-horizon; **defer recursive-empty**.
+7. **Censored ≠ silence (UPSTREAM precondition):** a window is z_empty-eligible **only
+   if the full `[t_query, t_query+W)` interval is observed within the admission/
+   episode**. If it crosses discharge / reset / unobserved time it is
+   **censored/ineligible, NOT silent** — exclude it upstream in `extract_blocks`
+   before any empty label is assigned.
+
+Pi's 6 required changes before promotion: (1) shared span helper = only reader +
+grep/AST test [helper ✓ `fcaf764`; grep test TODO]; (2) leakage empty-boundary fix +
+`empty_target_audited` [✓ `fcaf764`]; (3) end-to-end empty-heavy synthetic audit before
+real use; (4) natural-prevalence calibration reports; (5) empty/non-empty metrics
+separated in retrieval + rung 0 + rung 1; (6) upstream censoring exclusion before any
+empty label.
 
 ## Chosen mechanism — HYBRID (occupancy hurdle head + frozen z_empty prototype)
 Reject Proposal 1 (v0B-only `[NO_EVENT]` vocab bump 1050→1051) as dominated

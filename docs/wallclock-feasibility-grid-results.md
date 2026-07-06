@@ -57,9 +57,35 @@ rung −1: the two sources occupy disjoint temporal regimes.
 - `run-workspace/local-governed/wallclock_feasibility_grid.py`
 - `run-workspace/local-governed/wallclock_feasibility_grid_dev.json`
 
-## Open (for Pi)
-- Confirm the within-source re-scope + the SCID/MIMIC discriminating bands.
-- Is a stricter "resolves variation" threshold wanted (we used empty ≤ 0.5 AND
-  saturated ≤ 0.5)? Under any stricter rule W=1 d also fails and the common set is empty.
-- Should the grid be re-run on train/test to confirm band stability before the rung-0
-  build? (dev shown here; SCID 14,798 / MIMIC 42,966.)
+## R3 update (Pi ruled 2026-07-06) — frozen within-source horizons
+
+Pi **confirmed the within-source re-scope** (cross-source common-horizon hierarchy
+NOT promoted; MIMIC↔SCI-D = transportability diagnostic only) and required tighter
+horizon discipline. Folded in + re-run on **train + dev** (test held out — horizons
+are frozen before any test look):
+
+- **Sub-day horizons added** (`cumulative_days` is sub-day resolved: 98.6% of MIMIC
+  seqs fractional, median min inter-event gap 0.67 h): grid now spans 0.25 d … 3650 d.
+- **Strengthened "resolves-variation" rule** (Pi): adequate = matched ≥ 500 AND
+  empty ≤ 0.5 AND saturated ≤ 0.5 **AND non-empty median occupancy ≥ 2** (no
+  median-1-only targets as sole evidence).
+- **Train/dev stable** (numbers near-identical), so horizons are **PRE-FROZEN**:
+  - **SCID hierarchy horizons: {30, 90, 365, 730} d** (band 30–730 d; empty ≤15%,
+    non-empty median occ 4→78, saturation ≤13%).
+  - **MIMIC hierarchy horizons: {0.25, 0.5, 1} d** primary; **2 d = saturation-
+    boundary sensitivity only** (empty ≤0.4%, saturation 6→22% at 0.25–1 d, 45% at
+    2 d; non-empty median occ 13→23).
+
+**Transparency note for Pi:** with sub-day horizons a *technical* common-adequate
+band [0.25–2 d] appears on both splits — but it is driven by SCID *barely* clearing
+the loose thresholds (38% empty, non-empty median exactly 2, near both degeneracy
+boundaries), which is precisely the median-near-1 / high-empty regime the strengthened
+rule warns against. Per Pi's ruling (cross-source rejected on acute-vs-chronic process
+grounds; "the next gate is not 'common horizon found'") we do **not** promote a
+cross-source claim; the sub-day common band is recorded, not used. Flag if you want it
+revisited.
+
+**Next gate (Pi):** not "common horizon found" — "chosen within-source horizons are
+stable [✓ train/dev], non-degenerate [✓ strengthened rule], leakage-clean, and
+empty-handled consistently [encode-empty, R4]." Local artifacts now include
+`wallclock_feasibility_grid_{train,dev}.json`.
