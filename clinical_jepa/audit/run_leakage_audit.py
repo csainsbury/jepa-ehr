@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from clinical_jepa.targets.block_spans import is_empty_target
 from clinical_jepa.utils import load_yaml, now_utc, read_json, write_json
 from clinical_jepa.validation import validate_artifact
 
@@ -194,8 +195,9 @@ def _outcome_separation_audit(
             for i in range(lo, hi + 1):
                 if int(outcome[i]) == 1:
                     leaked += 1
-            # Endpoint-facing: also scan the target / eval span.
-            if endpoint_facing and b.get("target_start_ref") is not None and b.get("target_end_ref") is not None:
+            # Endpoint-facing: also scan the target / eval span (never the -1
+            # sentinel of an empty wall-clock target).
+            if endpoint_facing and not is_empty_target(b) and b.get("target_start_ref") is not None and b.get("target_end_ref") is not None:
                 tlo = max(0, int(b.get("target_start_ref", 0)))
                 thi = min(len(outcome) - 1, int(b.get("target_end_ref", 0)))
                 for i in range(tlo, thi + 1):
@@ -256,12 +258,19 @@ def main(argv: list[str] | None = None) -> int:
     duplicate = 0
     boundary = 0
     bad_split = 0
+    empty_target_audited = 0
     for b in blocks:
         bid = b.get("block_id")
         if bid in ids:
             duplicate += 1
         ids.add(bid)
-        if int(b.get("context_end_ref", 0)) >= int(b.get("target_start_ref", 0)):
+        # Wall-clock empty targets carry target_start_ref = -1 (EMPTY_TARGET_REF);
+        # `context_end_ref >= -1` is always True, so the horizon-boundary check must
+        # SKIP them (else every empty block is a false boundary violation and the
+        # audit fails on any wall-clock run). Count them instead.
+        if is_empty_target(b):
+            empty_target_audited += 1
+        elif int(b.get("context_end_ref", 0)) >= int(b.get("target_start_ref", 0)):
             boundary += 1
         if b.get("split") not in {"train", "dev", "test", "stress"}:
             bad_split += 1
@@ -323,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
         "outcome_label_separation": outcome_detail,
         "endpoint_facing": endpoint_facing,
         "blocks_by_source": blocks_by_source,
+        "empty_target_audited": int(empty_target_audited),
         "overall_status": overall,
         "aggregate_only": True,
     }
