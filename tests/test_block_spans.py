@@ -15,6 +15,7 @@ from synth_fixtures import write_yaml  # noqa: E402
 from clinical_jepa.targets.block_spans import (  # noqa: E402
     EMPTY_TARGET_REF,
     empty_target_len,
+    is_censored,
     is_empty_target,
     read_target_span,
     target_occupancy,
@@ -25,6 +26,9 @@ from clinical_jepa.audit.run_leakage_audit import main as audit_main  # noqa: E4
 POP = {"context_start_ref": 2, "context_end_ref": 10, "target_start_ref": 11, "target_end_ref": 20}
 EMPTY = {"context_start_ref": 2, "context_end_ref": 10, "target_start_ref": -1, "target_end_ref": -1,
          "empty_target": True, "n_target_events": 0}
+# Censored: zero events + -1 refs like EMPTY, but absence is unverifiable -> NOT silence.
+CENSORED = {"context_start_ref": 2, "context_end_ref": 10, "target_start_ref": -1, "target_end_ref": -1,
+            "empty_target": False, "censored": True, "n_target_events": 0}
 
 
 class BlockSpanHelperTests(unittest.TestCase):
@@ -37,6 +41,14 @@ class BlockSpanHelperTests(unittest.TestCase):
         self.assertTrue(is_empty_target({"target_start_ref": -1, "target_end_ref": -1}))  # refs only
         self.assertFalse(is_empty_target(POP))
         self.assertFalse(is_empty_target({"target_start_ref": 0, "target_end_ref": 5}))
+
+    def test_censored_is_not_silence(self) -> None:
+        # Censored blocks carry -1 refs like empty ones, but must NOT be treated as
+        # silence (absence unverifiable, Pi R4 Q7).
+        self.assertTrue(is_censored(CENSORED))
+        self.assertFalse(is_empty_target(CENSORED))
+        self.assertFalse(is_censored(EMPTY))
+        self.assertEqual(empty_target_len(CENSORED), 0)
 
     def test_read_target_span_never_reads_zero_for_empty(self) -> None:
         arr = np.arange(30, dtype=np.int64)

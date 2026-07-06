@@ -24,12 +24,17 @@ EMPTY_TARGET_REF = -1
 
 
 def is_empty_target(block: dict[str, Any]) -> bool:
-    """True iff the block's target is a zero-event (empty) wall-clock window.
+    """True iff the block's target is genuine silence (a zero-event, fully-observed
+    wall-clock window).
 
-    Recognised via the explicit ``empty_target`` flag, or (defensively) target
-    refs equal to the ``EMPTY_TARGET_REF`` sentinel. Populated event-index blocks
-    (no ``empty_target`` flag, non-negative refs) are never empty.
+    Recognised via the explicit ``empty_target`` flag, or (defensively) target refs
+    equal to the ``EMPTY_TARGET_REF`` sentinel. A ``censored`` block also carries
+    ``-1`` refs (zero events) but is NOT silence — the absence is unverifiable
+    (window past observed time; Pi R4 Q7) — so it is never treated as empty.
+    Populated event-index blocks (no flag, non-negative refs) are never empty.
     """
+    if block.get("censored"):
+        return False
     if bool(block.get("empty_target")):
         return True
     ts = block.get("target_start_ref")
@@ -39,17 +44,25 @@ def is_empty_target(block: dict[str, Any]) -> bool:
     return int(ts) == EMPTY_TARGET_REF and (te is None or int(te) == EMPTY_TARGET_REF)
 
 
+def is_censored(block: dict[str, Any]) -> bool:
+    """True iff the block is a censored zero-event window (absence unverifiable,
+    ineligible for empty encoding; Pi R4 Q7). Distinct from silence."""
+    return bool(block.get("censored"))
+
+
 def empty_target_len(block: dict[str, Any]) -> int:
     """Inclusive target-span length in events; 0 for an empty target.
 
     Replaces the buggy ``target_end_ref - target_start_ref + 1`` (which yields
     ``-1 - (-1) + 1 = 1`` for an empty block) at every call site.
     """
-    if is_empty_target(block):
+    if is_empty_target(block) or is_censored(block):
         return 0
     ts = block.get("target_start_ref")
     te = block.get("target_end_ref")
     if ts is None or te is None:
+        return 0
+    if int(ts) < 0 or int(te) < 0:   # any sentinel ref carries no readable span
         return 0
     return max(0, int(te) - int(ts) + 1)
 

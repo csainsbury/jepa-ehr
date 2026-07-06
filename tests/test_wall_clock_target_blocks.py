@@ -188,6 +188,90 @@ class EmptyIntervalTests(unittest.TestCase):
         return blocks, details["report"]
 
 
+class CensoringTests(unittest.TestCase):
+    """Censored != silence (Pi R4 Q7): a zero-event window is silence only if the
+    full [t_query, t_query+W) is observed; if it runs past observed time it is
+    censored/ineligible, counted but not emitted as empty."""
+
+    def test_fully_observed_empty_is_silence_not_censored(self) -> None:
+        # gap=0: the next event (day 13) bounds the empty [12, 12.5) window, so it
+        # is fully observed -> genuine silence, never censored.
+        cdays = np.arange(22, dtype=np.float32)
+        block = _t0_wall_clock_block(
+            "seq", "dev", len(cdays), "SCID", 0, cdays, window_days=0.5, gap_days=0.0,
+            context_start=CTX_START, min_context=MIN_CTX,
+        )
+        assert block is not None
+        self.assertTrue(block["empty_target"])
+        self.assertFalse(block["censored"])
+        self.assertTrue(block["fully_observed"])
+
+    def test_censored_when_window_runs_past_observed_time(self) -> None:
+        # context_end day 12; a large gap schedules t_query=32, past the last
+        # observed event (day 21). The window [32, 37) is empty AND unobserved.
+        cdays = np.arange(22, dtype=np.float32)
+        block = _t0_wall_clock_block(
+            "seq", "dev", len(cdays), "SCID", 0, cdays, window_days=5.0, gap_days=20.0,
+            context_start=CTX_START, min_context=MIN_CTX,
+        )
+        assert block is not None
+        self.assertEqual(block["n_target_events"], 0)
+        self.assertFalse(block["empty_target"])   # NOT silence
+        self.assertTrue(block["censored"])         # absence unverifiable
+        self.assertFalse(block["fully_observed"])
+
+    def test_censored_via_segment_boundary_no_same_segment_future(self) -> None:
+        # context_end (idx 16) is the LAST index of segment 0; all future events are
+        # in segment 1 -> no observable future in-segment -> censored.
+        cdays = np.arange(30, dtype=np.float32)
+        segment_ids = np.array([0] * 17 + [1] * 13, dtype=np.int64)
+        block = _t0_wall_clock_block(
+            "seq", "dev", 30, "SCID", 0, cdays, window_days=90.0, gap_days=0.0,
+            context_start=CTX_START, min_context=MIN_CTX, segment_ids=segment_ids,
+        )
+        assert block is not None
+        self.assertEqual(block["context_end_ref"], 16)
+        self.assertEqual(block["n_target_events"], 0)
+        self.assertTrue(block["censored"])
+        self.assertFalse(block["empty_target"])
+
+    def test_censored_counted_not_emitted_in_real_path(self) -> None:
+        # gap=0 empties are always fully observed, so censoring is triggered here via
+        # a segment boundary: a SCID seq whose context ends at the last index of
+        # segment 0 has no observable future in-segment -> censored, counted, not
+        # emitted. (segment_channel configured.)
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            cdays = np.arange(30, dtype=np.float32)
+            seg = np.array([0] * 17 + [1] * 13, dtype=np.int64)  # context_end 16 = last of seg 0
+            scid_paths, mimic_paths = {}, {}
+            for split in ("train", "dev", "test"):
+                scid_groups = {
+                    f"scid_{split}_censored": make_sequence(SCID_TOKEN, 30, cumulative_days=cdays, segment_ids=seg),
+                }
+                mimic_groups = {f"mimic_{split}_dense": make_sequence(MIMIC_TOKEN, 20)}
+                scid_paths[split] = write_h5(td / f"scid_{split}.h5", scid_groups)
+                mimic_paths[split] = write_h5(td / f"mimic_{split}.h5", mimic_groups)
+            vocab = write_tiny_vocab(td / "vocab.json")
+            idx = td / "idx"
+            cfg = joint_dataset_config(td, {"scid": scid_paths, "mimic": mimic_paths}, vocab_path=vocab, index_dir=idx)
+            build_index_main(["--dataset-config", write_yaml(td / "dataset.yaml", cfg), "--output-dir", str(idx)])
+            arms_cfg_path = write_yaml(td / "arms.yaml", joint_arms_config())
+            split_manifest = {
+                "dataset": "joint-test",
+                "source_index_paths": {s: str(idx / f"{s}.index.jsonl") for s in ("train", "dev", "test")},
+                "source_h5_paths": {},
+            }
+            blocks, details = _real_blocks(
+                _wc_args(arms_cfg_path, segment_channel="segment_ids"), cfg, split_manifest
+            )
+            wc = details["report"]["wall_clock"]
+            # One censored SCID seq per split (3), counted, not emitted.
+            self.assertEqual(sum(wc["censored_target_blocks"].values()), 3)
+            self.assertGreater(wc["censored_target_rate"], 0.0)
+            self.assertFalse(any(b.get("censored") for b in blocks))
+
+
 class BoundaryRespectTests(unittest.TestCase):
     def _seq_with_boundary(self):
         # seq_len 30 -> context_end 16 (segment 0). Boundary at index 20.

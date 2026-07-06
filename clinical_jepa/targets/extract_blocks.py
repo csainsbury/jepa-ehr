@@ -346,6 +346,30 @@ def _wall_clock_target_span(
     return first_idx, last_idx, n_events
 
 
+def _observed_end_day(
+    cumulative_days: Any,
+    seq_len: int,
+    context_end: int,
+    *,
+    segment_ids: Any = None,
+) -> float | None:
+    """Last observed ``cumulative_days`` in the target's eligible (same-segment) region.
+
+    Only events strictly after ``context_end`` are eligible; if ``segment_ids`` is
+    given, eligibility stops at the first event in a different segment (a wall-clock
+    block must not cross an admission/segment boundary). Returns ``None`` when there
+    is no observable future in the context-end segment (then any nonzero window
+    extends past observed time — i.e. it is censored, not silent).
+    """
+    seg_of_context = segment_ids[context_end] if segment_ids is not None else None
+    last: float | None = None
+    for i in range(context_end + 1, int(seq_len)):
+        if segment_ids is not None and segment_ids[i] != seg_of_context:
+            break
+        last = float(cumulative_days[i])
+    return last
+
+
 def _t0_wall_clock_block(
     seq_id: str,
     split: str,
@@ -365,8 +389,10 @@ def _t0_wall_clock_block(
 
     Returns None (a *rejection*, counted by the caller) when the window config is
     invalid, the sequence is too short, or ``cumulative_days`` is not monotone
-    nondecreasing (negative reset). A zero-event target is NOT a rejection: the
-    block is returned with ``empty_target: true`` so it can be counted downstream.
+    nondecreasing (negative reset). A zero-event target is NOT a rejection: it is
+    returned flagged either ``empty_target: true`` (genuine silence — the full
+    window is observed) or ``censored: true`` (the window extends past observed
+    time; ineligible for empty encoding, counted but not trained on).
     """
     context_start = max(0, int(context_start))
     min_context = max(1, int(min_context))
@@ -393,7 +419,15 @@ def _t0_wall_clock_block(
     target_start_ref, target_end_ref, n_target = _wall_clock_target_span(
         cumulative_days, seq_len, context_end, t_query, window_days, segment_ids=segment_ids
     )
-    empty_target = n_target == 0
+    # Censored != silence (Pi R4 Q7): a zero-event window is genuine silence only if
+    # the FULL interval [t_query, t_query + W) is observed within the admission /
+    # segment. If it extends past the last observed event (discharge / unobserved
+    # time), the absence is unverifiable -> `censored`, ineligible for empty encoding.
+    observed_end = _observed_end_day(cumulative_days, seq_len, context_end, segment_ids=segment_ids)
+    window_end = t_query + window_days
+    fully_observed = observed_end is not None and window_end <= observed_end + 1e-9
+    empty_target = (n_target == 0) and fully_observed
+    censored = (n_target == 0) and not fully_observed
     block: dict[str, Any] = {
         "block_id": stable_hmac(
             f"T0W|{seq_id}|{context_start}|{context_end}|{t_query:.6f}|W{window_days:.6f}|gap{gap_days:.6f}|{ordinal}",
@@ -416,6 +450,9 @@ def _t0_wall_clock_block(
         "t_query": float(t_query),
         "t_context_end_day": float(t_context_end),
         "empty_target": bool(empty_target),
+        "censored": bool(censored),
+        "fully_observed": bool(fully_observed),
+        "observed_end_day": float(observed_end) if observed_end is not None else None,
         "n_target_events": int(n_target),
         "boundary_respect": bool(segment_ids is not None),
     }
@@ -478,6 +515,9 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
     monotonicity_violations = {"train": 0, "dev": 0, "test": 0}
     missing_time_channel = {"train": 0, "dev": 0, "test": 0}
     empty_target_blocks = {"train": 0, "dev": 0, "test": 0}
+    # Censored zero-event windows (Pi R4 Q7): absence unverifiable (window past
+    # observed time) — counted, never trained on as silence, never silently dropped.
+    censored_target_blocks = {"train": 0, "dev": 0, "test": 0}
     wall_clock_blocks = {"train": 0, "dev": 0, "test": 0}
     boundary_respected_sequences = {"train": 0, "dev": 0, "test": 0}
     wall_clock_windows_by_source: dict[str, float] = {}
@@ -540,6 +580,11 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
                                 [cumulative_days[i] for i in range(min(int(seq_len), len(cumulative_days)))]
                             ):
                                 monotonicity_violations[split] += 1
+                        elif block.get("censored"):
+                            # Absence unverifiable (window past observed time):
+                            # ineligible for empty encoding — count, do not emit.
+                            censored_target_blocks[split] += 1
+                            made = True  # a handled category, not skipped_short
                         else:
                             leak = _outcome_positions_in_span(
                                 outcome, block["context_start_ref"], block["context_end_ref"] + endpoint_margin
@@ -641,11 +686,16 @@ def _real_blocks(args: argparse.Namespace, dataset_cfg: dict[str, Any], split_ma
     if unit == "wall_clock":
         total_wc = sum(wall_clock_blocks.values())
         total_empty = sum(empty_target_blocks.values())
+        total_censored = sum(censored_target_blocks.values())
         report["wall_clock"] = {
             "time_channel": time_channel,
             "segment_channel": segment_channel,
             "wall_clock_blocks": wall_clock_blocks,
             "empty_target_blocks": empty_target_blocks,
+            # Censored zero-event windows (absence unverifiable, past observed time):
+            # counted, NOT emitted as silence (Pi R4 Q7: censored != silence).
+            "censored_target_blocks": censored_target_blocks,
+            "censored_target_rate": (total_censored / (total_wc + total_censored)) if (total_wc + total_censored) else 0.0,
             # Empty intervals are ENCODED (flagged empty_target) not dropped; the
             # rate is also surfaced so the wall-clock rung can be treated as
             # conditional/incomplete if empties dominate (Pi spec item 3).
