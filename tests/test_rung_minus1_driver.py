@@ -69,7 +69,7 @@ class CompositeDriverTests(unittest.TestCase):
             m = build_composite_gate(readiness, _leak("pass"), dataset_cfg=cfg)
             self.assertEqual(m["composite_status"], "pass")
             self.assertEqual(m["failed_checks"], [])
-            self.assertEqual(m["component_status"], {"readiness_gate": "pass", "leakage_audit": "pass", "governance_scan": "pass"})
+            self.assertEqual(m["component_status"], {"readiness_gate": "pass", "leakage_audit": "pass", "governance_scan": "pass", "wallclock_readiness": "not_provided"})
             assert_composite_or_raise(m)  # does not raise
 
     def test_fails_closed_when_readiness_under_floor(self) -> None:

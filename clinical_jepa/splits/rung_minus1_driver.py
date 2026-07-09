@@ -56,6 +56,7 @@ def build_composite_gate(
     *,
     dataset_cfg: dict[str, Any] | None = None,
     inputs: dict[str, str] | None = None,
+    wallclock_readiness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """AND-combine readiness + leakage + governance into one composite gate.
 
@@ -157,6 +158,24 @@ def build_composite_gate(
         checks.append(_check("leakage_sources_subset", l_sources.issubset(expected) if l_sources else True,
                              f"leakage_blocks_by_source={sorted(l_sources)} expected={sorted(expected)}"))
 
+    # 5. Wall-clock readiness (optional; only when gating the WALL-CLOCK rung).
+    # Each expected source must have >= 1 adequate (non-degenerate, floor-clearing)
+    # horizon; empty/censored-dominated horizons are flagged conditional/incomplete.
+    wallclock_status = "not_provided"
+    if wallclock_readiness is not None:
+        wc_errors = validate_artifact("wallclock-readiness", wallclock_readiness, raise_on_error=False)
+        checks.append(_check("wallclock_schema_valid", not wc_errors,
+                             "ok" if not wc_errors else f"{len(wc_errors)} schema errors: {wc_errors[:3]}"))
+        adq = wallclock_readiness.get("adequate_horizons_by_source", {}) or {}
+        per_src = wallclock_readiness.get("per_source", {}) or {}
+        srcs = set(per_src.keys()) or set(adq.keys())
+        all_adequate = bool(srcs) and all(adq.get(s) for s in srcs)
+        checks.append(_check("wallclock_horizons_adequate", all_adequate,
+                             f"adequate_horizons_by_source={adq}"))
+        gov_wc = (wallclock_readiness.get("aggregate_only") is True) and not _scan_forbidden_aggregate_keys(wallclock_readiness)
+        checks.append(_check("wallclock_aggregate_only", gov_wc, "ok" if gov_wc else "governance violation"))
+        wallclock_status = "pass" if (not wc_errors and all_adequate and gov_wc) else "fail"
+
     failed = [c["name"] for c in checks if c["status"] != "pass"]
     composite_status = "pass" if not failed else "fail"
 
@@ -168,6 +187,7 @@ def build_composite_gate(
             "readiness_gate": readiness_gate,
             "leakage_audit": leakage_status,
             "governance_scan": "pass" if not gov_errors else "fail",
+            "wallclock_readiness": wallclock_status,
         },
         "checks": checks,
         "failed_checks": failed,
@@ -225,16 +245,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--arms-config", help="Arms config (for recompute)")
     ap.add_argument("--min-valid-windows", type=int, default=None)
     ap.add_argument("--leakage-audit", required=True, help="Path to a run_leakage_audit report")
+    ap.add_argument("--wallclock-readiness", help="Optional wall-clock readiness manifest (gates the wall-clock rung)")
     ap.add_argument("--output-dir", required=True)
     args = ap.parse_args(argv)
 
     readiness, dataset_cfg = _resolve_readiness(args)
     leakage = read_json(args.leakage_audit)
+    wallclock = read_json(args.wallclock_readiness) if args.wallclock_readiness else None
     inputs = {
         "readiness_manifest": str(args.readiness_manifest or f"(recomputed from {args.index_dir})"),
         "leakage_audit": str(args.leakage_audit),
     }
-    manifest = build_composite_gate(readiness, leakage, dataset_cfg=dataset_cfg, inputs=inputs)
+    if args.wallclock_readiness:
+        inputs["wallclock_readiness"] = str(args.wallclock_readiness)
+    manifest = build_composite_gate(readiness, leakage, dataset_cfg=dataset_cfg, inputs=inputs,
+                                    wallclock_readiness=wallclock)
 
     outdir = ensure_dir(args.output_dir)
     write_json(outdir / "rung-minus1-composite-gate.json", manifest)

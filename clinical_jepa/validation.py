@@ -23,6 +23,7 @@ KIND_TO_SCHEMA = {
     "autoregression-readiness": "clinical-jepa-autoregression-readiness-v0.schema.json",
     "rung-minus1-readiness": "clinical-jepa-rung-minus1-readiness-v0.schema.json",
     "rung-minus1-composite": "clinical-jepa-rung-minus1-composite-v0.schema.json",
+    "wallclock-readiness": "clinical-jepa-wallclock-readiness-v0.schema.json",
 }
 
 VERSION_TO_KIND = {
@@ -38,6 +39,7 @@ VERSION_TO_KIND = {
     "clinical-jepa-autoregression-readiness-v0": "autoregression-readiness",
     "clinical-jepa-rung-minus1-readiness-v0": "rung-minus1-readiness",
     "clinical-jepa-rung-minus1-composite-v0": "rung-minus1-composite",
+    "clinical-jepa-wallclock-readiness-v0": "wallclock-readiness",
 }
 
 TYPE_MAP = {
@@ -50,7 +52,7 @@ TYPE_MAP = {
     "null": type(None),
 }
 
-AGGREGATE_ONLY_KINDS = {"metadata-availability", "scenario-feasibility", "pseudo-rendering-readiness", "autoregression-readiness", "rung-minus1-readiness", "rung-minus1-composite"}
+AGGREGATE_ONLY_KINDS = {"metadata-availability", "scenario-feasibility", "pseudo-rendering-readiness", "autoregression-readiness", "rung-minus1-readiness", "rung-minus1-composite", "wallclock-readiness"}
 FORBIDDEN_AGGREGATE_KEYS = {
     "block_id",
     "block_ids",
