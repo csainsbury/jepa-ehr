@@ -22,9 +22,15 @@ def _span_refs(block: dict[str, Any]) -> list[int]:
     for key in ("context_start_ref", "context_end_ref", "target_start_ref", "target_end_ref"):
         if block.get(key) is not None:
             try:
-                refs.append(int(block[key]))
+                v = int(block[key])
             except (TypeError, ValueError):
                 continue
+            # Skip the -1 empty/censored wall-clock target sentinel: it is not a real
+            # sequence position, so `ref < source_prefix_len` must not flag it as a
+            # source-prefix (mask) violation (Pi R4 / caught by the e2e empty audit).
+            if v < 0:
+                continue
+            refs.append(v)
     return refs
 
 
