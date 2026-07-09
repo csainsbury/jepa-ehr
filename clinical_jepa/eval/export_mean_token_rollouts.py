@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from clinical_jepa.targets.block_spans import is_censored, is_empty_target
 from clinical_jepa.utils import ensure_dir, now_utc, write_json
 
 
@@ -195,9 +196,14 @@ def export_mean_token_rollouts(
                         group = str(block.get("sequence_group") or block.get("sequence_id"))
                         token_ids = h5[group]["token_ids"][:]
                         seq_len = len(token_ids)
+                        # Empty/censored wall-clock targets have no event-index
+                        # rollout (target_start_ref = -1) — skip, never clamp to arr[0:].
+                        if is_empty_target(block) or is_censored(block):
+                            skipped_short_future += 1
+                            continue
                         c0 = max(0, int(block.get("context_start_ref", 0)))
                         c1 = min(seq_len - 1, int(block["context_end_ref"]))
-                        t0 = max(0, int(block["target_start_ref"]))
+                        t0 = int(block["target_start_ref"])  # >= 0 (empties skipped)
                         if c1 < c0 or t0 >= seq_len:
                             skipped_short_future += 1
                             continue

@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from clinical_jepa.eval.retrieval import compute_retrieval_metrics
+from clinical_jepa.targets.block_spans import read_target_span
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, write_json
 
 
@@ -76,9 +77,8 @@ def _read_target_labels(block_ids: set[str], target_manifest: dict[str, Any], id
             h5 = cache[path]
             group = str(b.get("sequence_group") or b.get("sequence_id"))
             arr = h5[group]["token_ids"][:]
-            t0 = max(0, int(b["target_start_ref"]))
-            t1 = min(len(arr) - 1, int(b["target_end_ref"]))
-            toks = [id_to_token.get(int(t), "") for t in arr[t0 : t1 + 1]]
+            tgt_ids, _ = read_target_span(b, arr)  # empty/censored -> [] (no labels)
+            toks = [id_to_token.get(int(t), "") for t in tgt_ids]
             labels[str(bid)] = {
                 "split": b.get("split"),
                 "med": _first_label(toks, _med_family),

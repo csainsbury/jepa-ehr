@@ -110,8 +110,18 @@ def _read_examples(
 ) -> list[tuple[str, np.ndarray, list[np.ndarray]]]:
     import h5py
 
+    from clinical_jepa.targets.block_spans import is_censored, is_empty_target
+
     rng = random.Random(seed)
-    blocks = [b for b in blocks if b.get("sequence_file") and b.get("sequence_group") and b.get("target_start_ref") is not None]
+    # Event-index rollout path: empty/censored wall-clock targets (target_start_ref
+    # = -1) have no event-index rollout and must not be clamped to arr[0:] — they
+    # are handled by the encode-empty path (_encode_empty_run), excluded here.
+    blocks = [
+        b for b in blocks
+        if b.get("sequence_file") and b.get("sequence_group")
+        and b.get("target_start_ref") is not None
+        and not is_empty_target(b) and not is_censored(b)
+    ]
     rng.shuffle(blocks)
     if max_blocks > 0:
         blocks = blocks[:max_blocks]
@@ -129,7 +139,7 @@ def _read_examples(
             arr = h5[group]["token_ids"][:]
             c0 = max(0, int(b.get("context_start_ref", 0)))
             c1 = min(len(arr) - 1, int(b["context_end_ref"]))
-            t0 = max(0, int(b["target_start_ref"]))
+            t0 = int(b["target_start_ref"])  # guaranteed >= 0 (empties excluded above)
             if c1 < c0 or t0 >= len(arr):
                 continue
             context = np.asarray(arr[c0 : c1 + 1][-max_context:], dtype=np.int64)

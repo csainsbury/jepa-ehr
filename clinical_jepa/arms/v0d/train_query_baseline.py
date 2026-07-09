@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from clinical_jepa.targets.block_spans import read_target_span
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json
 
 
@@ -86,6 +87,9 @@ def _evaluate_real(dataset_cfg: dict[str, Any], target_manifest: dict[str, Any])
         h5 = file_cache[path]
         group = str(block.get("sequence_group") or block.get("sequence_id"))
         arr = h5[group]["token_ids"][:]
+        if start_key == "target_start_ref":
+            ids, _ = read_target_span(block, arr)  # empty/censored -> [] (no target tokens)
+            return [id_to_token.get(int(t), "") for t in ids]
         start = max(0, int(block[start_key]))
         end = min(len(arr) - 1, int(block[end_key]))
         if end < start:

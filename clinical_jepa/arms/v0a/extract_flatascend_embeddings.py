@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from clinical_jepa.targets.block_spans import empty_target_len
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json
 from clinical_jepa.validation import validate_artifact
 
@@ -146,6 +147,10 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
             dt = h5[group]["time_deltas"][:]
         else:
             dt = np.zeros_like(arr, dtype=np.float32)
+        # A negative start ref is the empty/censored wall-clock target sentinel
+        # (-1): the span is empty — never clamp it to arr[0:] (Pi R4).
+        if int(block.get(start_ref, 0)) < 0:
+            return np.asarray([], dtype=np.int64), np.asarray([], dtype=np.float32), int(len(arr))
         s = max(0, int(block[start_ref]))
         e = min(len(arr) - 1, int(block[end_ref]))
         ids = np.asarray(arr[s : e + 1], dtype=np.int64)
@@ -191,7 +196,7 @@ def _real_run(args: argparse.Namespace, arm: dict[str, Any], targets: dict[str, 
                         "horizon_descriptor": b.get("horizon_descriptor"),
                         "gap_events": b.get("gap_events"),
                         "context_len": int(len(c_ids[j])),
-                        "target_len": int(len(target_ids)) if args.include_target_embeddings else int(int(b.get("target_end_ref", 0)) - int(b.get("target_start_ref", 0)) + 1),
+                        "target_len": int(len(target_ids)) if args.include_target_embeddings else empty_target_len(b),
                         "sequence_len": int(seq_lens[j]),
                         "context_med_count": int(context_counts["med"]),
                         "context_lab_count": int(context_counts["lab"]),

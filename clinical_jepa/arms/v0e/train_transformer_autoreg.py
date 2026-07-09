@@ -11,6 +11,7 @@ import numpy as np
 
 from clinical_jepa.arms.v0b.train_minimal_jepa import effective_rank
 from clinical_jepa.arms.v0e.transformer_autoreg import TARGET_ENCODER_MODES, TransformerAutoregConfig, TransformerHorizonAutoregressor, checkpoint_metadata
+from clinical_jepa.targets.block_spans import is_censored, is_empty_target
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json
 
 
@@ -18,7 +19,15 @@ def _read_examples(blocks: list[dict[str, Any]], max_blocks: int, max_context: i
     import h5py
 
     rng = random.Random(seed)
-    rows = [b for b in blocks if b.get("sequence_file") and b.get("sequence_group") and b.get("target_start_ref") is not None]
+    # This event-index rollout arm strides tokens from the target start; empty /
+    # censored wall-clock targets (target_start_ref = -1) have no event-index
+    # rollout, so exclude them (never let -1 be clamped to arr[0:]).
+    rows = [
+        b for b in blocks
+        if b.get("sequence_file") and b.get("sequence_group")
+        and b.get("target_start_ref") is not None
+        and not is_empty_target(b) and not is_censored(b)
+    ]
     rng.shuffle(rows)
     if max_blocks > 0:
         rows = rows[:max_blocks]
@@ -34,7 +43,7 @@ def _read_examples(blocks: list[dict[str, Any]], max_blocks: int, max_context: i
             arr = h5[group]["token_ids"][:]
             c0 = max(0, int(b.get("context_start_ref", 0)))
             c1 = min(len(arr) - 1, int(b["context_end_ref"]))
-            t0 = max(0, int(b["target_start_ref"]))
+            t0 = int(b["target_start_ref"])  # guaranteed >= 0 (empties excluded above)
             if c1 < c0 or t0 >= len(arr):
                 continue
             context = np.asarray(arr[c0 : c1 + 1][-max_context:], dtype=np.int64)

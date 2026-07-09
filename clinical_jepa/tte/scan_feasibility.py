@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from clinical_jepa.targets.block_spans import empty_target_len
 from clinical_jepa.tte.audit_metadata_availability import _reject_unsafe_input_path
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json
 from clinical_jepa.validation import validate_artifact
@@ -66,9 +67,7 @@ def _median(values: list[float]) -> float:
 def _target_len(row: dict[str, Any]) -> int:
     if row.get("target_len") is not None:
         return _int(row, "target_len")
-    if row.get("target_start_ref") is not None and row.get("target_end_ref") is not None:
-        return max(0, _int(row, "target_end_ref") - _int(row, "target_start_ref") + 1)
-    return 0
+    return empty_target_len(row)  # 0 for empty/censored; inclusive span else
 
 
 def _context_len(row: dict[str, Any]) -> int:

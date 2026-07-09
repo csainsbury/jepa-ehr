@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from clinical_jepa.targets.block_spans import is_empty_target
+from clinical_jepa.targets.block_spans import is_censored, is_empty_target
 from clinical_jepa.utils import load_yaml, now_utc, read_json, write_json
 from clinical_jepa.validation import validate_artifact
 
@@ -196,9 +196,13 @@ def _outcome_separation_audit(
                 if int(outcome[i]) == 1:
                     leaked += 1
             # Endpoint-facing: also scan the target / eval span (never the -1
-            # sentinel of an empty wall-clock target).
-            if endpoint_facing and not is_empty_target(b) and b.get("target_start_ref") is not None and b.get("target_end_ref") is not None:
-                tlo = max(0, int(b.get("target_start_ref", 0)))
+            # sentinel of an empty or censored wall-clock target).
+            if (
+                endpoint_facing and not is_empty_target(b) and not is_censored(b)
+                and b.get("target_start_ref") is not None and int(b.get("target_start_ref", 0)) >= 0
+                and b.get("target_end_ref") is not None
+            ):
+                tlo = int(b.get("target_start_ref", 0))  # >= 0: empty/censored excluded
                 thi = min(len(outcome) - 1, int(b.get("target_end_ref", 0)))
                 for i in range(tlo, thi + 1):
                     if int(outcome[i]) == 1:
