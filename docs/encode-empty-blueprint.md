@@ -43,12 +43,21 @@ Pi approved Option A + the HYBRID. Binding conditions (jepa_pi_thread.md R4):
    **censored/ineligible, NOT silent** — exclude it upstream in `extract_blocks`
    before any empty label is assigned.
 
-Pi's 6 required changes before promotion: (1) shared span helper = only reader +
-grep/AST test [helper ✓ `fcaf764`; grep test TODO]; (2) leakage empty-boundary fix +
-`empty_target_audited` [✓ `fcaf764`]; (3) end-to-end empty-heavy synthetic audit before
-real use; (4) natural-prevalence calibration reports; (5) empty/non-empty metrics
-separated in retrieval + rung 0 + rung 1; (6) upstream censoring exclusion before any
-empty label.
+Pi's 6 required changes before promotion — **ALL DONE**: (1) shared span helper = only
+reader + grep/AST test [✓ `fcaf764` + `ff405bd` `test_span_reader_invariant`]; (2)
+leakage empty-boundary fix + `empty_target_audited` [✓ `fcaf764`]; (3) end-to-end
+empty-heavy synthetic audit before real use [✓ `3715df7` — caught + fixed the `_span_refs`
+-1 mask bug]; (4) natural-prevalence calibration reports [✓ `eb12d24` `calibration_report`];
+(5) empty/non-empty metrics separated in retrieval [✓ `22b2e23`] + rung 1 [✓ `da2e2e2`];
+(6) upstream censoring exclusion before any empty label [✓ `8d89f53`].
+
+## Implementation status — COMPLETE (2026-07-09)
+All 7 steps built, tested (155 tests), committed on `docs/rung-minus1-readiness`:
+Step 1 censoring `8d89f53` · Step 2 model `da823c8` · Step 3 train loop `eb12d24` ·
+Step 4 site migration `ff405bd` · Step 5 rung-1 decode `da2e2e2` · Step 6 retrieval
+split `22b2e23` · Step 7 wall-clock readiness + composite hook `7d87efc` · e2e audit
+`3715df7`. Remaining: the within-source wall-clock **rung 0 governed run** (train v0B
+encode-empty on real wall-clock blocks at the frozen horizons; horizon-decay retrieval).
 
 ## Chosen mechanism — HYBRID (occupancy hurdle head + frozen z_empty prototype)
 Reject Proposal 1 (v0B-only `[NO_EVENT]` vocab bump 1050→1051) as dominated
