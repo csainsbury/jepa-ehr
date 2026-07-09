@@ -23,7 +23,31 @@ POLICIES = [
     "same_source_split_target_type",
     "same_source_split_target_type_len_bin",
     "same_source_split_target_type_len_seq_util_bin",
+    # Occupancy-aware (encode-empty, Pi R4 Q1): empty (silence) targets and populated
+    # targets are never each other's distractors, so an empty block cannot distract a
+    # populated block (and vice versa). Use these for the wall-clock rung.
+    "same_source_split_target_type_occ",
+    "same_source_split_target_type_len_occ_bin",
 ]
+
+
+def occupancy_class(row: dict[str, Any]) -> str:
+    """"empty" (silence) vs "populated". Empty is recognised via the explicit
+    empty_target flag, or n_target_events / target_len == 0. This must be a SEPARATE
+    matching dimension from length_bin, because length_bin(0) == "001-008" would
+    otherwise mix empties with 1-8-event populated targets (Pi R4)."""
+    if row.get("empty_target") is True:
+        return "empty"
+    n = row.get("n_target_events")
+    if n is not None:
+        return "empty" if int(n) == 0 else "populated"
+    tl = row.get("target_len")
+    if tl is not None:
+        try:
+            return "empty" if int(tl) == 0 else "populated"
+        except Exception:
+            return "populated"
+    return "populated"
 
 
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -140,6 +164,22 @@ def group_key(row: dict[str, Any], policy: str) -> tuple[Any, ...]:
             count_bin(row.get("context_lab_count")),
             count_bin(row.get("context_state_count")),
         )
+    if policy == "same_source_split_target_type_occ":
+        return (
+            row.get("source_dataset"),
+            row.get("split"),
+            row.get("target_type"),
+            occupancy_class(row),          # empties never distract populated blocks
+        )
+    if policy == "same_source_split_target_type_len_occ_bin":
+        return (
+            row.get("source_dataset"),
+            row.get("split"),
+            row.get("target_type"),
+            occupancy_class(row),
+            length_bin(row.get("context_len")),
+            length_bin(row.get("target_len")),
+        )
     raise ValueError(f"Unsupported distractor policy: {policy}")
 
 
@@ -204,6 +244,7 @@ def compute_retrieval_metrics(
 
     rng = random.Random(seed)
     all_ranks: list[int] = []
+    all_occ: list[str] = []          # occupancy class per rank (empty/populated) — Pi R4 Q1
     per_group: dict[str, list[int]] = {}
     skipped_no_candidates = 0
     sampled_candidate_counts: dict[str, int] = {}
@@ -222,6 +263,7 @@ def compute_retrieval_metrics(
         group_name = "|".join(str(x) for x in key)
         sampled_candidate_counts[group_name] = len(base)
         group_ranks: list[int] = []
+        group_occ: list[str] = []
 
         for start in range(0, len(q_indices), batch_size):
             batch_q_indices = q_indices[start : start + batch_size]
@@ -234,8 +276,10 @@ def compute_retrieval_metrics(
             true_sims = sims[np.arange(len(batch_q_indices)), true_cols]
             ranks = (sims > true_sims[:, None]).sum(axis=1).astype(np.int64) + 1
             group_ranks.extend(int(r) for r in ranks)
+            group_occ.extend(occupancy_class(query_index[qi]) for qi in batch_q_indices)
 
         all_ranks.extend(group_ranks)
+        all_occ.extend(group_occ)
         per_group[group_name] = group_ranks
 
     group_sizes = [len(v) for v in target_groups.values()]
@@ -257,6 +301,12 @@ def compute_retrieval_metrics(
         "skipped_no_candidates": skipped_no_candidates,
         "sampled_candidate_counts": sampled_candidate_counts,
         "overall": _summarize(all_ranks, ks),
+        # Empty and non-empty retrieval reported SEPARATELY (Pi R4 Q1): excellent
+        # empty-class retrieval must not dominate the overall R@k / horizon-decay claim.
+        "by_occupancy": {
+            "empty": _summarize([r for r, c in zip(all_ranks, all_occ) if c == "empty"], ks),
+            "populated": _summarize([r for r, c in zip(all_ranks, all_occ) if c == "populated"], ks),
+        },
         "groups": {name: _summarize(ranks, ks) for name, ranks in per_group.items()},
         "aggregate_only": True,
     }
@@ -303,6 +353,11 @@ def main(argv: list[str] | None = None) -> int:
         f"- Recall@10: {report['overall']['recall_at_10']:.4f}",
         f"- MRR: {report['overall']['mrr']:.4f}",
         f"- Median rank: {report['overall']['median_rank']}",
+        "",
+        "## By occupancy (empty vs populated — reported separately, Pi R4)",
+        "",
+        f"- empty:     n={report['by_occupancy']['empty']['n']}, R@10={report['by_occupancy']['empty']['recall_at_10']:.4f}",
+        f"- populated: n={report['by_occupancy']['populated']['n']}, R@10={report['by_occupancy']['populated']['recall_at_10']:.4f}",
         "",
         "## Groups",
         "",
