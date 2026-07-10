@@ -93,6 +93,97 @@ def nonempty_cell_mask(is_empty: Any) -> Any:
     return ~is_empty.to(bool)
 
 
+# --------------------------------------------------------------------------- M2 heads
+# Expressive trained readouts D(z+) with a MATCHED PARAMETER BUDGET across arms (Pi R8 #4):
+# the hidden width shrinks as the arm's input dim grows, so no arm wins on capacity alone.
+def build_matched_head(input_dim: int, output_dim: int, embedding_dim: int) -> Any:
+    import torch.nn as nn
+    from clinical_jepa.eval.rung1_contract import matched_head_hidden
+    h = matched_head_hidden(int(input_dim), int(output_dim), int(embedding_dim))
+    return nn.Sequential(nn.Linear(int(input_dim), h), nn.GELU(), nn.Linear(h, int(output_dim)))
+
+
+def _fit_head(head: Any, X: Any, Y: Any, loss_fn: Any, *, steps: int, lr: float) -> Any:
+    import torch
+    opt = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=1e-4)
+    head.train()
+    for _ in range(int(steps)):
+        opt.zero_grad(set_to_none=True)
+        loss = loss_fn(head(X), Y)
+        loss.backward()
+        opt.step()
+    head.eval()
+    return head
+
+
+def train_count_head(z_train: Any, count_train: Any, embedding_dim: int, *, steps: int = 400, lr: float = 5e-3) -> Any:
+    """M2 count readout z+ -> log1p(N); matched budget."""
+    import torch
+    import torch.nn.functional as F
+    head = build_matched_head(z_train.shape[1], 1, embedding_dim)
+    y = torch.log1p(count_train.clamp_min(0).to(torch.float32)).view(-1, 1)
+    return _fit_head(head, z_train.detach().float(), y, lambda p, t: F.smooth_l1_loss(p, t), steps=steps, lr=lr)
+
+
+def predict_count(head: Any, z: Any) -> Any:
+    import torch
+    with torch.no_grad():
+        return torch.expm1(head(z.detach().float()).squeeze(-1)).clamp_min(0.0).round().cpu().numpy()
+
+
+def train_quantile_head(z_train: Any, dt_train: Any, embedding_dim: int, *, n_q: int = 9,
+                        steps: int = 400, lr: float = 5e-3) -> tuple[Any, Any]:
+    """M2 conditional timing readout: z+ -> n_q monotone inter-event Δt quantiles (pinball
+    loss). Returns (head, quantile_levels). Predictive samples for PIT/CRPS come from the
+    predicted quantiles."""
+    import torch
+    head = build_matched_head(z_train.shape[1], n_q, embedding_dim)
+    qs = torch.linspace(1.0 / (n_q + 1), n_q / (n_q + 1), n_q)
+    y = dt_train.to(torch.float32).view(-1, 1)
+
+    def pinball(pred, target):
+        pred = torch.cumsum(torch.nn.functional.softplus(pred), dim=1)   # monotone quantiles
+        e = target - pred
+        return torch.mean(torch.maximum(qs * e, (qs - 1) * e))
+    _fit_head(head, z_train.detach().float(), y, pinball, steps=steps, lr=lr)
+    return head, qs
+
+
+def predict_quantiles(head: Any, z: Any) -> Any:
+    import torch
+    with torch.no_grad():
+        return torch.cumsum(torch.nn.functional.softplus(head(z.detach().float())), dim=1).cpu().numpy()
+
+
+def train_pairwise_order_head(z_train: Any, pair_feats: Any, pair_labels: Any, embedding_dim: int,
+                              *, steps: int = 300, lr: float = 5e-3) -> Any:
+    """M2 order readout: [z+ ⊕ emb(a) ⊕ emb(b)] -> P(a before b). For a permutation-invariant
+    arm z+ is identical under reordering, so any order signal is a content prior (its swap
+    excess is ~0) — exactly the arm-A finding. pair_feats rows are the concatenated features."""
+    import torch
+    import torch.nn.functional as F
+    head = build_matched_head(pair_feats.shape[1], 1, embedding_dim)
+    y = pair_labels.to(torch.float32).view(-1, 1)
+    return _fit_head(head, pair_feats.detach().float(), y,
+                     lambda p, t: F.binary_cross_entropy_with_logits(p, t), steps=steps, lr=lr)
+
+
+def reconstruct_order_exact(head: Any, z_row: Any, emb_rows: Any) -> list[int]:
+    """Reconstruct a single window's token order from pairwise scores: expected position of
+    token i = Σ_j P(i before j); sort ascending. Returns the recovered index order."""
+    import torch
+    n = len(emb_rows)
+    if n < 2:
+        return list(range(n))
+    with torch.no_grad():
+        idx_i, idx_j = torch.meshgrid(torch.arange(n), torch.arange(n), indexing="ij")
+        feats = torch.cat([z_row.view(1, -1).expand(n * n, -1),
+                           emb_rows[idx_i.reshape(-1)], emb_rows[idx_j.reshape(-1)]], dim=1).float()
+        p = torch.sigmoid(head(feats)).view(n, n)
+        expected_pos = p.sum(dim=1)                       # more "before" others => earlier
+        return torch.argsort(expected_pos, descending=True).cpu().numpy().tolist()
+
+
 def empty_decode_metrics(decoder: Any, z_plus: Any, is_empty: Any, count: Any, *,
                          threshold: float = 0.5) -> dict[str, Any]:
     """Empty-class decode metrics + the live falsifier verdict (Pi Q3)."""

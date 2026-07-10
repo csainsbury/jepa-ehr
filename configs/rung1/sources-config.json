@@ -1,0 +1,12 @@
+{
+  "_comment": "Rung-1 frozen-decode-ceiling pre-run config (Pi R8). Hashed with rung1_contract.frozen_contract() into every manifest's config_hash. Horizons/primary bands mirror the frozen Rung-0 cells; MIMIC 2d is a non-gating sensitivity horizon. Cluster/interval floors, d_time, M, and gates live in the contract module (single source of truth) and are NOT overridable here.",
+  "arms": ["mean_embed", "tap_concat", "count_concat", "temporal_slot"],
+  "rung1a_arm": "mean_embed",
+  "rung1b_arms": ["tap_concat", "count_concat", "temporal_slot"],
+  "properties": ["marginals", "count", "order", "timing"],
+  "splits": {"fit": "train", "eval": "dev", "test_access": false},
+  "sources": {
+    "SCID": {"horizons": [30, 90, 365, 730], "primary": [30, 90, 365, 730], "sensitivity": []},
+    "MIMIC": {"horizons": [0.25, 0.5, 1, 2], "primary": [0.25, 0.5, 1], "sensitivity": [2]}
+  }
+}
