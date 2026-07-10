@@ -1,0 +1,11 @@
+{
+  "equivalent": [
+    {"nested": {"café": ["résumé", {"naïve": "touché"}]}},
+    {"nested": {"café": ["résumé", {"naïve": "touché"}]}}
+  ],
+  "collision": {"é": 1, "é": 2},
+  "paths": {
+    "valid": ["README.md", "docs/status.md"],
+    "invalid": ["docs/../status.md", "docs/status\n.md", "docs/status.md", "docs/*.md", "docs//status.md", "raw/status.md", "docs/status.txt"]
+  }
+}

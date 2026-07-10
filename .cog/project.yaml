@@ -1,0 +1,32 @@
+schema_version: cog-project-manifest-v1
+project:
+  slug: jepa
+  repository: csainsbury/jepa-ehr
+transport:
+  repository: csainsbury/cog-continuity-inbox
+allowed_refs:
+  - refs/heads/cog/jepa-continuity-pilot
+documents:
+  - path: README.md
+    label: Repository overview
+    role: overview
+    classification: safe_distilled
+  - path: docs/rung-minus1-readiness-results.md
+    label: Rung minus-one readiness results
+    role: status
+    classification: safe_distilled
+  - path: docs/rung0-experiment-blueprint.md
+    label: Rung 0 experiment blueprint
+    role: blueprint
+    classification: safe_distilled
+  - path: docs/rung0-results.md
+    label: Rung 0 verified results
+    role: resume
+    classification: safe_distilled
+  - path: docs/downstream-minus1-integration-scoping.md
+    label: Downstream minus-one integration scoping
+    role: evidence
+    classification: safe_distilled
+limits:
+  max_file_bytes: 262144
+  max_total_bytes: 524288

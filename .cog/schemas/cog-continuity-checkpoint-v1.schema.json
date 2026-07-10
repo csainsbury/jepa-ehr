@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/csainsbury/cog-continuity-inbox/schemas/cog-continuity-checkpoint-v1.schema.json",
+  "title": "Cog continuity checkpoint v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "idempotency_key", "payload_hash", "project", "repository", "trigger", "occurred_at", "recorded_at", "milestone", "documents", "provenance"],
+  "properties": {
+    "schema_version": {"const": "cog-continuity-checkpoint-v1"},
+    "event_id": {"type": "string", "pattern": "^pe_jepa_[0-9]{8}T[0-9]{6}Z_[0-9a-f]{12}_[0-9a-f]{12}$"},
+    "idempotency_key": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "payload_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "project": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slug", "repository"],
+      "properties": {"slug": {"const": "jepa"}, "repository": {"const": "csainsbury/jepa-ehr"}}
+    },
+    "repository": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ref", "commit_sha", "tree_sha", "commit_url"],
+      "properties": {
+        "ref": {"const": "refs/heads/cog/jepa-continuity-pilot"},
+        "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "commit_url": {"type": "string", "pattern": "^https://github\\.com/csainsbury/jepa-ehr/commit/[0-9a-f]{40}$"}
+      }
+    },
+    "trigger": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "source"],
+      "properties": {
+        "kind": {"const": "private_inbox_collector"},
+        "source": {"const": "github_public_branch"}
+      }
+    },
+    "occurred_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "recorded_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "milestone": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "headline", "state_effect"],
+      "properties": {
+        "kind": {"const": "allowlisted_document_push"},
+        "headline": {"type": "string", "minLength": 1, "maxLength": 160},
+        "state_effect": {"const": "no_state_change"}
+      }
+    },
+    "documents": {
+      "type": "array", "minItems": 1, "maxItems": 20,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "label", "role", "classification", "blob_sha", "github_url", "media_type", "size_bytes"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 300},
+          "label": {"type": "string", "minLength": 1, "maxLength": 100},
+          "role": {"enum": ["overview", "status", "blueprint", "result", "decision", "resume", "evidence"]},
+          "classification": {"const": "safe_distilled"},
+          "blob_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "github_url": {"type": "string", "pattern": "^https://github\\.com/csainsbury/jepa-ehr/blob/[0-9a-f]{40}/.+\\.md$"},
+          "media_type": {"const": "text/markdown"},
+          "size_bytes": {"type": "integer", "minimum": 1, "maximum": 262144}
+        }
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capture", "review_status", "sensitivity"],
+      "properties": {
+        "capture": {"const": "deterministic_import"},
+        "review_status": {"const": "unreviewed"},
+        "sensitivity": {"const": "safe_distilled"}
+      }
+    }
+  }
+}
