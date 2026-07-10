@@ -139,8 +139,12 @@ def timing_row(arm, source, W, tr, dev, *, embedding_dim, cluster_floor=TIMING_C
     # randomized-PIT KS via a per-interval conditional CDF from the quantiles
     pit = _quantile_pit(q_dev, dt_dev, qs.cpu().numpy(), seed=seed)
     ks = P.ks_d_upper_ci(pit, pat_dev, n_boot=n_boot, seed=seed)
-    crps_cond = np.asarray([P.crps_from_samples(q_dev[i], dt_dev[i]) for i in range(n_int)])
-    crps_marg = P.crps_rows([marg["pos_samples"]] * n_int, dt_dev)
+    # Vectorized CRPS (O(n·Q) / O(n·cap), not O(n·m²)): conditional from the per-row quantiles,
+    # marginal from the shared training Δt distribution (its self-term is a constant).
+    crps_cond = P.crps_quantile_rows(q_dev, dt_dev)
+    # CRPS must be non-negative; clip tiny negative estimator noise so the skill ratio is sane.
+    crps_cond = np.clip(crps_cond, 0.0, None)
+    crps_marg = np.clip(P.crps_marginal_rows(marg["pos_samples"], dt_dev, seed=seed), 1e-9, None)
     skill = P.ratio_skill_ci(crps_cond, crps_marg, pat_dev, n_boot=n_boot, seed=seed)
     row.update({"ks_upper_ci": ks["ci_hi"], "crps_skill_lo": skill["ci_lo"], "precise": True})
     return row
@@ -162,8 +166,8 @@ def _quantile_pit(quantiles: np.ndarray, y: np.ndarray, levels: np.ndarray, *, s
 
 
 def order_row(arm, source, W, tr, dev, *, embedding_dim, E, floor=ORDER_CLUSTER_FLOOR,
-              n_boot=P.N_BOOT, seed=SEED, max_events=16, max_train_pairs=200_000,
-              max_dev_windows=6000) -> dict[str, Any]:
+              n_boot=P.N_BOOT, seed=SEED, max_events=16, max_train_pairs=15_000,
+              max_dev_windows=2500, order_steps=150) -> dict[str, Any]:
     """Exact ordered-sequence reconstruction from a single pooled vector is only conceivable
     for short windows; we bound the pairwise cost to windows with 2..max_events events (the
     excluded-large fraction is reported — Pi R8: log any cap) and subsample training pairs."""
@@ -210,7 +214,8 @@ def order_row(arm, source, W, tr, dev, *, embedding_dim, E, floor=ORDER_CLUSTER_
     labels = np.concatenate(labels) if len(labels) else np.zeros(0, dtype=np.float32)
     head = train_pairwise_order_head(torch.as_tensor(np.asarray(feats, dtype=np.float32)),
                                      torch.as_tensor(np.asarray(feats, dtype=np.float32)),
-                                     torch.as_tensor(np.asarray(labels, dtype=np.float32)), embedding_dim)
+                                     torch.as_tensor(np.asarray(labels, dtype=np.float32)), embedding_dim,
+                                     steps=order_steps)
 
     def exact_hits(bundle, idxs, z_source):
         hits = []

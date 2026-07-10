@@ -224,6 +224,27 @@ def crps_rows(pred_samples: list[Any], y: Any) -> np.ndarray:
     return np.asarray([crps_from_samples(pred_samples[i], y[i]) for i in range(len(y))])
 
 
+def crps_marginal_rows(marg_samples: Any, y: Any, *, cap: int = 256, seed: int = SEED) -> np.ndarray:
+    """Vectorized CRPS of a SHARED marginal predictive against each y. The marginal self-term
+    E|X−X'| is a constant (same distribution for all rows), so this is O(n·cap), not O(n·m²)."""
+    m = np.asarray(marg_samples, dtype=np.float64)
+    if len(m) > cap:
+        m = np.random.default_rng(seed).choice(m, size=cap, replace=False)
+    y = np.asarray(y, dtype=np.float64)
+    t1 = np.abs(m[None, :] - y[:, None]).mean(axis=1)
+    t2 = 0.5 * float(np.abs(m[:, None] - m[None, :]).mean())
+    return t1 - t2
+
+
+def crps_quantile_rows(quantiles: Any, y: Any) -> np.ndarray:
+    """Vectorized CRPS of per-row quantile predictive samples. quantiles = [n, Q]."""
+    q = np.asarray(quantiles, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    t1 = np.abs(q - y[:, None]).mean(axis=1)
+    t2 = 0.5 * np.abs(q[:, :, None] - q[:, None, :]).mean(axis=(1, 2))
+    return t1 - t2
+
+
 # --------------------------------------------------------------------------- swap index
 def swap_partner_index(patients: list[str], seed: int) -> np.ndarray:
     """Deterministic on-manifold wrong-instance partner per row within one matching cell
