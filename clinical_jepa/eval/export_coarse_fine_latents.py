@@ -149,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--window-days", type=float, required=True)
     ap.add_argument("--delta-days", type=float, required=True)
     ap.add_argument("--partition-mode", default="fixed_width_delta")
+    ap.add_argument("--source", default=None, help="Only export blocks with this source_dataset (per-source rung-0 eval)")
     ap.add_argument("--budget-B", type=int, default=2)
     ap.add_argument("--max-context-tokens", type=int, default=128)
     ap.add_argument("--batch-size", type=int, default=256)
@@ -187,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         for b in blocks:
+            if args.source and str(b.get("source_dataset")) != str(args.source):
+                continue                                    # per-source rung-0 eval
             path = str(b.get("sequence_file") or "")
             grp = str(b.get("sequence_group") or b.get("sequence_id"))
             if not path or is_censored(b):
