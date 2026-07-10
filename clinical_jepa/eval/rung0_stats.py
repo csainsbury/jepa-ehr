@@ -174,36 +174,40 @@ def paired_slope_streams(coarse_by_W: dict[float, list[dict[str, Any]]],
 
 def decision(*, level_gap: dict[str, Any], coarse_b_gap: dict[str, Any], slope: dict[str, Any],
              raw_count_ok: bool, veto: bool, sufficiency_ok: bool, adequate: bool,
+             coarse_b_ruled_out: bool | None = None,
              practical_level: float = LEVEL_GATE, practical_widening: float = 0.05) -> dict[str, Any]:
     """Three-way decision (Pi R5 C7). BUILD requires ALL of: literal level gate AND
-    budget-matched coarse_B gate (both paired-CI clear of the practical level) AND
-    slope separation (paired CI clear of the practical widening) AND raw-count
-    corroboration AND no veto AND sufficiency. A floor-passing but non-clearing cell
-    is INCONCLUSIVE unless the CI upper bound excludes the meaningful effect."""
+    budget-matched coarse_B gate (the WORST co-primary cell paired-CI clears the practical
+    level) AND slope separation AND raw-count corroboration AND no veto AND sufficiency.
+
+    EFFECT-RULED-OUT requires that EVERY co-primary coarse_B cell excludes the meaningful
+    effect (``coarse_b_ruled_out``: all per-horizon ci_hi < practical_level) AND the slope
+    is ruled out — using only the worst cell's ci_hi would wrongly rule out an effect that
+    a different co-primary cell still shows. Everything else is INCONCLUSIVE."""
     if not adequate:
         return {"decision": "NO-BUILD_INCONCLUSIVE", "reason": "cell fails adequacy floor (degeneracy screen)"}
 
     def _clears(g: dict[str, Any], thr: float) -> bool:
         return bool(np.isfinite(g.get("ci_lo", np.nan)) and g["ci_lo"] > thr)
 
-    level_ok = _clears(level_gap, practical_level)
-    coarse_b_ok = _clears(coarse_b_gap, practical_level)
+    level_ok = _clears(level_gap, practical_level)          # worst co-primary must clear
+    coarse_b_ok = _clears(coarse_b_gap, practical_level)    # worst co-primary must clear
     slope_ok = bool(np.isfinite(slope.get("ci_lo", np.nan)) and slope["ci_lo"] > practical_widening)
     build = level_ok and coarse_b_ok and slope_ok and raw_count_ok and (not veto) and sufficiency_ok
     if build:
         return {"decision": "BUILD", "level_ok": True, "coarse_b_ok": True, "slope_ok": True,
                 "raw_count_ok": True, "sufficiency_ok": True, "veto": False}
 
-    # Effect ruled out ONLY when the CI upper bound excludes the meaningful effect on
-    # the corrected (coarse_B) level AND the slope direction is uninformative/negative.
-    level_ruled_out = bool(np.isfinite(coarse_b_gap.get("ci_hi", np.nan)) and coarse_b_gap["ci_hi"] < practical_level)
+    # Ruled out ONLY when EVERY co-primary coarse_B cell excludes the meaningful effect
+    # (all ci_hi < practical_level) AND the slope is uninformative/negative. Fall back to
+    # the single passed gap's ci_hi when the caller cannot supply the all-cells flag.
+    if coarse_b_ruled_out is None:
+        coarse_b_ruled_out = bool(np.isfinite(coarse_b_gap.get("ci_hi", np.nan)) and coarse_b_gap["ci_hi"] < practical_level)
     slope_ruled_out = bool(np.isfinite(slope.get("ci_hi", np.nan)) and slope["ci_hi"] < practical_widening)
-    if level_ruled_out and slope_ruled_out and not veto:
-        status = "NO-BUILD_EFFECT-RULED-OUT"
-    else:
-        status = "NO-BUILD_INCONCLUSIVE"
+    status = "NO-BUILD_EFFECT-RULED-OUT" if (coarse_b_ruled_out and slope_ruled_out and not veto) else "NO-BUILD_INCONCLUSIVE"
     return {"decision": status, "level_ok": level_ok, "coarse_b_ok": coarse_b_ok, "slope_ok": slope_ok,
-            "raw_count_ok": raw_count_ok, "sufficiency_ok": sufficiency_ok, "veto": veto}
+            "coarse_b_ruled_out": coarse_b_ruled_out, "raw_count_ok": raw_count_ok,
+            "sufficiency_ok": sufficiency_ok, "veto": veto}
 
 
 def assert_k1_null(gap: dict[str, Any], *, tol: float = 1e-9) -> None:

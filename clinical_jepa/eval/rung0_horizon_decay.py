@@ -97,8 +97,13 @@ def evaluate_source(
         for W in level_horizons
     ) and bool(level_horizons)
 
+    # EFFECT-RULED-OUT requires EVERY co-primary coarse_B cell to exclude the effect,
+    # not just the worst one (verification-found gate-logic fix).
+    cb_ruled_out = bool(per_horizon_cb) and all(
+        (g.get("ci_hi") is not None and g["ci_hi"] < practical_level) for g in per_horizon_cb.values()
+    )
     verdict = decision(
-        level_gap=worst_level, coarse_b_gap=worst_cb, slope=slope,
+        level_gap=worst_level, coarse_b_gap=worst_cb, slope=slope, coarse_b_ruled_out=cb_ruled_out,
         raw_count_ok=raw_count_ok, veto=(veto or not k1_ok), sufficiency_ok=sufficiency_ok,
         adequate=adequate, practical_level=practical_level, practical_widening=practical_widening,
     )

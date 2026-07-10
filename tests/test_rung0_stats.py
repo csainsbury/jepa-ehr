@@ -83,6 +83,17 @@ class DecisionTests(unittest.TestCase):
                      raw_count_ok=True, veto=False, sufficiency_ok=True, adequate=True)
         self.assertEqual(d["decision"], "NO-BUILD_EFFECT-RULED-OUT")
 
+    def test_ruled_out_requires_all_coprimary_cells(self) -> None:
+        # Worst co-primary cell rules out (ci_hi<0.10) + slope ruled out, BUT another
+        # co-primary cell still shows a real effect -> coarse_b_ruled_out=False ->
+        # INCONCLUSIVE, not EFFECT-RULED-OUT (verification-found gate-logic fix).
+        base = dict(level_gap={"gap": 0.01, "ci_lo": -0.02, "ci_hi": 0.03},
+                    coarse_b_gap={"gap": 0.01, "ci_lo": -0.02, "ci_hi": 0.04},  # worst cell
+                    slope={"ci_lo": -0.1, "ci_hi": 0.02}, raw_count_ok=True, veto=False,
+                    sufficiency_ok=True, adequate=True)
+        self.assertEqual(decision(**base, coarse_b_ruled_out=False)["decision"], "NO-BUILD_INCONCLUSIVE")
+        self.assertEqual(decision(**base, coarse_b_ruled_out=True)["decision"], "NO-BUILD_EFFECT-RULED-OUT")
+
     def test_veto_blocks_build(self) -> None:
         d = decision(level_gap=self._clear(), coarse_b_gap=self._clear(),
                      slope={"ci_lo": 0.1, "ci_hi": 0.3}, raw_count_ok=True, veto=True,
