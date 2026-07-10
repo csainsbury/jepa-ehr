@@ -51,19 +51,22 @@ def time_features(tau: Any, log_dt: Any, d_time: int = D_TIME) -> np.ndarray:
     return F[:, :d_time]
 
 
-def _mean_embed(model: Any, ids: np.ndarray) -> np.ndarray:
+def _mean_embed(E: np.ndarray, ids: np.ndarray) -> np.ndarray:
     # Sum over SORTED ids so the mean is a BIT-EXACT function of the multiset: any
     # permutation of the same tokens yields the identical vector (Pi R8 #5 permutation-pair
-    # invariance), sidestepping float non-associativity. mean_embed is order-blind by design.
+    # invariance), sidestepping float non-associativity. Pure numpy (no per-block torch
+    # overhead — the governed hot loop).
+    canon = np.sort(np.asarray(ids, dtype=np.int64))
+    return E[canon].mean(axis=0).astype(np.float32)
+
+
+def _embedding_matrix(model: Any) -> np.ndarray:
     import torch
     with torch.no_grad():
-        canon = np.sort(np.asarray(ids, dtype=np.int64))
-        t = torch.as_tensor(canon, dtype=torch.long)
-        e = model.embedding(t)                      # [n, D]
-        return e.mean(dim=0).detach().cpu().numpy().astype(np.float32)
+        return model.embedding.weight.detach().cpu().numpy().astype(np.float32)
 
 
-def _z_empty(model: Any) -> np.ndarray:
+def _z_empty_vec(model: Any) -> np.ndarray:
     import torch
     with torch.no_grad():
         return model.empty_prototype.detach().cpu().numpy().astype(np.float32).reshape(-1)
@@ -80,21 +83,27 @@ def build_target_rep(
     token_ids: Any,
     cumulative_days: Any,
     *,
-    model: Any,
+    model: Any = None,
+    E: np.ndarray | None = None,
+    z_empty: np.ndarray | None = None,
     d_time: int = D_TIME,
     slots: int = M_PRIMARY,
 ) -> np.ndarray:
     """Build the arm's z+ for one block. token_ids/cumulative_days are the FULL sequence
-    arrays; the target span is read via the single-reader `read_target_span`."""
+    arrays; the target span is read via the single-reader `read_target_span`. Pass the
+    numpy embedding matrix ``E`` + ``z_empty`` for the hot governed loop; ``model`` is a
+    convenience for tests (E/z_empty derived once)."""
+    if E is None:
+        E = _embedding_matrix(model)
+    if z_empty is None:
+        z_empty = _z_empty_vec(model)
     ids, is_empty = read_target_span(block, token_ids)
-    D = int(model.embedding.embedding_dim)
-    z_empty = _z_empty(model)
 
     if name == "mean_embed":
-        return z_empty.copy() if is_empty else _mean_embed(model, ids)
+        return z_empty.copy() if is_empty else _mean_embed(E, ids)
 
     if name == "tap_concat":
-        base = z_empty.copy() if is_empty else _mean_embed(model, ids)
+        base = z_empty.copy() if is_empty else _mean_embed(E, ids)
         if is_empty or len(ids) == 0:
             phi = np.zeros(d_time, dtype=np.float32)             # φ_empty (frozen)
         else:
@@ -107,7 +116,7 @@ def build_target_rep(
         return np.concatenate([base, phi]).astype(np.float32)
 
     if name == "count_concat":
-        base = z_empty.copy() if is_empty else _mean_embed(model, ids)
+        base = z_empty.copy() if is_empty else _mean_embed(E, ids)
         n = 0 if is_empty else int(block.get("n_target_events", len(ids)))
         return np.concatenate([base, [np.float32(np.log1p(n))]]).astype(np.float32)
 
@@ -122,7 +131,7 @@ def build_target_rep(
         parts = []
         for sub in subs:
             sids, s_empty = read_target_span(sub, token_ids)
-            parts.append(z_empty.copy() if (s_empty or len(sids) == 0) else _mean_embed(model, sids))
+            parts.append(z_empty.copy() if (s_empty or len(sids) == 0) else _mean_embed(E, sids))
         return np.concatenate(parts).astype(np.float32)
 
     raise ValueError(f"unknown target rep {name!r}")

@@ -32,6 +32,18 @@ def _n_clusters(patients: Any) -> int:
     return int(len(np.unique(np.asarray(patients))))
 
 
+# The KS precision sim is a design check that depends only on the (capped) cell size class,
+# so memoize it — every large real timing cell maps to the same bucket (computed ~once).
+_PSIM_CACHE: dict[tuple[int, int], dict[str, Any]] = {}
+
+
+def _precision_sim_cached(n_int: int, n_clu: int) -> dict[str, Any]:
+    key = (min(int(n_int), 20000), min(max(int(n_clu), 1), 4000))
+    if key not in _PSIM_CACHE:
+        _PSIM_CACHE[key] = run_precision_sim(key[0], key[1], n_boot=200)
+    return _PSIM_CACHE[key]
+
+
 def _nn_copy_count_hits(z_tr, cnt_tr, z_dev, cnt_dev) -> np.ndarray:
     """Count of the nearest (cosine) TRAIN z+ — the memorisation/copy floor (Pi R7 #5 G3)."""
     a = z_dev / (np.linalg.norm(z_dev, axis=1, keepdims=True) + 1e-9)
@@ -102,13 +114,25 @@ def timing_row(arm, source, W, tr, dev, *, embedding_dim, cluster_floor=TIMING_C
     dt_dev, pat_dev = flatten(dev); dt_tr, _ = flatten(tr)
     z_dev_i = flat_z(dev); z_tr_i = flat_z(tr)
     n_int = len(dt_dev); n_clu = _n_clusters(pat_dev) if n_int else 0
-    sim = run_precision_sim(max(n_int, 1), max(n_clu, 1), n_boot=200) if n_int >= interval_floor else {"passes": False}
+    # Precision sim certifies the DESIGN at the cell size class (memoized); certifying at a
+    # capped-smaller n is conservative — a larger real n only helps.
+    sim = _precision_sim_cached(n_int, n_clu) if n_int >= interval_floor else {"passes": False}
     evaluable = bool(n_int >= interval_floor and n_clu >= cluster_floor and sim.get("passes", False))
     row = {"arm": arm, "source": source, "window_days": float(W), "property": "timing",
            "n_intervals": int(n_int), "n_clusters": int(n_clu), "precision_sim_passes": bool(sim.get("passes", False)),
            "evaluable": evaluable}
     if not evaluable:
         return row
+    # subsample intervals to bound quantile-head / KS / CRPS cost (adequacy already met)
+    max_intervals = 40000
+    rng = np.random.default_rng(seed)
+    if n_int > max_intervals:
+        sel = np.sort(rng.choice(n_int, size=max_intervals, replace=False))
+        dt_dev, pat_dev, z_dev_i = dt_dev[sel], pat_dev[sel], z_dev_i[sel]
+    if len(dt_tr) > max_intervals:
+        selt = np.sort(rng.choice(len(dt_tr), size=max_intervals, replace=False))
+        dt_tr, z_tr_i = dt_tr[selt], z_tr_i[selt]
+    n_int = len(dt_dev)
     marg = P.fit_marginal_hurdle(dt_tr)
     head, qs = train_quantile_head(torch.as_tensor(z_tr_i), torch.as_tensor(dt_tr.astype(np.float32)), embedding_dim)
     q_dev = predict_quantiles(head, torch.as_tensor(z_dev_i))          # [n_int, n_q] predictive quantiles
@@ -138,30 +162,52 @@ def _quantile_pit(quantiles: np.ndarray, y: np.ndarray, levels: np.ndarray, *, s
 
 
 def order_row(arm, source, W, tr, dev, *, embedding_dim, E, floor=ORDER_CLUSTER_FLOOR,
-              n_boot=P.N_BOOT, seed=SEED) -> dict[str, Any]:
+              n_boot=P.N_BOOT, seed=SEED, max_events=16, max_train_pairs=200_000,
+              max_dev_windows=6000) -> dict[str, Any]:
+    """Exact ordered-sequence reconstruction from a single pooled vector is only conceivable
+    for short windows; we bound the pairwise cost to windows with 2..max_events events (the
+    excluded-large fraction is reported — Pi R8: log any cap) and subsample training pairs."""
     import torch
     from clinical_jepa.eval.rung1_decode import (
         reconstruct_order_exact, train_pairwise_order_head,
     )
-    def ge2(bundle):
-        return [i for i, s in enumerate(bundle["ordered_ids"]) if len(np.asarray(s)) >= 2]
-    di = ge2(dev); pats = np.asarray(dev["patients"])[di] if di else np.asarray([])
-    evaluable = _n_clusters(pats) >= floor and len(ge2(tr)) > 0
+    def in_range(bundle):
+        return [i for i, s in enumerate(bundle["ordered_ids"]) if 2 <= len(np.asarray(s)) <= max_events]
+    n_ge2_dev = sum(1 for s in dev["ordered_ids"] if len(np.asarray(s)) >= 2)
+    di = in_range(dev); pats = np.asarray(dev["patients"])[di] if di else np.asarray([])
+    excluded_large = int(n_ge2_dev - len(di))
+    evaluable = _n_clusters(pats) >= floor and len(in_range(tr)) > 0
     row = {"arm": arm, "source": source, "window_days": float(W), "property": "order",
-           "n_clusters": _n_clusters(pats) if len(pats) else 0, "evaluable": bool(evaluable)}
+           "n_clusters": _n_clusters(pats) if len(pats) else 0,
+           "order_max_events": int(max_events), "excluded_large_windows": excluded_large,
+           "n_eval_windows": len(di), "evaluable": bool(evaluable)}
     if not evaluable:
         return row
+    rng = np.random.default_rng(seed)
+    if len(di) > max_dev_windows:                              # bound reconstruction cost
+        di = list(np.sort(rng.choice(di, size=max_dev_windows, replace=False)))
+        pats = np.asarray(dev["patients"])[di]
     Et = torch.as_tensor(np.asarray(E, dtype=np.float32))
-    # build pairwise training features from train windows
+    # build pairwise training features from train windows (VECTORIZED per window; subsampled
+    # to a pair budget). All ordered pairs (a,b), a!=b, built via broadcasting.
     feats, labels = [], []
-    for i in ge2(tr):
+    n_pairs = 0
+    tr_idx = in_range(tr)
+    rng.shuffle(tr_idx)
+    for i in tr_idx:
+        if n_pairs >= max_train_pairs:
+            break
         ids = np.asarray(tr["ordered_ids"][i]); z = np.asarray(tr["z"][i], dtype=np.float32)
-        for a in range(len(ids)):
-            for b in range(len(ids)):
-                if a == b:
-                    continue
-                feats.append(np.concatenate([z, E[ids[a]], E[ids[b]]]))
-                labels.append(1.0 if a < b else 0.0)
+        n = len(ids)
+        ea = E[ids]                                          # [n, D]
+        ai, bi = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
+        m = (ai != bi).reshape(-1)
+        ai = ai.reshape(-1)[m]; bi = bi.reshape(-1)[m]
+        feats.append(np.concatenate([np.tile(z, (len(ai), 1)), ea[ai], ea[bi]], axis=1))
+        labels.append((ai < bi).astype(np.float32))
+        n_pairs += len(ai)
+    feats = np.concatenate(feats, axis=0) if feats else np.zeros((0, len(np.asarray(E)[0]) + 2 * len(np.asarray(E)[0])))
+    labels = np.concatenate(labels) if len(labels) else np.zeros(0, dtype=np.float32)
     head = train_pairwise_order_head(torch.as_tensor(np.asarray(feats, dtype=np.float32)),
                                      torch.as_tensor(np.asarray(feats, dtype=np.float32)),
                                      torch.as_tensor(np.asarray(labels, dtype=np.float32)), embedding_dim)
@@ -213,8 +259,9 @@ def evaluate_cells(bundles: dict[tuple[str, str, float], dict[str, Any]], *, emb
     return rows
 
 
-def run_ceiling(bundles, *, embedding_dim, E, arms, run_config=None, **kw) -> dict[str, Any]:
-    rows = evaluate_cells(bundles, embedding_dim=embedding_dim, E=E, arms=arms, **kw)
+def rows_to_manifest(rows: list[dict[str, Any]], *, run_config=None) -> dict[str, Any]:
+    """Assemble a manifest from already-computed per-cell metric rows (lets a governed run
+    process cell-by-cell to bound memory, then build the verdict once at the end)."""
     from clinical_jepa.eval.rung1_verdict import classify_count_order_cell, classify_timing_cell
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in rows:
@@ -226,6 +273,11 @@ def run_ceiling(bundles, *, embedding_dim, E, arms, run_config=None, **kw) -> di
     manifest["cell_metrics"] = rows
     manifest["generated_utc"] = now_utc()
     return manifest
+
+
+def run_ceiling(bundles, *, embedding_dim, E, arms, run_config=None, **kw) -> dict[str, Any]:
+    rows = evaluate_cells(bundles, embedding_dim=embedding_dim, E=E, arms=arms, **kw)
+    return rows_to_manifest(rows, run_config=run_config)
 
 
 def main(argv: list[str] | None = None) -> int:

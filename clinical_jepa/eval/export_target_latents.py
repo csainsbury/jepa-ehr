@@ -40,6 +40,9 @@ def build_bundles(blocks: list[dict[str, Any]], seqs: dict[str, dict[str, Any]],
                   splits: tuple[str, ...] = ALLOWED_SPLITS) -> dict[tuple[str, str, float], dict[str, Any]]:
     """seqs[sequence_id] = {'token_ids': arr, 'cumulative_days': arr}. Returns
     bundles[(arm, source, W)] = {split: {z, counts, patients, dt_lists, ordered_ids}}."""
+    from clinical_jepa.targets.target_reps import _embedding_matrix, _z_empty_vec
+    E = _embedding_matrix(model)                     # derive once — no per-block torch
+    z_empty = _z_empty_vec(model)
     out: dict[tuple[str, str, float], dict[str, Any]] = {}
     for arm in arms:
         for blk in blocks:
@@ -53,7 +56,7 @@ def build_bundles(blocks: list[dict[str, Any]], seqs: dict[str, dict[str, Any]],
                 continue
             tok = np.asarray(seq["token_ids"]); cum = np.asarray(seq["cumulative_days"])
             props = block_props(blk, tok, cum)
-            z = build_target_rep(arm, blk, tok, cum, model=model, d_time=d_time, slots=slots)
+            z = build_target_rep(arm, blk, tok, cum, E=E, z_empty=z_empty, d_time=d_time, slots=slots)
             key = (arm, props["source"], props["window_days"])
             cell = out.setdefault(key, {})
             b = cell.setdefault(split, {"z": [], "counts": [], "patients": [], "dt_lists": [], "ordered_ids": []})
