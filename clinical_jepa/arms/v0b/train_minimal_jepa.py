@@ -315,11 +315,12 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
     return 0
 
 
-def _read_encode_empty_examples(blocks, max_blocks, max_context, max_target, seed):
+def _read_encode_empty_examples(blocks, max_blocks, max_context, max_target, seed, *, source=None):
     """Read (split, ctx_ids, tgt_ids, is_empty, count) per wall-clock T0 block, via
     the shared -1-safe helper. Censored blocks are excluded (ineligible); empty
     targets carry an empty tgt + is_empty=True (routed to z_empty at train time);
-    populated-but-unreadable rows are skipped."""
+    populated-but-unreadable rows are skipped. ``source`` restricts to one
+    source_dataset (per-source rung-0 checkpoints)."""
     import h5py
 
     from clinical_jepa.targets.block_spans import (
@@ -330,7 +331,8 @@ def _read_encode_empty_examples(blocks, max_blocks, max_context, max_target, see
     )
 
     rng = random.Random(seed)
-    rows = [b for b in blocks if b.get("sequence_file") and b.get("sequence_group") and not is_censored(b)]
+    rows = [b for b in blocks if b.get("sequence_file") and b.get("sequence_group") and not is_censored(b)
+            and (source is None or str(b.get("source_dataset")) == str(source))]
     rng.shuffle(rows)
     if max_blocks > 0:
         rows = rows[:max_blocks]
@@ -388,7 +390,8 @@ def _encode_empty_run(args, arms, dataset, targets, outdir):
     dim = int(args.embedding_dim)
 
     examples = _read_encode_empty_examples(
-        targets.get("blocks", []), args.max_blocks, args.max_context_tokens, args.max_target_tokens, seed
+        targets.get("blocks", []), args.max_blocks, args.max_context_tokens, args.max_target_tokens, seed,
+        source=getattr(args, "source", None),
     )
     if not examples:
         raise SystemExit("No encode-empty examples (wall-clock T0 blocks) available")
@@ -541,6 +544,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-target-tokens", type=int, default=32)
     ap.add_argument("--cpu", action="store_true")
     ap.add_argument("--encode-empty", action="store_true", help="Encode-empty (Option A): silence as a first-class latent via a frozen z_empty prototype + occupancy/count heads (Pi R4). For wall-clock T0 blocks; horizon_count pinned to 1.")
+    ap.add_argument("--source", default=None, help="Restrict encode-empty training to one source_dataset (per-source rung-0 checkpoints)")
     ap.add_argument("--empty-fraction-cap", type=float, default=0.5, help="Max empty fraction per training batch (balance; the natural prior is restored via calibration on uncapped dev)")
     ap.add_argument("--empty-prototype-seed", type=int, default=0, help="Seed for the frozen z_empty prototype (0 = model default; the init separation check may reseed)")
     args = ap.parse_args(argv)

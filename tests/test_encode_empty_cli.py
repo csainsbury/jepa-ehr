@@ -88,6 +88,22 @@ class EncodeEmptyCliTests(unittest.TestCase):
             self.assertIn("brier", diag["calibration_natural_prevalence"])
             self.assertTrue((outdir / "minimal-jepa-v0b-encode-empty.pt").exists())
 
+    def test_source_filter_restricts_to_one_source(self) -> None:
+        from clinical_jepa.arms.v0b.train_minimal_jepa import _read_encode_empty_examples
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            targets = self._blocks_and_h5(td)                # all SCID (populated + empty)
+            for b in targets["blocks"][:6]:                  # relabel half to MIMIC
+                b["source_dataset"] = "MIMIC"
+            scid = _read_encode_empty_examples(targets["blocks"], 0, 32, 16, seed=0, source="SCID")
+            mimic = _read_encode_empty_examples(targets["blocks"], 0, 32, 16, seed=0, source="MIMIC")
+            self.assertGreater(len(scid), 0)
+            self.assertGreater(len(mimic), 0)
+            # Filtered sets are disjoint in size and sum to the unfiltered total.
+            allsrc = _read_encode_empty_examples(targets["blocks"], 0, 32, 16, seed=0)
+            self.assertEqual(len(scid) + len(mimic), len(allsrc))
+
     def test_censored_blocks_excluded_from_examples(self) -> None:
         from clinical_jepa.arms.v0b.train_minimal_jepa import _read_encode_empty_examples
 
