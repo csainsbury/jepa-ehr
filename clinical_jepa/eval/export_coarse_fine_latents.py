@@ -54,11 +54,11 @@ def _read_block(block: dict[str, Any], token_ids: np.ndarray, cumulative_days: n
                                     seq_len=len(token_ids))
     subs = []
     for s in ann["subwindows"]:
-        if s["empty_target"]:
-            subs.append({"ids": np.asarray([], dtype=np.int64), "is_empty": True, "subwindow_k": s["subwindow_k"], "n": 0})
-        else:
-            sids = np.asarray(token_ids[s["target_start_ref"]: s["target_end_ref"] + 1], dtype=np.int64)
-            subs.append({"ids": sids, "is_empty": False, "subwindow_k": s["subwindow_k"], "n": int(s["n_target_events"])})
+        # Each sub-window dict carries target_start_ref/target_end_ref/empty_target, so
+        # the SAME -1-safe reader handles it (single-span-reader invariant).
+        sub_ids, sub_empty = read_target_span(s, token_ids)
+        subs.append({"ids": np.asarray(sub_ids, dtype=np.int64), "is_empty": bool(sub_empty),
+                     "subwindow_k": s["subwindow_k"], "n": int(s["n_target_events"])})
     return {"ctx": ctx, "full_ids": np.asarray(full_ids, dtype=np.int64), "full_empty": bool(full_empty),
             "K": int(ann["K"]), "subwindows": subs, "block": block}
 
