@@ -91,6 +91,79 @@ def paired_bootstrap_slope(records_by_W: dict[float, list[dict[str, Any]]], *, k
     }
 
 
+def _by_patient(records: list[dict[str, Any]]) -> dict[Any, list[dict[str, Any]]]:
+    by: dict[Any, list[dict[str, Any]]] = defaultdict(list)
+    for r in records:
+        by[r["patient"]].append(r)
+    return by
+
+
+def paired_gap_streams(coarse_records: list[dict[str, Any]], fine_records: list[dict[str, Any]],
+                       *, k: int = 10, n_boot: int = 2000, seed: int = 0) -> dict[str, Any]:
+    """Paired coarse−fine R@k gap when the two channels have DIFFERENT row counts
+    (coarse = per-block, fine = per-block×sub-window). Records = [{patient, rank}];
+    patients resampled SYNCHRONOUSLY, R@k recomputed per channel over the resample."""
+    cby, fby = _by_patient(coarse_records), _by_patient(fine_records)
+    patients = sorted(set(cby) | set(fby))
+    r10 = lambda recs: _r_at_k([r["rank"] for r in recs], k)  # noqa: E731
+    point = r10(coarse_records) - r10(fine_records)
+    rng = np.random.default_rng(seed)
+    P = len(patients)
+    gaps = np.empty(n_boot)
+    for b in range(n_boot):
+        samp = rng.integers(0, P, size=P)
+        cr = [r for i in samp for r in cby.get(patients[i], ())]
+        fr = [r for i in samp for r in fby.get(patients[i], ())]
+        gaps[b] = r10(cr) - r10(fr)
+    lo, hi = np.percentile(gaps, [2.5, 97.5])
+    return {"gap": point, "ci_lo": float(lo), "ci_hi": float(hi), "n_patients": P,
+            "n_coarse": len(coarse_records), "n_fine": len(fine_records)}
+
+
+def paired_slope_streams(coarse_by_W: dict[float, list[dict[str, Any]]],
+                         fine_by_W: dict[float, list[dict[str, Any]]],
+                         *, k: int = 10, n_boot: int = 2000, seed: int = 0) -> dict[str, Any]:
+    """Stream variant of paired_bootstrap_slope: coarse/fine records per horizon keyed
+    by patient; synchronous patient resample; β = decay rate (−slope of R@k vs log W);
+    β_fine − β_coarse > 0 ⇒ coarse decays slower per unit time."""
+    ws = np.array(sorted(set(coarse_by_W) | set(fine_by_W)), dtype=np.float64)
+    patients = sorted({r["patient"] for W in coarse_by_W for r in coarse_by_W[W]}
+                      | {r["patient"] for W in fine_by_W for r in fine_by_W[W]})
+    ix = {p: i for i, p in enumerate(patients)}
+
+    def _pw(by_W: dict[float, list[dict[str, Any]]]) -> dict[float, dict[int, list[dict[str, Any]]]]:
+        out: dict[float, dict[int, list[dict[str, Any]]]] = {}
+        for W in ws:
+            d: dict[int, list[dict[str, Any]]] = defaultdict(list)
+            for r in by_W.get(W, ()):
+                d[ix[r["patient"]]].append(r)
+            out[W] = d
+        return out
+
+    c_pw, f_pw = _pw(coarse_by_W), _pw(fine_by_W)
+
+    def betas(samp: np.ndarray) -> tuple[float, float]:
+        rc, rf = [], []
+        for W in ws:
+            rc.append(_r_at_k([r["rank"] for i in samp for r in c_pw[W].get(i, ())], k))
+            rf.append(_r_at_k([r["rank"] for i in samp for r in f_pw[W].get(i, ())], k))
+        return -_slope(ws, np.array(rc)), -_slope(ws, np.array(rf))
+
+    P = len(patients)
+    bc, bf = betas(np.arange(P))
+    point = bf - bc
+    rng = np.random.default_rng(seed)
+    diffs = np.empty(n_boot)
+    for b in range(n_boot):
+        cbc, cbf = betas(rng.integers(0, P, size=P))
+        diffs[b] = cbf - cbc
+    lo, hi = np.nanpercentile(diffs, [2.5, 97.5])
+    log_range = float(np.log(ws.max() / ws.min())) if len(ws) >= 2 and ws.min() > 0 else 0.0
+    return {"beta_coarse": bc, "beta_fine": bf, "slope_diff_fine_minus_coarse": point,
+            "ci_lo": float(lo), "ci_hi": float(hi),
+            "implied_range_widening": point * log_range, "log_range": log_range}
+
+
 def decision(*, level_gap: dict[str, Any], coarse_b_gap: dict[str, Any], slope: dict[str, Any],
              raw_count_ok: bool, veto: bool, sufficiency_ok: bool, adequate: bool,
              practical_level: float = LEVEL_GATE, practical_widening: float = 0.05) -> dict[str, Any]:
