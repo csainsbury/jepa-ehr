@@ -82,12 +82,15 @@ def paired_bootstrap_slope(records_by_W: dict[float, list[dict[str, Any]]], *, k
         s = rng.integers(0, P, size=P)
         cbc, cbf = _betas(s)
         diffs[b] = cbf - cbc
-    lo, hi = np.nanpercentile(diffs, [2.5, 97.5])
     log_range = float(np.log(ws.max() / ws.min())) if len(ws) >= 2 and ws.min() > 0 else 0.0
+    lo, hi = np.nanpercentile(diffs, [2.5, 97.5])
+    wlo, whi = np.nanpercentile(diffs * log_range, [2.5, 97.5])
     return {
         "beta_coarse": bc, "beta_fine": bf, "slope_diff_fine_minus_coarse": point_diff,
         "ci_lo": float(lo), "ci_hi": float(hi),
-        "implied_range_widening": point_diff * log_range, "log_range": log_range,
+        "implied_range_widening": point_diff * log_range,
+        "widening_ci_lo": float(wlo), "widening_ci_hi": float(whi),
+        "log_range": log_range, "horizons_days": [float(w) for w in ws],
     }
 
 
@@ -165,49 +168,94 @@ def paired_slope_streams(coarse_by_W: dict[float, list[dict[str, Any]]],
     for b in range(n_boot):
         cbc, cbf = betas(rng.integers(0, P, size=P))
         diffs[b] = cbf - cbc
-    lo, hi = np.nanpercentile(diffs, [2.5, 97.5])
     log_range = float(np.log(ws.max() / ws.min())) if len(ws) >= 2 and ws.min() > 0 else 0.0
+    # GATED quantity = implied range-scale widening (Pi R6 #2): the per-log-time
+    # β-difference × the log horizon range, with the CI in R@k widening units.
+    lo, hi = np.nanpercentile(diffs, [2.5, 97.5])
+    wlo, whi = np.nanpercentile(diffs * log_range, [2.5, 97.5])
     return {"beta_coarse": bc, "beta_fine": bf, "slope_diff_fine_minus_coarse": point,
             "ci_lo": float(lo), "ci_hi": float(hi),
-            "implied_range_widening": point * log_range, "log_range": log_range}
+            "implied_range_widening": point * log_range,
+            "widening_ci_lo": float(wlo), "widening_ci_hi": float(whi),
+            "log_range": log_range, "horizons_days": [float(w) for w in ws]}
+
+
+def _control_status(explicit: str | None, legacy: bool | None) -> str:
+    """Normalize a corroboration control to {pass, fail, not_run} (Pi R6 #4).
+
+    An explicit status wins. Otherwise a legacy boolean is disambiguated: ``True`` -> pass;
+    ``False`` -> not_run (NOT fail) — a control that did not run must never be laundered as
+    a completed no-veto test, which was the ambiguity Pi flagged."""
+    if explicit in ("pass", "fail", "not_run"):
+        return explicit  # type: ignore[return-value]
+    if legacy is True:
+        return "pass"
+    return "not_run"
+
+
+def _slope_bound(slope: dict[str, Any], which: str) -> float:
+    """Slope bound in REGISTERED range-scale (implied-widening) units (Pi R6 #2). Prefer
+    the bootstrapped widening CI; else scale the raw per-log-time β-diff CI by log_range;
+    else fall back to the raw CI (log_range absent — legacy/degenerate)."""
+    wkey = "widening_ci_lo" if which == "lo" else "widening_ci_hi"
+    if wkey in slope and np.isfinite(slope.get(wkey, np.nan)):
+        return float(slope[wkey])
+    raw = slope.get("ci_lo" if which == "lo" else "ci_hi", np.nan)
+    lr = slope.get("log_range")
+    return float(raw) * float(lr) if (lr is not None and np.isfinite(raw)) else float(raw)
 
 
 def decision(*, level_gap: dict[str, Any], coarse_b_gap: dict[str, Any], slope: dict[str, Any],
-             raw_count_ok: bool, veto: bool, sufficiency_ok: bool, adequate: bool,
-             coarse_b_ruled_out: bool | None = None,
+             raw_count_ok: bool | None = None, veto: bool = False, sufficiency_ok: bool | None = None,
+             adequate: bool, coarse_b_ruled_out: bool | None = None,
+             raw_count_status: str | None = None, sufficiency_status: str | None = None,
+             time_shuffle_status: str | None = None,
              practical_level: float = LEVEL_GATE, practical_widening: float = 0.05) -> dict[str, Any]:
-    """Three-way decision (Pi R5 C7). BUILD requires ALL of: literal level gate AND
+    """Three-way decision (Pi R5 C7 / R6). BUILD requires ALL of: literal level gate AND
     budget-matched coarse_B gate (the WORST co-primary cell paired-CI clears the practical
-    level) AND slope separation AND raw-count corroboration AND no veto AND sufficiency.
+    level) AND slope separation (implied range-scale WIDENING CI clears ``practical_widening``,
+    Pi R6 #2) AND a PASSING raw-count control AND no veto AND a PASSING sufficiency control.
+
+    Corroboration controls carry an explicit {pass, fail, not_run} status (Pi R6 #4): a
+    skipped control is recorded as ``not_run`` and can never satisfy BUILD, and is reported
+    distinctly from a control that ran and failed.
 
     EFFECT-RULED-OUT requires that EVERY co-primary coarse_B cell excludes the meaningful
     effect (``coarse_b_ruled_out``: all per-horizon ci_hi < practical_level) AND the slope
-    is ruled out — using only the worst cell's ci_hi would wrongly rule out an effect that
-    a different co-primary cell still shows. Everything else is INCONCLUSIVE."""
+    widening upper bound is below ``practical_widening`` — using only the worst cell's ci_hi
+    would wrongly rule out an effect that a different co-primary cell still shows."""
+    rc_status = _control_status(raw_count_status, raw_count_ok)
+    suf_status = _control_status(sufficiency_status, sufficiency_ok)
+    ts_status = time_shuffle_status if time_shuffle_status in ("pass", "fail", "not_run") else ("fail" if veto else "not_run")
+    controls = {"raw_count_status": rc_status, "sufficiency_status": suf_status,
+                "time_shuffle_status": ts_status}
     if not adequate:
-        return {"decision": "NO-BUILD_INCONCLUSIVE", "reason": "cell fails adequacy floor (degeneracy screen)"}
+        return {"decision": "NO-BUILD_INCONCLUSIVE", "reason": "cell fails adequacy floor (degeneracy screen)",
+                **controls}
 
     def _clears(g: dict[str, Any], thr: float) -> bool:
         return bool(np.isfinite(g.get("ci_lo", np.nan)) and g["ci_lo"] > thr)
 
     level_ok = _clears(level_gap, practical_level)          # worst co-primary must clear
     coarse_b_ok = _clears(coarse_b_gap, practical_level)    # worst co-primary must clear
-    slope_ok = bool(np.isfinite(slope.get("ci_lo", np.nan)) and slope["ci_lo"] > practical_widening)
-    build = level_ok and coarse_b_ok and slope_ok and raw_count_ok and (not veto) and sufficiency_ok
+    wlo = _slope_bound(slope, "lo")
+    slope_ok = bool(np.isfinite(wlo) and wlo > practical_widening)
+    build = (level_ok and coarse_b_ok and slope_ok and rc_status == "pass"
+             and (not veto) and suf_status == "pass")
     if build:
         return {"decision": "BUILD", "level_ok": True, "coarse_b_ok": True, "slope_ok": True,
-                "raw_count_ok": True, "sufficiency_ok": True, "veto": False}
+                "veto": False, **controls}
 
     # Ruled out ONLY when EVERY co-primary coarse_B cell excludes the meaningful effect
-    # (all ci_hi < practical_level) AND the slope is uninformative/negative. Fall back to
-    # the single passed gap's ci_hi when the caller cannot supply the all-cells flag.
+    # (all ci_hi < practical_level) AND the slope widening upper bound is below the practical
+    # widening. Fall back to the single passed gap's ci_hi when the all-cells flag is absent.
     if coarse_b_ruled_out is None:
         coarse_b_ruled_out = bool(np.isfinite(coarse_b_gap.get("ci_hi", np.nan)) and coarse_b_gap["ci_hi"] < practical_level)
-    slope_ruled_out = bool(np.isfinite(slope.get("ci_hi", np.nan)) and slope["ci_hi"] < practical_widening)
+    whi = _slope_bound(slope, "hi")
+    slope_ruled_out = bool(np.isfinite(whi) and whi < practical_widening)
     status = "NO-BUILD_EFFECT-RULED-OUT" if (coarse_b_ruled_out and slope_ruled_out and not veto) else "NO-BUILD_INCONCLUSIVE"
     return {"decision": status, "level_ok": level_ok, "coarse_b_ok": coarse_b_ok, "slope_ok": slope_ok,
-            "coarse_b_ruled_out": coarse_b_ruled_out, "raw_count_ok": raw_count_ok,
-            "sufficiency_ok": sufficiency_ok, "veto": veto}
+            "coarse_b_ruled_out": coarse_b_ruled_out, "veto": veto, **controls}
 
 
 def assert_k1_null(gap: dict[str, Any], *, tol: float = 1e-9) -> None:

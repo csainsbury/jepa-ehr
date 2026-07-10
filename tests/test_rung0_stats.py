@@ -105,6 +105,69 @@ class DecisionTests(unittest.TestCase):
             assert_k1_null({"gap": 0.2})
 
 
+class SlopeWideningGateTests(unittest.TestCase):
+    """Pi R6 #2: the slope gate is applied in REGISTERED range-scale (implied-widening)
+    units, not the raw per-log-time β-difference."""
+    def _clear(self):
+        return {"gap": 0.3, "ci_lo": 0.2, "ci_hi": 0.4}
+
+    def test_gate_uses_widening_not_raw_beta_diff(self) -> None:
+        # Raw β-diff CI clears 0.05, but the registered widening CI does NOT -> slope fails.
+        d = decision(level_gap=self._clear(), coarse_b_gap=self._clear(),
+                     slope={"ci_lo": 0.10, "ci_hi": 0.30, "widening_ci_lo": 0.02, "widening_ci_hi": 0.06},
+                     raw_count_ok=True, veto=False, sufficiency_ok=True, adequate=True)
+        self.assertFalse(d["slope_ok"])
+        self.assertNotEqual(d["decision"], "BUILD")
+
+    def test_same_beta_diff_two_ranges_flip_gate(self) -> None:
+        # Identical raw β-diff CI; different horizon ranges (log_range) flip the slope gate.
+        raw = {"ci_lo": 0.04, "ci_hi": 0.06}
+        wide = decision(level_gap=self._clear(), coarse_b_gap=self._clear(),
+                        slope={**raw, "widening_ci_lo": 0.04 * 2.0, "widening_ci_hi": 0.06 * 2.0},
+                        raw_count_ok=True, veto=False, sufficiency_ok=True, adequate=True)
+        narrow = decision(level_gap=self._clear(), coarse_b_gap=self._clear(),
+                          slope={**raw, "widening_ci_lo": 0.04 * 0.5, "widening_ci_hi": 0.06 * 0.5},
+                          raw_count_ok=True, veto=False, sufficiency_ok=True, adequate=True)
+        self.assertTrue(wide["slope_ok"])      # widening lo 0.08 > 0.05
+        self.assertFalse(narrow["slope_ok"])   # widening lo 0.02 < 0.05
+
+    def test_widening_from_log_range_when_ci_absent(self) -> None:
+        # Fallback: no widening CI keys -> scale raw β-diff CI by log_range.
+        d = decision(level_gap=self._clear(), coarse_b_gap=self._clear(),
+                     slope={"ci_lo": 0.04, "ci_hi": 0.06, "log_range": 2.0},  # widening lo 0.08 > 0.05
+                     raw_count_ok=True, veto=False, sufficiency_ok=True, adequate=True)
+        self.assertTrue(d["slope_ok"])
+
+
+class ControlStatusTests(unittest.TestCase):
+    """Pi R6 #4: corroboration controls carry an explicit {pass, fail, not_run} status; a
+    skipped control is recorded as not_run and can never satisfy BUILD."""
+    def _clear(self):
+        return {"gap": 0.3, "ci_lo": 0.2, "ci_hi": 0.4}
+
+    def test_not_run_blocks_build_and_is_recorded(self) -> None:
+        d = decision(level_gap=self._clear(), coarse_b_gap=self._clear(),
+                     slope={"ci_lo": 0.1, "ci_hi": 0.3, "widening_ci_lo": 0.1, "widening_ci_hi": 0.3},
+                     raw_count_status="not_run", sufficiency_status="pass", time_shuffle_status="pass",
+                     adequate=True)
+        self.assertEqual(d["raw_count_status"], "not_run")
+        self.assertNotEqual(d["decision"], "BUILD")   # not_run is not pass
+
+    def test_legacy_false_maps_to_not_run(self) -> None:
+        d = decision(level_gap=self._clear(), coarse_b_gap=self._clear(),
+                     slope={"ci_lo": 0.1, "ci_hi": 0.3}, raw_count_ok=False, veto=False,
+                     sufficiency_ok=False, adequate=True)
+        self.assertEqual(d["raw_count_status"], "not_run")
+        self.assertEqual(d["sufficiency_status"], "not_run")
+
+    def test_pass_statuses_allow_build(self) -> None:
+        d = decision(level_gap=self._clear(), coarse_b_gap=self._clear(),
+                     slope={"ci_lo": 0.1, "ci_hi": 0.3, "widening_ci_lo": 0.1, "widening_ci_hi": 0.3},
+                     raw_count_status="pass", sufficiency_status="pass", time_shuffle_status="pass",
+                     adequate=True)
+        self.assertEqual(d["decision"], "BUILD")
+
+
 class TargetGeometryTests(unittest.TestCase):
     def test_duplicate_and_effective_rank(self) -> None:
         import numpy as np

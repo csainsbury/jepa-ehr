@@ -54,8 +54,12 @@ def run_verdict(
     max_candidates: int = 200,
     adequacy_floor: int = 500,
 ) -> dict[str, Any]:
-    """sources_cfg = {source: {horizons: [...], level_horizons: [...], raw_count_ok: bool,
-    sufficiency_ok: bool, veto: bool}}."""
+    """sources_cfg = {source: {horizons: [...], level_horizons: [...], primary_horizons: [...],
+    raw_count_status: str, sufficiency_status: str, time_shuffle_status: str, veto: bool}}.
+
+    ``primary_horizons`` (Pi R6 #1) is the frozen band the decision slope is fit over; horizons
+    outside it (e.g. MIMIC's 2 d saturation sensitivity) are reported separately, not gated.
+    Corroboration controls use explicit {pass, fail, not_run} status (Pi R6 #4)."""
     verdicts = []
     for source, cfg in sources_cfg.items():
         per_W = load_bundle(sidecar_root, source, cfg["horizons"])
@@ -63,11 +67,14 @@ def run_verdict(
             verdicts.append({"source": source, "decision": "NO-BUILD_INCONCLUSIVE",
                              "reason": "no sidecars found", "aggregate_only": True})
             continue
+        primary = cfg.get("primary_horizons")
         verdicts.append(evaluate_source(
             source, per_W, level_horizons=[float(w) for w in cfg["level_horizons"]],
+            primary_horizons=[float(w) for w in primary] if primary is not None else None,
             n_boot=n_boot, seed=seed, max_candidates=max_candidates, adequacy_floor=adequacy_floor,
-            raw_count_ok=bool(cfg.get("raw_count_ok", False)),
-            sufficiency_ok=bool(cfg.get("sufficiency_ok", False)),
+            raw_count_status=str(cfg.get("raw_count_status", "not_run")),
+            sufficiency_status=str(cfg.get("sufficiency_status", "not_run")),
+            time_shuffle_status=str(cfg.get("time_shuffle_status", "not_run")),
             veto=bool(cfg.get("veto", False)),
         ))
     return build_manifest(verdicts)
@@ -76,7 +83,7 @@ def run_verdict(
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Rung-0 per-source hierarchy verdict from exported sidecars")
     ap.add_argument("--sidecar-root", required=True)
-    ap.add_argument("--sources-config", required=True, help="JSON: {source: {horizons, level_horizons, raw_count_ok, sufficiency_ok, veto}}")
+    ap.add_argument("--sources-config", required=True, help="JSON: {source: {horizons, level_horizons, primary_horizons, raw_count_status, sufficiency_status, time_shuffle_status, veto}}")
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--max-candidates", type=int, default=200)
     ap.add_argument("--adequacy-floor", type=int, default=500)

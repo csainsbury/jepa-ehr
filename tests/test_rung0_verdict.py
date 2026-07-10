@@ -45,7 +45,7 @@ class VerdictTests(unittest.TestCase):
             self.assertIn("coarse", bundle[30.0])
 
             m = run_verdict(root, {"SCID": {"horizons": [30.0, 90.0], "level_horizons": [30.0, 90.0],
-                                            "raw_count_ok": False, "sufficiency_ok": False}},
+                                            "raw_count_status": "not_run", "sufficiency_status": "not_run"}},
                             n_boot=200, adequacy_floor=2)
             # coarse == fine (gap ~0) AND no sufficiency co-gate -> never BUILD.
             self.assertNotEqual(m["decisions"]["SCID"], "BUILD")

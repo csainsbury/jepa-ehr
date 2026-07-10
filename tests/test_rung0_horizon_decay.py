@@ -74,12 +74,37 @@ class DriverTests(unittest.TestCase):
                 "fine_B": self._cell(4, pats, W=W, granularity="fine_B", hit=True, subwindow_k=0),
             }
         v = evaluate_source("SCID", per_W, level_horizons=[30.0, 90.0], n_boot=200,
-                            adequacy_floor=2, raw_count_ok=True, sufficiency_ok=True)
+                            adequacy_floor=2, raw_count_status="pass", sufficiency_status="pass")
         self.assertIn(v["decision"], ("NO-BUILD_INCONCLUSIVE", "NO-BUILD_EFFECT-RULED-OUT"))  # no coarse edge
         self.assertTrue(v["aggregate_only"])
         m = build_manifest([v])
         self.assertEqual(m["decisions"]["SCID"], v["decision"])
         self.assertIn("SCID", m["per_source"])
+
+    def test_skipped_controls_recorded_not_run(self) -> None:
+        # Pi R6 #4: a control not run this pass is recorded as not_run, distinct from fail.
+        pats = ["A", "A", "B", "B"]
+        per_W = {W: {g: self._cell(4, pats, W=W, granularity=g, hit=True,
+                                   subwindow_k=(0 if "fine" in g else None))
+                     for g in ("coarse", "fine", "coarse_B", "fine_B")} for W in (30.0, 90.0)}
+        v = evaluate_source("SCID", per_W, level_horizons=[30.0, 90.0], n_boot=200, adequacy_floor=2)
+        self.assertEqual(v["controls"]["raw_count_status"], "not_run")
+        self.assertEqual(v["controls"]["sufficiency_status"], "not_run")
+
+    def test_primary_horizons_excludes_sensitivity_from_slope(self) -> None:
+        # Pi R6 #1: horizons outside the primary band are excluded from the DECISION slope
+        # and surfaced as a separate sensitivity slope.
+        pats = ["A", "A", "B", "B"]
+        per_W = {W: {g: self._cell(4, pats, W=W, granularity=g, hit=True,
+                                   subwindow_k=(0 if "fine" in g else None))
+                     for g in ("coarse", "fine", "coarse_B", "fine_B")}
+                 for W in (0.25, 0.5, 1.0, 2.0)}
+        v = evaluate_source("MIMIC", per_W, level_horizons=[0.5],
+                            primary_horizons=[0.25, 0.5, 1.0], n_boot=100, adequacy_floor=2)
+        self.assertEqual(v["primary_horizons"], [0.25, 0.5, 1.0])
+        self.assertEqual(v["sensitivity_horizons"], [2.0])
+        self.assertEqual(v["slope"]["horizons_days"], [0.25, 0.5, 1.0])           # 2 d excluded
+        self.assertEqual(v["sensitivity_slope"]["horizons_days"], [0.25, 0.5, 1.0, 2.0])
 
 
 if __name__ == "__main__":

@@ -40,18 +40,29 @@ def evaluate_source(
     per_W: dict[float, dict[str, dict[str, Any]]],
     *,
     level_horizons: list[float],
+    primary_horizons: list[float] | None = None,
     k: int = 10,
     n_boot: int = 2000,
     seed: int = 20260523,
     max_candidates: int = 200,
-    raw_count_ok: bool = False,
+    raw_count_status: str = "not_run",
+    time_shuffle_status: str = "not_run",
+    sufficiency_status: str = "not_run",
     veto: bool = False,
-    sufficiency_ok: bool = False,
     practical_level: float = 0.10,
     practical_widening: float = 0.05,
     adequacy_floor: int = 500,
 ) -> dict[str, Any]:
-    """per_W = {W: {granularity: {queries, targets, index}}}. Returns the source verdict."""
+    """per_W = {W: {granularity: {queries, targets, index}}}. Returns the source verdict.
+
+    ``primary_horizons`` (Pi R6 #1): the frozen primary band the DECISION slope is fit over.
+    Horizons present in per_W but NOT in primary_horizons (e.g. MIMIC's 2 d saturation-boundary
+    sensitivity) are excluded from the decision slope and reported separately as a sensitivity
+    slope. Defaults to all horizons in per_W (no sensitivity horizons).
+
+    Corroboration controls (raw-count, time-shuffle, sufficiency) carry an explicit
+    {pass, fail, not_run} status (Pi R6 #4) — a control not run this pass is recorded as
+    ``not_run`` and can never satisfy BUILD, distinctly from a control that ran and failed."""
     # 1) rank every cell -> populated record streams keyed by granularity + W.
     recs: dict[str, dict[float, list[dict[str, Any]]]] = {g: {} for g in GRANULARITIES}
     adequacy: dict[str, dict[str, bool]] = {}
@@ -62,6 +73,10 @@ def evaluate_source(
             rr = _populated(_rank_cell(cell, seed=seed, max_candidates=max_candidates))
             recs[g][float(W)] = rr
             adequacy.setdefault(str(W), {})[g] = len(rr) >= adequacy_floor
+
+    all_horizons = sorted({float(W) for W in per_W})
+    primary = sorted({float(W) for W in (primary_horizons if primary_horizons is not None else all_horizons)})
+    sensitivity_horizons = [W for W in all_horizons if W not in set(primary)]
 
     # 2) K=1 harness null (coarse ≡ fine ⇒ ~0 gap) if present.
     k1_ok = True
@@ -88,14 +103,26 @@ def evaluate_source(
             per_horizon_cb[W] = paired_gap_streams(c, f, k=k, n_boot=n_boot, seed=seed)
     worst_cb = min(per_horizon_cb.values(), key=lambda g: g["ci_lo"]) if per_horizon_cb else {"gap": float("nan"), "ci_lo": float("nan"), "ci_hi": float("nan")}
 
-    # 4) slope over all horizons present.
-    slope = paired_slope_streams(recs["coarse"], recs["fine"], k=k, n_boot=n_boot, seed=seed) if recs["coarse"] and recs["fine"] else {"ci_lo": float("nan"), "ci_hi": float("nan"), "slope_diff_fine_minus_coarse": float("nan")}
+    # 4) DECISION slope over the frozen PRIMARY band only (Pi R6 #1); the widening CI is the
+    # gated range-scale quantity. Sensitivity horizons get a separate, non-decisional slope.
+    def _slope_over(hset: list[float]) -> dict[str, Any]:
+        cby = {W: recs["coarse"][W] for W in hset if recs["coarse"].get(W)}
+        fby = {W: recs["fine"][W] for W in hset if recs["fine"].get(W)}
+        if len(cby) >= 2 and len(fby) >= 2:
+            return paired_slope_streams(cby, fby, k=k, n_boot=n_boot, seed=seed)
+        return {"ci_lo": float("nan"), "ci_hi": float("nan"), "widening_ci_lo": float("nan"),
+                "widening_ci_hi": float("nan"), "slope_diff_fine_minus_coarse": float("nan"),
+                "horizons_days": [float(W) for W in hset]}
+    slope = _slope_over(primary)
+    sensitivity_slope = _slope_over(all_horizons) if sensitivity_horizons else None
 
-    # 5) adequacy of the decision cells (co-primary level horizons, coarse + fine).
-    adequate = all(
-        adequacy.get(str(W), {}).get("coarse", False) and adequacy.get(str(W), {}).get("fine", False)
+    # 5) adequacy of the DECISION cells: co-primary level horizons must be adequate for the
+    # level pair (coarse+fine) AND the budget-matched pair (coarse_B+fine_B) (Pi R6 #5 —
+    # fail adequacy CLOSED on the de-confounding quantities, not just the raw level pair).
+    adequate = bool(level_horizons) and all(
+        all(adequacy.get(str(W), {}).get(g, False) for g in ("coarse", "fine", "coarse_B", "fine_B"))
         for W in level_horizons
-    ) and bool(level_horizons)
+    )
 
     # EFFECT-RULED-OUT requires EVERY co-primary coarse_B cell to exclude the effect,
     # not just the worst one (verification-found gate-logic fix).
@@ -104,22 +131,28 @@ def evaluate_source(
     )
     verdict = decision(
         level_gap=worst_level, coarse_b_gap=worst_cb, slope=slope, coarse_b_ruled_out=cb_ruled_out,
-        raw_count_ok=raw_count_ok, veto=(veto or not k1_ok), sufficiency_ok=sufficiency_ok,
+        raw_count_status=raw_count_status, sufficiency_status=sufficiency_status,
+        time_shuffle_status=("fail" if (veto or not k1_ok) else time_shuffle_status),
+        veto=(veto or not k1_ok),
         adequate=adequate, practical_level=practical_level, practical_widening=practical_widening,
     )
     return {
         "source": source,
         "level_horizons": [float(W) for W in level_horizons],
+        "primary_horizons": primary,
+        "sensitivity_horizons": sensitivity_horizons,
         "per_horizon_level_gap": {str(W): g for W, g in per_horizon_level.items()},
         "per_horizon_coarse_b_gap": {str(W): g for W, g in per_horizon_cb.items()},
         "worst_level_gap": worst_level,
         "worst_coarse_b_gap": worst_cb,
         "slope": slope,
+        "sensitivity_slope": sensitivity_slope,
         "k1_harness_ok": k1_ok,
         "adequacy": adequacy,
         "adequate": adequate,
-        "raw_count_ok": raw_count_ok,
-        "sufficiency_ok": sufficiency_ok,
+        "controls": {"raw_count_status": verdict.get("raw_count_status"),
+                     "sufficiency_status": verdict.get("sufficiency_status"),
+                     "time_shuffle_status": verdict.get("time_shuffle_status")},
         "veto": veto,
         "decision": verdict["decision"],
         "decision_detail": verdict,
