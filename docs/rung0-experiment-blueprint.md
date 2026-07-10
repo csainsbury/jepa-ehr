@@ -1,10 +1,81 @@
 ---
 title: Within-source wall-clock RUNG 0 — design blueprint (design-panel synthesis)
 created: 2026-07-09
-status: BLUEPRINT — awaiting Pi blueprint gate before the governed run
+status: Pi R5 GO-WITH-CHANGES (2026-07-10) — corrections below are BINDING; governed run blocked until implemented
 produced_by: 3-proposal design panel + adversarial critique + synthesis (workflow rung0-design)
 scope: does a within-source timescale separation exist (coarse decays slower per unit wall-clock time) → build a hierarchical JEPA? Per source at frozen horizons.
 ---
+
+# Rung 0 blueprint — cardinality-normalized sub-window horizon-decay
+
+## Pi R5 gate — GO-WITH-CHANGES (BINDING corrections; supersede the body where they conflict)
+Governed run **not authorized** until these are implemented. jepa_pi_thread.md R5.
+
+**C1 — CRITICAL: close the future-cardinality leak.** `z_full = Σ n_k z_k / Σ n_k` is a
+**target-side identity ONLY**. Observed future `n_k` may construct/audit targets + score
+count predictions; it may **NOT** weight `ẑ_k`, choose a prediction head, construct
+`ẑ_coarse`, or enter the sufficiency ablation. → The predicted coarse query is **context-
+only**: either a direct context-only coarse predictor, or weights predicted from
+context/rolled state. In the sufficiency arm, fine-render conditions on **predicted**
+coarse state only, never true `z_coarse`. **Invariance test (mandatory):** mutating the
+target events/counts after query construction must leave every predicted query/weight
+byte-identical.
+
+**C2 — narrow the pooling claim.** The identity holds only for pre-normalization
+arithmetic event means, no nonlinear projection, with an explicit all-empty convention;
+**numerically test** it on mixed and all-empty windows. Downgrade "a coarse win IS the
+abstraction edge" → "a **candidate** abstraction-edge signal" (pooling SNR, target
+geometry, prediction construction remain alternative explanations).
+
+**C3 — genuinely-matched event budget (`coarse_k` → renamed `coarse_B`).** Freeze a
+**train-only** budget `B`; apply the SAME budget/sampling rule to `coarse_B` AND every
+evaluable **fine** target (do not subsample only coarse). Report retained coverage;
+fixed-seed repeated-subsample sensitivity. Cells/sub-windows with `< B` events are a
+**separate stratum**, never padded.
+
+**C4 — freeze candidate construction exactly.** Group key = source, split, **exact W**,
+target_type, granularity/sub-position, occupancy stratum, context length + rate bins,
+target-width sensitivity. Distractors **patient-disjoint** where linkage permits;
+identical `N` + seeds across paired channels. Empty sub-windows out of the populated
+decision statistic (coverage reported). Add **target-geometry diagnostics** (tie/duplicate
+rate, variance/effective rank, random + query-shuffle baselines) — equal `N` gives equal
+chance, NOT equal difficulty.
+
+**C5 — paired inference.** Resample patients/sequences **synchronously** across channels
++ horizons; infer the **paired gap** and **paired slope difference** directly (two marginal
+non-overlapping CIs are NOT a substitute — keep the legacy non-overlap for continuity but
+ALSO report the paired CI). Predeclare a **practical slope effect** before data access,
+e.g. implied widening `(β_fine−β_coarse)·log(Wmax/Wmin)`, not merely a detectable sign.
+**K=1 = an exact same-target/same-candidate harness assertion** (numerical tolerance), not
+a significance test. Repeated time-shuffles; freeze the veto statistic/CI.
+
+**C6 — exact near-fixed-width partition (primary).** Fixed-width arm: `K(W)=round(W/δ)`,
+`w=W/K` (no remainder cell; record the small deviation from `δ`). δ primary; K=2
+proportional = sensitivity; K=1 null; K=4 granularity sensitivity.
+
+**C7 — decision ≠ epistemic status.** Emit ≥ **BUILD / NO-BUILD_INCONCLUSIVE /
+NO-BUILD_EFFECT-RULED-OUT**. The adequacy floor is a degeneracy screen, not a power proof.
+
+**Q-rulings.** Q1: keep literal `coarse_full` as frozen primary/legacy level gate **AND**
+require corrected bilaterally-budget-matched `coarse_B` as mandatory confirmation —
+promotion needs **both** (not one-replaces-other). Q2: slope co-required **+** predeclared
+practical range-scale effect; joint fit/bootstrap; report **pairwise horizon contrasts**
+(MIMIC has 3 levels; log-linear slope can hide curvature). Q3: raw-count = **corroboration/
+veto, NOT co-primary** — compare **direct coarse total-count prediction vs the SUM of fine
+sub-window count predictions** against the SAME observed total (held-out dev, context-only,
+additive consistency, calibration, Poisson/NB deviance vs empirical context-rate baseline);
+count agreement cannot rescue failed latent retrieval. Q4: gate at **BOTH 90d and 365d**
+(two central co-primary SCID cells); MIMIC 0.5d; test untouched, no perf-based horizon
+selection. Q5: **train the smallest actual coarse-conditioned fine-render head** (relax
+`horizon_count=1`), matched on training-examples/steps/params/FLOP/prediction-calls, fixed
+multiple seeds, eval on **predicted** coarse state; paired CI + predeclared practical
+drift-slope effect (not point `Δslope>0`); the training-free proxy is diagnostic-only.
+Q6: near-fixed-width δ primary (above). Q7: floor-pass-but-non-overlap-miss = operational
+NO-BUILD, `INCONCLUSIVE` if the paired CI still includes the meaningful effect, `EFFECT-
+RULED-OUT` only when the CI upper bound excludes it. Q8: **confirmed dev-only** — order/Δt
+hard negatives + frozen-decode ceiling mandatory before any generation claim.
+
+_(The sections below are the pre-R5 design; read them through the corrections above.)_
 
 # Rung 0 blueprint — cardinality-normalized sub-window horizon-decay
 
