@@ -98,23 +98,39 @@ def _by_patient(records: list[dict[str, Any]]) -> dict[Any, list[dict[str, Any]]
     return by
 
 
+def _patient_hit_count(records: list[dict[str, Any]], pidx: dict[Any, int], P: int, k: int) -> tuple[np.ndarray, np.ndarray]:
+    """Per-patient (hit_sum, n) for R@k — vectorizes the patient bootstrap to O(P)/iter."""
+    hit = np.zeros(P)
+    cnt = np.zeros(P)
+    for r in records:
+        i = pidx[r["patient"]]
+        cnt[i] += 1.0
+        if r["rank"] <= k:
+            hit[i] += 1.0
+    return hit, cnt
+
+
+def _r_from(hit: np.ndarray, cnt: np.ndarray) -> float:
+    tot = cnt.sum()
+    return float(hit.sum() / tot) if tot > 0 else float("nan")
+
+
 def paired_gap_streams(coarse_records: list[dict[str, Any]], fine_records: list[dict[str, Any]],
                        *, k: int = 10, n_boot: int = 2000, seed: int = 0) -> dict[str, Any]:
     """Paired coarse−fine R@k gap when the two channels have DIFFERENT row counts
-    (coarse = per-block, fine = per-block×sub-window). Records = [{patient, rank}];
-    patients resampled SYNCHRONOUSLY, R@k recomputed per channel over the resample."""
-    cby, fby = _by_patient(coarse_records), _by_patient(fine_records)
-    patients = sorted(set(cby) | set(fby))
-    r10 = lambda recs: _r_at_k([r["rank"] for r in recs], k)  # noqa: E731
-    point = r10(coarse_records) - r10(fine_records)
-    rng = np.random.default_rng(seed)
+    (coarse = per-block, fine = per-block×sub-window). Patients resampled SYNCHRONOUSLY;
+    vectorized over per-patient (hit, count) aggregates so it scales to 100k+ records."""
+    patients = sorted({r["patient"] for r in coarse_records} | {r["patient"] for r in fine_records})
+    pidx = {p: i for i, p in enumerate(patients)}
     P = len(patients)
+    ch, cn = _patient_hit_count(coarse_records, pidx, P, k)
+    fh, fn = _patient_hit_count(fine_records, pidx, P, k)
+    point = _r_from(ch, cn) - _r_from(fh, fn)
+    rng = np.random.default_rng(seed)
     gaps = np.empty(n_boot)
     for b in range(n_boot):
-        samp = rng.integers(0, P, size=P)
-        cr = [r for i in samp for r in cby.get(patients[i], ())]
-        fr = [r for i in samp for r in fby.get(patients[i], ())]
-        gaps[b] = r10(cr) - r10(fr)
+        s = rng.integers(0, P, size=P)
+        gaps[b] = _r_from(ch[s], cn[s]) - _r_from(fh[s], fn[s])
     lo, hi = np.percentile(gaps, [2.5, 97.5])
     return {"gap": point, "ci_lo": float(lo), "ci_hi": float(hi), "n_patients": P,
             "n_coarse": len(coarse_records), "n_fine": len(fine_records)}
@@ -130,26 +146,18 @@ def paired_slope_streams(coarse_by_W: dict[float, list[dict[str, Any]]],
     patients = sorted({r["patient"] for W in coarse_by_W for r in coarse_by_W[W]}
                       | {r["patient"] for W in fine_by_W for r in fine_by_W[W]})
     ix = {p: i for i, p in enumerate(patients)}
-
-    def _pw(by_W: dict[float, list[dict[str, Any]]]) -> dict[float, dict[int, list[dict[str, Any]]]]:
-        out: dict[float, dict[int, list[dict[str, Any]]]] = {}
-        for W in ws:
-            d: dict[int, list[dict[str, Any]]] = defaultdict(list)
-            for r in by_W.get(W, ()):
-                d[ix[r["patient"]]].append(r)
-            out[W] = d
-        return out
-
-    c_pw, f_pw = _pw(coarse_by_W), _pw(fine_by_W)
+    P = len(patients)
+    # Per-horizon per-patient (hit, count) matrices [len(ws), P] — vectorized bootstrap.
+    CH, CN = np.zeros((len(ws), P)), np.zeros((len(ws), P))
+    FH, FN = np.zeros((len(ws), P)), np.zeros((len(ws), P))
+    for wi, W in enumerate(ws):
+        CH[wi], CN[wi] = _patient_hit_count(coarse_by_W.get(W, []), ix, P, k)
+        FH[wi], FN[wi] = _patient_hit_count(fine_by_W.get(W, []), ix, P, k)
 
     def betas(samp: np.ndarray) -> tuple[float, float]:
-        rc, rf = [], []
-        for W in ws:
-            rc.append(_r_at_k([r["rank"] for i in samp for r in c_pw[W].get(i, ())], k))
-            rf.append(_r_at_k([r["rank"] for i in samp for r in f_pw[W].get(i, ())], k))
-        return -_slope(ws, np.array(rc)), -_slope(ws, np.array(rf))
-
-    P = len(patients)
+        rc = np.array([_r_from(CH[wi, samp], CN[wi, samp]) for wi in range(len(ws))])
+        rf = np.array([_r_from(FH[wi, samp], FN[wi, samp]) for wi in range(len(ws))])
+        return -_slope(ws, rc), -_slope(ws, rf)
     bc, bf = betas(np.arange(P))
     point = bf - bc
     rng = np.random.default_rng(seed)

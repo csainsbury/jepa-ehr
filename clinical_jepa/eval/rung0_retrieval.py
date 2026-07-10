@@ -68,33 +68,41 @@ def rung0_rank(
     skipped = 0
     cand_counts: list[int] = []
     for members in groups.values():
+        m = len(members)
+        if m < 2:
+            skipped += m
+            continue
         idx = np.asarray(members)
         pats = np.array([str(index[i].get(patient_field)) for i in members])
-        T = t[idx]                                   # [m, D] group targets
-        Q = q[idx]                                   # [m, D] group queries
-        sims = Q @ T.T                               # sims[a,b] = cos(query a, target b)
-        for a, i in enumerate(members):
-            true_sim = sims[a, a]
-            # patient-disjoint distractors: other members with a DIFFERENT patient.
-            eligible = np.where((pats != pats[a]) & (np.arange(len(members)) != a))[0]
-            if len(eligible) + 1 < max(2, min_candidates):
+        # Shared distractor pool per group (fixed-seed), scored VECTORIZED — avoids the
+        # O(m^2) full group similarity matrix (a 43k-block group would be ~7B entries).
+        if max_candidates and m > max_candidates:
+            pool_pos = np.sort(rng.choice(m, size=max_candidates, replace=False))
+        else:
+            pool_pos = np.arange(m)
+        Tp = t[idx[pool_pos]]                         # [C, D]
+        Q = q[idx]                                    # [m, D]
+        sims = Q @ Tp.T                               # [m, C]  cos(query a, pool distractor)
+        true_sim = (q[idx] * t[idx]).sum(axis=1)      # [m]     cos(query a, its true target)
+        # patient-disjoint + not-self mask over the shared pool.
+        eligible = (pats[:, None] != pats[pool_pos][None, :]) & (idx[:, None] != idx[pool_pos][None, :])
+        n_cand = eligible.sum(axis=1) + 1             # + the true target
+        ranks = 1 + ((sims > true_sim[:, None]) & eligible).sum(axis=1)
+        for a in range(m):
+            if n_cand[a] < max(2, min_candidates):
                 skipped += 1
                 continue
-            if max_candidates and len(eligible) > max_candidates:
-                eligible = rng.choice(eligible, size=max_candidates, replace=False)
-            n_cand = len(eligible) + 1               # + the true target
-            cand_counts.append(n_cand)
-            rank = 1 + int((sims[a, eligible] > true_sim).sum())
-            row = index[i]
+            row = index[members[a]]
+            cand_counts.append(int(n_cand[a]))
             records.append({
                 "patient": str(row.get(patient_field)),
-                "rank": rank,
+                "rank": int(ranks[a]),
                 "occupancy": occupancy_class(row),
                 "source": row.get("source_dataset"),
                 "window_days": row.get("window_days"),
                 "subwindow_k": row.get("subwindow_k"),
                 "granularity": row.get("granularity"),
-                "n_candidates": n_cand,
+                "n_candidates": int(n_cand[a]),
             })
     arr = np.asarray(cand_counts) if cand_counts else np.asarray([0])
     return {
