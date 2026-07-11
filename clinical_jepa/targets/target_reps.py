@@ -137,6 +137,20 @@ def build_target_rep(
     raise ValueError(f"unknown target rep {name!r}")
 
 
+def temporal_slot_token_sets(block: dict[str, Any], token_ids: Any, cumulative_days: Any,
+                             *, slots: int = M_PRIMARY) -> list[np.ndarray]:
+    """True per-slot token multisets for the temporal_slot fidelity metric (Pi result gate #2)
+    — the same M equal-wall-clock carving used to build z+, returning each slot's token ids."""
+    ids, is_empty = read_target_span(block, token_ids)
+    if is_empty:
+        return [np.asarray([], dtype=np.int64) for _ in range(int(slots))]
+    t_query = float(block["t_query"]); W = float(block["window_days"])
+    seq_len = int(block.get("seq_len", len(token_ids)))
+    context_end = int(block.get("context_end_ref", block.get("context_end")))
+    subs = carve_subwindows(cumulative_days, seq_len, context_end, t_query, int(slots), W / int(slots))
+    return [np.asarray(read_target_span(sub, token_ids)[0], dtype=np.int64) for sub in subs]
+
+
 def target_dim(name: str, embedding_dim: int, *, d_time: int = D_TIME, slots: int = M_PRIMARY) -> int:
     D = int(embedding_dim)
     return {"mean_embed": D, "tap_concat": D + d_time, "count_concat": D + 1,

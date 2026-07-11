@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 
 from clinical_jepa.targets.block_spans import is_censored, read_target_span
-from clinical_jepa.targets.target_reps import ARM_NAMES, build_target_rep
+from clinical_jepa.targets.target_reps import ARM_NAMES, build_target_rep, temporal_slot_token_sets
 from clinical_jepa.eval.rung1_contract import D_TIME, M_PRIMARY
 
 ALLOWED_SPLITS = ("train", "dev")           # TEST is never loaded in this run (Pi R8 #8)
@@ -62,6 +62,8 @@ def build_bundles(blocks: list[dict[str, Any]], seqs: dict[str, dict[str, Any]],
             b = cell.setdefault(split, {"z": [], "counts": [], "patients": [], "dt_lists": [], "ordered_ids": []})
             b["z"].append(z); b["counts"].append(props["count"]); b["patients"].append(props["patient"])
             b["dt_lists"].append(props["dt"]); b["ordered_ids"].append(props["ordered_ids"])
+            if arm == "temporal_slot":                    # true per-slot token sets for the slot metric
+                b.setdefault("slot_sets", []).append(temporal_slot_token_sets(blk, tok, cum, slots=slots))
     for cell in out.values():
         for split, b in cell.items():
             b["z"] = np.asarray(b["z"], dtype=np.float32)

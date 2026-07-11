@@ -14,13 +14,14 @@ from typing import Any
 
 from clinical_jepa.eval.rung1_contract import (
     ARM_COMPARISON_ORDER, ARMS, CONTRACT_VERSION, CRPS_SKILL_GATE, DECODABLE_NONLINEAR,
-    DECODABLE_SIMPLE, INCONCLUSIVE, KS_D_GATE, NOT_DECODABLE, NOT_EVALUABLE, PRIMARY_ARM,
-    PRIOR_MASKED, PROPERTIES, classify_readout, config_hash, is_primary_cell, scoped_verdict,
+    DECODABLE_SIMPLE, INCONCLUSIVE, KS_D_GATE, MARGINAL_ONLY, NOT_DECODABLE, NOT_EVALUABLE,
+    NOT_EVALUATED, PRIMARY_ARM, PRIOR_MASKED, PROPERTIES, classify_readout, config_hash,
+    is_primary_cell, scoped_verdict,
 )
 from clinical_jepa.utils import now_utc, write_json
 
 # worst-first precedence for combining cells (a property is only as strong as its worst cell)
-_PRECEDENCE = [NOT_DECODABLE, PRIOR_MASKED, INCONCLUSIVE, DECODABLE_SIMPLE, DECODABLE_NONLINEAR]
+_PRECEDENCE = [NOT_DECODABLE, PRIOR_MASKED, MARGINAL_ONLY, INCONCLUSIVE, DECODABLE_SIMPLE, DECODABLE_NONLINEAR]
 
 
 def classify_count_order_cell(metrics: dict[str, Any]) -> str:
@@ -35,27 +36,46 @@ def classify_count_order_cell(metrics: dict[str, Any]) -> str:
 
 def classify_timing_cell(metrics: dict[str, Any]) -> str:
     """timing cell -> base class. Both non-compensatory gates required: KS-D upper-CI <= gate
-    AND normalized-CRPS skill lower-CI >= gate. KS pass but skill fail = marginal reproduction
-    => PRIOR_MASKED (Pi R8 Q5/#7)."""
+    AND normalized-CRPS skill lower-CI >= gate. When KS is calibrated but the skill gate fails,
+    distinguish MARGINAL_ONLY (M2's own wrong-instance-swap excess is positive -> it uses the
+    latent, just weakly) from PRIOR_MASKED (swap excess <= 0 -> it reads its prior) — Pi Rung-1
+    result gate #2.1."""
     if not metrics.get("evaluable", False):
         return NOT_EVALUABLE
     ks_ok = float(metrics.get("ks_upper_ci", 1.0)) <= KS_D_GATE
     skill_ok = float(metrics.get("crps_skill_lo", -1.0)) >= CRPS_SKILL_GATE
-    if ks_ok and skill_ok:
+    if not ks_ok:
+        return NOT_DECODABLE if metrics.get("precise", False) else INCONCLUSIVE
+    if skill_ok:
         return DECODABLE_NONLINEAR
-    if ks_ok and not skill_ok:
+    swap_lo = metrics.get("swap_excess_lo")
+    if swap_lo is not None and float(swap_lo) <= 0.0:
         return PRIOR_MASKED
-    if not metrics.get("precise", False):
-        return INCONCLUSIVE
-    return NOT_DECODABLE
+    return MARGINAL_ONLY
+
+
+def classify_order_cell(metrics: dict[str, Any]) -> str:
+    """order cell -> base class. Order-blind arms: the frozen unconditional metric is
+    NOT_EVALUATED (a labelled oracle probe is reported but never gates). temporal_slot: the real
+    slot-fidelity metric via the per-readout attribution."""
+    if metrics.get("unconditional_order") == "NOT_EVALUATED":
+        return NOT_EVALUATED
+    if not metrics.get("evaluable", False):
+        return NOT_EVALUABLE
+    return classify_readout(
+        m1_gate_ok=bool(metrics.get("m1_gate_ok", False)), m1_excess_lo=float(metrics.get("m1_excess_lo", -1.0)),
+        m2_gate_ok=bool(metrics.get("m2_gate_ok", False)), m2_excess_lo=float(metrics.get("m2_excess_lo", -1.0)),
+        m2_copy_ok=bool(metrics.get("m2_copy_ok", True)), evaluable=True, precise=bool(metrics.get("precise", False)))
 
 
 def _combine(cell_classes: list[str]) -> str:
-    """Worst-first combination over PRIMARY evaluable cells; NOT_EVALUABLE excluded from the
-    conjunction; all-not-evaluable => NOT_EVALUABLE."""
-    evaluable = [c for c in cell_classes if c != NOT_EVALUABLE]
+    """Worst-first combination over PRIMARY cells. NOT_EVALUABLE / NOT_EVALUATED are excluded
+    from the conjunction; if nothing else remains, return NOT_EVALUATED when every cell was
+    deliberately not-evaluated, else NOT_EVALUABLE (below floor)."""
+    excluded = (NOT_EVALUABLE, NOT_EVALUATED)
+    evaluable = [c for c in cell_classes if c not in excluded]
     if not evaluable:
-        return NOT_EVALUABLE
+        return NOT_EVALUATED if all(c == NOT_EVALUATED for c in cell_classes) else NOT_EVALUABLE
     for c in _PRECEDENCE:
         if c in evaluable:
             return c
@@ -134,7 +154,9 @@ def main(argv: list[str] | None = None) -> int:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in rows:
         prop = row["property"]
-        base = classify_timing_cell(row) if prop == "timing" else classify_count_order_cell(row)
+        base = (classify_timing_cell(row) if prop == "timing"
+                else classify_order_cell(row) if prop == "order"
+                else classify_count_order_cell(row))
         grouped.setdefault((row["arm"], prop), []).append(
             {"source": row["source"], "window_days": float(row["window_days"]), "base_class": base})
     evals = [evaluate_property(arm, prop, cells) for (arm, prop), cells in grouped.items()]

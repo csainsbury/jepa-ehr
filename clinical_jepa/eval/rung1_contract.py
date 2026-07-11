@@ -99,10 +99,12 @@ def can_nominate(scope: str) -> bool:
 # ---- readout classification labels (Pi R7 #1 four-way) --------------------
 DECODABLE_SIMPLE = "DECODABLE_SIMPLE"          # M1 absolute gate + M1 own-excess pass
 DECODABLE_NONLINEAR = "DECODABLE_NONLINEAR"    # M2 gate + M2's OWN excess pass (regardless of M1)
-PRIOR_MASKED = "PRIOR_MASKED"                  # M2 raw gate pass but M2 excess/corruption fails
+PRIOR_MASKED = "PRIOR_MASKED"                  # M2 raw gate pass but M2's OWN swap/excess FAILS (reads prior)
+MARGINAL_ONLY = "MARGINAL_ONLY"                # calibrated + uses the latent (swap excess passes) but no gate-clearing conditional skill (Pi Rung-1 result gate)
 NOT_DECODABLE = "NOT_DECODABLE"                # neither absolute gate clears, precision adequate
 INCONCLUSIVE = "INCONCLUSIVE"                  # adequate cell but CI too wide to decide
 NOT_EVALUABLE = "NOT_EVALUABLE"                # below the cluster/interval floor
+NOT_EVALUATED = "NOT_EVALUATED"                # metric deliberately not computed (e.g. frozen unconditional order decoder not implemented)
 
 # ---- scoped arm/property verdict labels (Pi R8 #1) ------------------------
 STRUCTURALLY_INVARIANT_CONTENT_PRIOR_ONLY = "STRUCTURALLY_INVARIANT_CONTENT_PRIOR_ONLY"
@@ -226,13 +228,14 @@ def scoped_verdict(arm: str, prop: str, base_class: str, *, rung: str | None = N
     rung = rung or ARMS[arm]["rung"]
     scope = arm_scope(arm, prop)
     decodable = base_class in _DECODABLE
-    passthrough = base_class in (NOT_EVALUABLE, INCONCLUSIVE)  # keep evaluability status verbatim
+    passthrough = base_class in (NOT_EVALUABLE, INCONCLUSIVE, NOT_EVALUATED, MARGINAL_ONLY, PRIOR_MASKED)
 
     if prop == "order":
         if scope == SCOPE_COARSE_SLOT:      # temporal-slot: gated on slot-wise structure
             label = COARSE_SLOT_DECODABLE if decodable else base_class
-        else:                                # order-blind arms: forced content-prior-only
-            label = base_class if passthrough else STRUCTURALLY_INVARIANT_CONTENT_PRIOR_ONLY
+        else:                                # order-blind arms: unconditional metric NOT_EVALUATED,
+            # but the analytic permutation-invariance finding stands regardless of the empirical run.
+            label = base_class if base_class in (NOT_EVALUABLE, INCONCLUSIVE) else STRUCTURALLY_INVARIANT_CONTENT_PRIOR_ONLY
     elif prop == "timing":
         if scope == SCOPE_DIRECT:
             label = DIRECT_TIMING_CEILING_DECODABLE if decodable else base_class

@@ -81,6 +81,18 @@ class InformationScopeTests(unittest.TestCase):
         self.assertTrue(C.can_nominate(C.SCOPE_DIRECT))
         self.assertTrue(C.can_nominate(C.SCOPE_COARSE_SLOT))
 
+    def test_not_evaluated_order_maps_to_structural_for_order_blind(self) -> None:
+        # order-blind arms: unconditional order NOT_EVALUATED -> the structural finding stands.
+        v = C.scoped_verdict("mean_embed", "order", C.NOT_EVALUATED)
+        self.assertEqual(v["verdict"], C.STRUCTURALLY_INVARIANT_CONTENT_PRIOR_ONLY)
+        self.assertFalse(v["can_nominate"])
+
+    def test_marginal_only_timing_passes_through_and_never_nominates(self) -> None:
+        for arm in ("mean_embed", "tap_concat"):
+            v = C.scoped_verdict(arm, "timing", C.MARGINAL_ONLY)
+            self.assertEqual(v["verdict"], C.MARGINAL_ONLY)
+            self.assertFalse(v["can_nominate"])
+
     def test_incumbent_1a_never_nominates(self) -> None:
         for prop in C.PROPERTIES:
             self.assertFalse(C.scoped_verdict("mean_embed", prop, C.DECODABLE_NONLINEAR)["can_nominate"])

@@ -65,10 +65,13 @@ class ScopeEnforcementTests(unittest.TestCase):
 
 
 class TimingClassifyTests(unittest.TestCase):
-    def test_ks_pass_skill_fail_is_prior_masked(self) -> None:
-        # marginal reproduction: KS ok but no conditional skill.
-        c = classify_timing_cell({"evaluable": True, "precise": True, "ks_upper_ci": 0.03, "crps_skill_lo": 0.0})
-        self.assertEqual(c, C.PRIOR_MASKED)
+    def test_ks_pass_skill_fail_marginal_only_without_failed_swap(self) -> None:
+        # KS calibrated, skill gate fails: MARGINAL_ONLY unless the M2 wrong-instance swap
+        # excess itself fails (Pi result gate #2.1 — swap not run or positive => MARGINAL_ONLY).
+        base = {"evaluable": True, "precise": True, "ks_upper_ci": 0.03, "crps_skill_lo": 0.0}
+        self.assertEqual(classify_timing_cell(base), C.MARGINAL_ONLY)                    # swap not run
+        self.assertEqual(classify_timing_cell({**base, "swap_excess_lo": 0.02}), C.MARGINAL_ONLY)  # uses latent
+        self.assertEqual(classify_timing_cell({**base, "swap_excess_lo": -0.01}), C.PRIOR_MASKED)  # reads prior
 
     def test_both_gates_pass(self) -> None:
         c = classify_timing_cell({"evaluable": True, "precise": True, "ks_upper_ci": 0.03, "crps_skill_lo": 0.08})

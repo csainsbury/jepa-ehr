@@ -76,6 +76,33 @@ class ReadoutMetricTests(unittest.TestCase):
         self.assertAlmostEqual(r["set_jaccard"], 1.0)
 
 
+class OrderSlotTests(unittest.TestCase):
+    def test_tie_aware_order_match(self) -> None:
+        # true tokens [5,5,7]; a perm that swaps the two identical 5s still yields [5,5,7] -> hit.
+        toks = [[5, 5, 7], [1, 2, 3]]
+        perms = [[1, 0, 2], [2, 1, 0]]                         # window0 swaps the ties; window1 reversed
+        h = P.tie_aware_exact_order_hits(perms, toks)
+        self.assertTrue(np.array_equal(h, [1.0, 0.0]))
+
+    def test_slot_multiset_exact_perfect_decode(self) -> None:
+        # orthonormal-ish embeddings -> analytic inverse recovers per-slot presence exactly.
+        rng = np.random.default_rng(0)
+        V, D = 24, 24
+        E = np.eye(V, D).astype(np.float64)                    # identity: mean of one-hots = frequency
+        slot_means = [[E[[2, 5]].mean(0), E[[9]].mean(0)]]     # slot0={2,5}, slot1={9}
+        true_sets = [[np.array([2, 5]), np.array([9])]]
+        exact, f1 = P.slot_multiset_exact_hits(E, slot_means, true_sets, thresh=0.1)
+        self.assertEqual(exact[0], 1.0)
+        self.assertAlmostEqual(f1[0], 1.0)
+
+    def test_marginal_hurdle_quantiles(self) -> None:
+        dt = np.concatenate([np.zeros(300), np.random.default_rng(0).exponential(2.0, 700)])
+        p0, q, lv = P.marginal_hurdle_quantiles(dt)
+        self.assertAlmostEqual(p0, 0.3, delta=0.02)
+        self.assertEqual(len(q), 9)
+        self.assertTrue(np.all(np.diff(q) >= 0))               # monotone quantiles
+
+
 class TimingTests(unittest.TestCase):
     def test_zero_mass_randomized_pit_is_calibrated(self) -> None:
         # Δt with a point mass at 0 (simultaneous events) + exponential tail. A correctly

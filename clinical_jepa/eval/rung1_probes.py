@@ -267,7 +267,69 @@ def hurdle_randomized_pit(p0: Any, pos_quantiles: Any, levels: Any, y: Any, *, s
     return np.clip(out, 0.0, 1.0)
 
 
-def hurdle_crps_rows(p0: Any, pos_quantiles: Any, y: Any, *, n_samp: int = 32, seed: int = SEED) -> np.ndarray:
+def tie_aware_exact_order_hits(pred_index_orders: list[Any], token_seqs: list[Any]) -> np.ndarray:
+    """Tie-aware exact-order hit per window (Pi Rung-1 result gate #1): a hit iff the decoded
+    TOKEN sequence equals the true token sequence, so swapping identical-token occurrences is
+    not counted wrong. token_seqs[i] is the true ordered token ids; pred_index_orders[i] the
+    predicted event index permutation."""
+    out = np.zeros(len(token_seqs))
+    for i, (perm, toks) in enumerate(zip(pred_index_orders, token_seqs)):
+        toks = np.asarray(toks)
+        out[i] = float(np.array_equal(toks[np.asarray(perm, dtype=int)], toks))
+    return out
+
+
+def analytic_pinv(E: np.ndarray) -> np.ndarray:
+    """Pseudo-inverse of Eᵀ ([V,D]) — precompute ONCE so per-slot decoding is a matmul, not a
+    per-window least-squares solve (governed-scale speed)."""
+    return np.linalg.pinv(np.asarray(E, dtype=np.float64).T)
+
+
+def slot_pvals(Epinv: np.ndarray, slot_means_list: list[Any]) -> list[np.ndarray]:
+    """Per-window per-slot vocabulary p-values [M,V] via the precomputed pseudo-inverse."""
+    return [np.asarray(sm, dtype=np.float64) @ Epinv.T for sm in slot_means_list]
+
+
+def slot_exact_from_pvals(pvals_list: list[np.ndarray], true_slot_sets: list[Any],
+                          thresh: float) -> tuple[np.ndarray, np.ndarray]:
+    """EXACT all-slot token-SET match + slot-wise micro-F1 per window, given cached p-values."""
+    exact = np.zeros(len(true_slot_sets)); f1 = np.zeros(len(true_slot_sets))
+    for i, (Pmat, truesets) in enumerate(zip(pvals_list, true_slot_sets)):
+        ok = True; tp = fp = fn = 0
+        for row, ts in zip(Pmat, truesets):
+            ps = set(np.where(row > thresh)[0].tolist()); ts = set(int(x) for x in ts)
+            if ps != ts:
+                ok = False
+            tp += len(ps & ts); fp += len(ps - ts); fn += len(ts - ps)
+        exact[i] = float(ok)
+        prec = tp / (tp + fp) if (tp + fp) else 0.0
+        rec = tp / (tp + fn) if (tp + fn) else 0.0
+        f1[i] = 2 * prec * rec / (prec + rec) if (prec + rec) else (1.0 if not (tp + fp + fn) else 0.0)
+    return exact, f1
+
+
+def slot_multiset_exact_hits(E: np.ndarray, slot_means: list[Any], true_slot_sets: list[Any],
+                             thresh: float) -> tuple[np.ndarray, np.ndarray]:
+    """Convenience wrapper: real temporal-slot fidelity (Pi Rung-1 result gate #2) — decode
+    each slot's token SET from its slot-mean via the analytic inverse (no oracle multiset),
+    then EXACT all-slot match. Returns (exact_all_slot_hits, slot_wise_micro_F1) per window."""
+    return slot_exact_from_pvals(slot_pvals(analytic_pinv(E), slot_means), true_slot_sets, thresh)
+
+
+def marginal_hurdle_quantiles(dt_train: Any, *, n_q: int = 9) -> tuple[float, np.ndarray, np.ndarray]:
+    """Marginal hurdle as (p0, positive-Δt quantiles, quantile levels) so the marginal CRPS
+    uses the SAME hurdle-CRPS estimator (and sample count) as the conditional — removing the
+    finite-sample-bias asymmetry Pi flagged (result gate #2.2)."""
+    dt = np.asarray(dt_train, dtype=np.float64)
+    dt = dt[np.isfinite(dt)]
+    p0 = float(np.mean(dt <= 0.0)) if len(dt) else 0.0
+    pos = dt[dt > 0.0]
+    levels = np.linspace(1.0 / (n_q + 1), n_q / (n_q + 1), n_q)
+    q = np.quantile(pos, levels) if len(pos) else np.ones(n_q)
+    return p0, q, levels
+
+
+def hurdle_crps_rows(p0: Any, pos_quantiles: Any, y: Any, *, n_samp: int = 64, seed: int = SEED) -> np.ndarray:
     """CRPS of the conditional hurdle predictive via a small per-row Monte-Carlo sample
     (mass p0 at 0, else a positive quantile), vectorized through crps_quantile_rows."""
     p0 = np.asarray(p0, dtype=np.float64); q = np.asarray(pos_quantiles, dtype=np.float64)

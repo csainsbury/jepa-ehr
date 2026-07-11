@@ -111,11 +111,22 @@ def timing_row(arm, source, W, tr, dev, *, embedding_dim, cluster_floor=TIMING_C
             if len(np.asarray(arr)) >= 1:
                 zs.append(np.repeat(np.asarray(z)[None, :], len(np.asarray(arr)), axis=0))
         return np.concatenate(zs) if zs else np.zeros((0, np.asarray(dev["z"]).shape[1]))
-    dt_dev, pat_dev = flatten(dev); dt_tr, _ = flatten(tr)
-    z_dev_i = flat_z(dev); z_tr_i = flat_z(tr)
+    # per-interval (dt, patient, window index) + per-window (z, patient) — the window index
+    # lets us apply M2's OWN wrong-instance swap at the window level (Pi result gate #2.1).
+    def flatten_win(bundle):
+        dt, pat, widx = [], [], []
+        wz = np.asarray(bundle["z"], dtype=np.float32); wpat = np.asarray(bundle["patients"])
+        for j, arr in enumerate(bundle["dt_lists"]):
+            arr = np.asarray(arr, dtype=np.float64)
+            if len(arr) >= 1:
+                dt.append(arr); pat.append(np.full(len(arr), wpat[j])); widx.append(np.full(len(arr), j))
+        return ((np.concatenate(dt) if dt else np.zeros(0)), (np.concatenate(pat) if pat else np.zeros(0, dtype=object)),
+                (np.concatenate(widx).astype(int) if widx else np.zeros(0, dtype=int)), wz, wpat)
+    dt_dev, pat_dev, widx_dev, wz_dev, wpat_dev = flatten_win(dev)
+    dt_tr, _, _, wz_tr, _ = flatten_win(tr)
+    z_dev_i = wz_dev[widx_dev] if len(widx_dev) else np.zeros((0, wz_dev.shape[1]))
+    z_tr_i = flat_z(tr)
     n_int = len(dt_dev); n_clu = _n_clusters(pat_dev) if n_int else 0
-    # Precision sim certifies the DESIGN at the cell size class (memoized); certifying at a
-    # capped-smaller n is conservative — a larger real n only helps.
     sim = _precision_sim_cached(n_int, n_clu) if n_int >= interval_floor else {"passes": False}
     evaluable = bool(n_int >= interval_floor and n_clu >= cluster_floor and sim.get("passes", False))
     row = {"arm": arm, "source": source, "window_days": float(W), "property": "timing",
@@ -123,34 +134,41 @@ def timing_row(arm, source, W, tr, dev, *, embedding_dim, cluster_floor=TIMING_C
            "evaluable": evaluable}
     if not evaluable:
         return row
-    # subsample intervals to bound quantile-head / KS / CRPS cost (adequacy already met)
     max_intervals = 40000
     rng = np.random.default_rng(seed)
     if n_int > max_intervals:
         sel = np.sort(rng.choice(n_int, size=max_intervals, replace=False))
-        dt_dev, pat_dev, z_dev_i = dt_dev[sel], pat_dev[sel], z_dev_i[sel]
+        dt_dev, pat_dev, widx_dev, z_dev_i = dt_dev[sel], pat_dev[sel], widx_dev[sel], z_dev_i[sel]
     if len(dt_tr) > max_intervals:
         selt = np.sort(rng.choice(len(dt_tr), size=max_intervals, replace=False))
         dt_tr, z_tr_i = dt_tr[selt], z_tr_i[selt]
     n_int = len(dt_dev)
-    marg = P.fit_marginal_hurdle(dt_tr)
-    # CONDITIONAL hurdle timing model (Pi R8 #7): models the Δt=0 point mass so the randomized
-    # PIT reflects the latent, not the evaluator. z+-conditional p0 + positive-tail quantiles.
     head, qs = train_hurdle_timing_head(torch.as_tensor(z_tr_i), torch.as_tensor(dt_tr.astype(np.float32)), embedding_dim)
-    p0, q_dev = predict_hurdle_timing(head, torch.as_tensor(z_dev_i))
     lv = qs.cpu().numpy()
+    p0, q_dev = predict_hurdle_timing(head, torch.as_tensor(z_dev_i))
     pit = P.hurdle_randomized_pit(p0, q_dev, lv, dt_dev, seed=seed)
     ks = P.ks_d_upper_ci(pit, pat_dev, n_boot=n_boot, seed=seed)
-    # Conditional CRPS from the hurdle predictive; marginal CRPS from the shared hurdle marginal
-    # (zero mass + positive tail), both vectorized.
-    crps_cond = np.clip(P.hurdle_crps_rows(p0, q_dev, dt_dev, seed=seed), 0.0, None)
-    marg_p0 = float(marg["p0"]); marg_pos = np.asarray(marg["pos_samples"], dtype=np.float64)
-    marg_samples = np.where(np.random.default_rng(seed).uniform(size=min(len(marg_pos), 256)) < marg_p0,
-                            0.0, marg_pos[:min(len(marg_pos), 256)])
-    crps_marg = np.clip(P.crps_marginal_rows(marg_samples, dt_dev, seed=seed), 1e-9, None)
+    NS = 64
+    crps_cond = np.clip(P.hurdle_crps_rows(p0, q_dev, dt_dev, n_samp=NS, seed=seed), 0.0, None)
+    # SYMMETRIC marginal CRPS: same hurdle-CRPS estimator + sample count as the conditional
+    # (Pi result gate #2.2 — remove the finite-sample bias of 32-vs-256 draws).
+    mp0, mq, _ = P.marginal_hurdle_quantiles(dt_tr)
+    crps_marg = np.clip(P.hurdle_crps_rows(np.full(n_int, mp0), np.tile(mq, (n_int, 1)), dt_dev, n_samp=NS, seed=seed), 1e-9, None)
     skill = P.ratio_skill_ci(crps_cond, crps_marg, pat_dev, n_boot=n_boot, seed=seed)
+    # M2's OWN wrong-instance swap (window-level derangement): does the trained head actually
+    # read z+? true-vs-swap CRPS excess. swap-excess>0 => uses the latent (MARGINAL_ONLY);
+    # swap-excess<=0 => reads its prior (PRIOR_MASKED).
+    partner = P.swap_partner_index(list(wpat_dev), SWAP_SEED)
+    valid = partner[widx_dev] >= 0
+    swap_lo = None
+    if valid.sum() > 0:
+        z_swap = wz_dev[partner[widx_dev[valid]]]
+        p0s, qs_ = predict_hurdle_timing(head, torch.as_tensor(z_swap))
+        crps_swap = np.clip(P.hurdle_crps_rows(p0s, qs_, dt_dev[valid], n_samp=NS, seed=seed), 0.0, None)
+        # excess = CRPS(swap) − CRPS(true): positive means the true latent decodes better.
+        swap_lo = P.paired_excess_ci(crps_swap, crps_cond[valid], pat_dev[valid], n_boot=n_boot, seed=seed)["ci_lo"]
     row.update({"ks_upper_ci": ks["ci_hi"], "crps_skill_lo": skill["ci_lo"],
-                "zero_rate": float((dt_dev <= 0).mean()), "precise": True})
+                "swap_excess_lo": swap_lo, "zero_rate": float((dt_dev <= 0).mean()), "precise": True})
     return row
 
 
@@ -172,88 +190,114 @@ def _quantile_pit(quantiles: np.ndarray, y: np.ndarray, levels: np.ndarray, *, s
 def order_row(arm, source, W, tr, dev, *, embedding_dim, E, floor=ORDER_CLUSTER_FLOOR,
               n_boot=P.N_BOOT, seed=SEED, max_events=16, max_train_pairs=15_000,
               max_dev_windows=2500, order_steps=150) -> dict[str, Any]:
-    """Exact ordered-sequence reconstruction from a single pooled vector is only conceivable
-    for short windows; we bound the pairwise cost to windows with 2..max_events events (the
-    excluded-large fraction is reported — Pi R8: log any cap) and subsample training pairs."""
+    """Order for the order-BLIND arms. The frozen unconditional all-window exact-order decoder
+    is NOT implemented -> `unconditional_order = NOT_EVALUATED` (Pi result gate #1); the
+    structural arm-A invariance stands analytically. We additionally report a clearly-LABELLED
+    ORACLE-ASSISTED N<=max_events pairwise probe (tie-aware token-sequence match, post-cap
+    denominators) that can never gate or nominate."""
     import torch
-    from clinical_jepa.eval.rung1_decode import (
-        reconstruct_order_exact, train_pairwise_order_head,
-    )
+    from clinical_jepa.eval.rung1_decode import reconstruct_order_exact, train_pairwise_order_head
     def in_range(bundle):
         return [i for i, s in enumerate(bundle["ordered_ids"]) if 2 <= len(np.asarray(s)) <= max_events]
     n_ge2_dev = sum(1 for s in dev["ordered_ids"] if len(np.asarray(s)) >= 2)
-    di = in_range(dev); pats = np.asarray(dev["patients"])[di] if di else np.asarray([])
-    excluded_large = int(n_ge2_dev - len(di))
-    evaluable = _n_clusters(pats) >= floor and len(in_range(tr)) > 0
+    di = in_range(dev)
     row = {"arm": arm, "source": source, "window_days": float(W), "property": "order",
-           "n_clusters": _n_clusters(pats) if len(pats) else 0,
-           "order_max_events": int(max_events), "excluded_large_windows": excluded_large,
-           "n_eval_windows": len(di), "evaluable": bool(evaluable)}
-    if not evaluable:
+           "unconditional_order": "NOT_EVALUATED", "oracle_scope": "oracle_assisted",
+           "n_ge2_windows": int(n_ge2_dev), "oracle_max_events": int(max_events),
+           "oracle_excluded_large": int(n_ge2_dev - len(di))}
+    if _n_clusters(np.asarray(dev["patients"])[di] if di else np.asarray([])) < floor or len(in_range(tr)) == 0:
+        row["oracle_probe"] = "NOT_EVALUABLE"
         return row
     rng = np.random.default_rng(seed)
-    if len(di) > max_dev_windows:                              # bound reconstruction cost
+    if len(di) > max_dev_windows:
         di = list(np.sort(rng.choice(di, size=max_dev_windows, replace=False)))
-        pats = np.asarray(dev["patients"])[di]
+    pats = np.asarray(dev["patients"])[di]
     Et = torch.as_tensor(np.asarray(E, dtype=np.float32))
-    # build pairwise training features from train windows (VECTORIZED per window; subsampled
-    # to a pair budget). All ordered pairs (a,b), a!=b, built via broadcasting.
-    feats, labels = [], []
-    n_pairs = 0
-    tr_idx = in_range(tr)
+    feats, labels, n_pairs, tr_idx = [], [], 0, in_range(tr)
     rng.shuffle(tr_idx)
     for i in tr_idx:
         if n_pairs >= max_train_pairs:
             break
-        ids = np.asarray(tr["ordered_ids"][i]); z = np.asarray(tr["z"][i], dtype=np.float32)
-        n = len(ids)
-        ea = E[ids]                                          # [n, D]
+        ids = np.asarray(tr["ordered_ids"][i]); z = np.asarray(tr["z"][i], dtype=np.float32); n = len(ids)
+        ea = E[ids]
         ai, bi = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
-        m = (ai != bi).reshape(-1)
-        ai = ai.reshape(-1)[m]; bi = bi.reshape(-1)[m]
+        mm = (ai != bi).reshape(-1); ai = ai.reshape(-1)[mm]; bi = bi.reshape(-1)[mm]
         feats.append(np.concatenate([np.tile(z, (len(ai), 1)), ea[ai], ea[bi]], axis=1))
-        labels.append((ai < bi).astype(np.float32))
-        n_pairs += len(ai)
-    feats = np.concatenate(feats, axis=0) if feats else np.zeros((0, len(np.asarray(E)[0]) + 2 * len(np.asarray(E)[0])))
-    labels = np.concatenate(labels) if len(labels) else np.zeros(0, dtype=np.float32)
-    head = train_pairwise_order_head(torch.as_tensor(np.asarray(feats, dtype=np.float32)),
-                                     torch.as_tensor(np.asarray(feats, dtype=np.float32)),
-                                     torch.as_tensor(np.asarray(labels, dtype=np.float32)), embedding_dim,
-                                     steps=order_steps)
+        labels.append((ai < bi).astype(np.float32)); n_pairs += len(ai)
+    feats = np.concatenate(feats, axis=0); labels = np.concatenate(labels)
+    head = train_pairwise_order_head(torch.as_tensor(feats.astype(np.float32)), torch.as_tensor(feats.astype(np.float32)),
+                                     torch.as_tensor(labels.astype(np.float32)), embedding_dim, steps=order_steps)
 
-    def exact_hits(bundle, idxs, z_source):
-        hits = []
-        for k, i in enumerate(idxs):
-            ids = np.asarray(bundle["ordered_ids"][i])
-            z = torch.as_tensor(np.asarray(z_source[k], dtype=np.float32))
-            rec = reconstruct_order_exact(head, z, Et[torch.as_tensor(ids)])
-            hits.append(float(rec == list(range(len(ids)))))
-        return np.asarray(hits)
+    def hits(idxs, z_src):  # TIE-AWARE: compare recovered TOKEN sequence to the true one
+        toks = [np.asarray(dev["ordered_ids"][i]) for i in idxs]
+        perms = [reconstruct_order_exact(head, torch.as_tensor(np.asarray(z, dtype=np.float32)), Et[torch.as_tensor(t)])
+                 for z, t in zip(z_src, toks)]
+        return P.tie_aware_exact_order_hits(perms, toks)
 
-    z_dev = [dev["z"][i] for i in di]
-    partner = P.swap_partner_index(list(pats), SWAP_SEED)
-    ok = partner >= 0
-    h_true = exact_hits(dev, di, z_dev)
-    h_swap = exact_hits(dev, [di[j] for j in np.where(ok)[0]], [dev["z"][di[partner[j]]] for j in np.where(ok)[0]])
-    ex = P.paired_excess_ci(h_true[ok], h_swap, pats[ok], n_boot=n_boot, seed=seed)
+    partner = P.swap_partner_index(list(pats), SWAP_SEED); ok = partner >= 0
+    h_true = hits(di, [dev["z"][i] for i in di])
+    h_swap = hits([di[j] for j in np.where(ok)[0]], [dev["z"][di[partner[j]]] for j in np.where(ok)[0]])
     acc = P.cluster_bootstrap_ci(h_true, pats, n_boot=n_boot, seed=seed)
-    # temporal_slot is gated on slot-wise structure (SLOT_GATE); order-blind arms on the
-    # unconditional exact-order gate (0.70). Both are 0.70 but named distinctly per contract.
-    gate = SLOT_GATE if arm == "temporal_slot" else 0.70
+    ex = P.paired_excess_ci(h_true[ok], h_swap, pats[ok], n_boot=n_boot, seed=seed)
+    row.update({"oracle_probe": "computed", "oracle_n_eval_windows": len(di),  # post-cap denominator
+                "oracle_exact_order": acc["point"], "oracle_excess_lo": ex["ci_lo"]})
+    return row
+
+
+def slot_order_row(arm, source, W, tr, dev, *, embedding_dim, E, slots, floor=ORDER_CLUSTER_FLOOR,
+                   n_boot=P.N_BOOT, seed=SEED, gating=True) -> dict[str, Any]:
+    """The REAL temporal-slot fidelity metric (Pi result gate #2): exact all-slot token-multiset
+    reconstruction decoded (non-oracle) from the per-slot means, with M2's own wrong-instance
+    swap excess. Gate = SLOT_GATE + excess > EXCESS_MARGIN. M=4 gates; M=8 is non-rescuing
+    sensitivity (gating=False)."""
+    D = int(embedding_dim); M = int(slots)
+    def keep(bundle):
+        return [i for i, c in enumerate(bundle["counts"]) if int(c) >= 1 and "slot_sets" in bundle]
+    di = keep(dev); ti = keep(tr)
+    pats = np.asarray(dev["patients"])[di] if di else np.asarray([])
+    evaluable = _n_clusters(pats) >= floor and len(ti) > 0
+    row = {"arm": arm, "source": source, "window_days": float(W), "property": "order",
+           "slot_m": M, "slot_gating": bool(gating), "n_clusters": _n_clusters(pats) if len(pats) else 0,
+           "evaluable": bool(evaluable)}
+    if not evaluable:
+        return row
+    def slot_means(z):
+        z = np.asarray(z, dtype=np.float64)
+        return [z[j * D:(j + 1) * D] for j in range(M)]
+    Epinv = P.analytic_pinv(E)                                 # precompute once (matmul decode)
+    # tune the presence threshold on a train subset (maximize exact all-slot match)
+    rng = np.random.default_rng(seed)
+    tsub = ti if len(ti) <= 800 else list(rng.choice(ti, 800, replace=False))
+    tpv = P.slot_pvals(Epinv, [slot_means(tr["z"][i]) for i in tsub])
+    tsets = [tr["slot_sets"][i] for i in tsub]
+    best_t, best = 0.1, -1.0
+    for thr in (0.02, 0.05, 0.1, 0.2, 0.3):
+        if (h := P.slot_exact_from_pvals(tpv, tsets, thr)[0].mean()) > best:
+            best, best_t = h, thr
+    dpv = P.slot_pvals(Epinv, [slot_means(dev["z"][i]) for i in di])
+    dsets = [dev["slot_sets"][i] for i in di]
+    exact, f1 = P.slot_exact_from_pvals(dpv, dsets, best_t)
+    partner = P.swap_partner_index(list(pats), SWAP_SEED); ok = partner >= 0
+    spv = P.slot_pvals(Epinv, [slot_means(dev["z"][di[partner[j]]]) for j in np.where(ok)[0]])
+    swap_exact, _ = P.slot_exact_from_pvals(spv, [dev["slot_sets"][di[j]] for j in np.where(ok)[0]], best_t)
+    acc = P.cluster_bootstrap_ci(exact, pats, n_boot=n_boot, seed=seed)
+    exc = P.paired_excess_ci(exact[ok], swap_exact, pats[ok], n_boot=n_boot, seed=seed)
     row.update({"m1_gate_ok": False, "m1_excess_lo": -1.0,
-                "m2_gate_ok": bool(acc["ci_lo"] >= gate), "m2_excess_lo": ex["ci_lo"],
-                "m2_copy_ok": True, "precise": bool((acc["ci_hi"] - acc["ci_lo"]) < 0.20),
-                "m2_exact_order": acc["point"]})
+                "m2_gate_ok": bool(acc["ci_lo"] >= SLOT_GATE), "m2_excess_lo": exc["ci_lo"], "m2_copy_ok": True,
+                "precise": bool((acc["ci_hi"] - acc["ci_lo"]) < 0.20),
+                "slot_exact_all": acc["point"], "slot_wise_f1": float(np.mean(f1)), "slot_thresh": best_t})
     return row
 
 
 def evaluate_cells(bundles: dict[tuple[str, str, float], dict[str, Any]], *, embedding_dim: int,
                    E: np.ndarray, arms: list[str], properties=("count", "timing", "order"),
-                   count_floor: int = COUNT_CLUSTER_FLOOR, order_floor: int = ORDER_CLUSTER_FLOOR,
+                   slot_m: int = 4, count_floor: int = COUNT_CLUSTER_FLOOR, order_floor: int = ORDER_CLUSTER_FLOOR,
                    timing_cluster_floor: int = TIMING_CLUSTER_FLOOR,
                    timing_interval_floor: int = TIMING_INTERVAL_FLOOR) -> list[dict[str, Any]]:
     """bundles[(arm, source, W)] = {'train': {...}, 'dev': {...}}. Returns per-cell metric rows.
-    Floors default to the frozen contract values; overridable only for synthetic tests."""
+    Floors default to the frozen contract values; overridable only for synthetic tests. Order is
+    routed: temporal_slot -> the real slot-fidelity metric; order-blind arms -> NOT_EVALUATED +
+    labelled oracle probe."""
     rows = []
     for (arm, source, W), b in bundles.items():
         if arm not in arms:
@@ -264,18 +308,27 @@ def evaluate_cells(bundles: dict[tuple[str, str, float], dict[str, Any]], *, emb
             rows.append(timing_row(arm, source, W, b["train"], b["dev"], embedding_dim=embedding_dim,
                                    cluster_floor=timing_cluster_floor, interval_floor=timing_interval_floor))
         if "order" in properties:
-            rows.append(order_row(arm, source, W, b["train"], b["dev"], embedding_dim=embedding_dim, E=E, floor=order_floor))
+            if arm == "temporal_slot":
+                rows.append(slot_order_row(arm, source, W, b["train"], b["dev"], embedding_dim=embedding_dim,
+                                           E=E, slots=slot_m, floor=order_floor, gating=True))
+            else:
+                rows.append(order_row(arm, source, W, b["train"], b["dev"], embedding_dim=embedding_dim, E=E, floor=order_floor))
     return rows
 
 
 def rows_to_manifest(rows: list[dict[str, Any]], *, run_config=None) -> dict[str, Any]:
     """Assemble a manifest from already-computed per-cell metric rows (lets a governed run
     process cell-by-cell to bound memory, then build the verdict once at the end)."""
-    from clinical_jepa.eval.rung1_verdict import classify_count_order_cell, classify_timing_cell
+    from clinical_jepa.eval.rung1_verdict import (
+        classify_count_order_cell, classify_order_cell, classify_timing_cell,
+    )
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in rows:
-        base = classify_timing_cell(row) if row["property"] == "timing" else classify_count_order_cell(row)
-        grouped.setdefault((row["arm"], row["property"]), []).append(
+        prop = row["property"]
+        base = (classify_timing_cell(row) if prop == "timing"
+                else classify_order_cell(row) if prop == "order"
+                else classify_count_order_cell(row))
+        grouped.setdefault((row["arm"], prop), []).append(
             {"source": row["source"], "window_days": row["window_days"], "base_class": base})
     evals = [evaluate_property(a, p, cells) for (a, p), cells in grouped.items()]
     manifest = build_rung1_manifest(evals, run_config=run_config)
