@@ -65,17 +65,21 @@ class ScopeEnforcementTests(unittest.TestCase):
 
 
 class TimingClassifyTests(unittest.TestCase):
-    def test_ks_pass_skill_fail_marginal_only_without_failed_swap(self) -> None:
-        # KS calibrated, skill gate fails: MARGINAL_ONLY unless the M2 wrong-instance swap
-        # excess itself fails (Pi result gate #2.1 — swap not run or positive => MARGINAL_ONLY).
+    def test_missing_swap_fails_closed(self) -> None:
+        # Pi amended #2: a MISSING attribution control must never claim latent use.
+        base = {"evaluable": True, "precise": True, "ks_upper_ci": 0.03, "crps_skill_lo": 0.08}
+        self.assertEqual(classify_timing_cell(base), C.INCONCLUSIVE)                     # no swap -> inconclusive
+
+    def test_ks_pass_skill_fail_swap_branches(self) -> None:
         base = {"evaluable": True, "precise": True, "ks_upper_ci": 0.03, "crps_skill_lo": 0.0}
-        self.assertEqual(classify_timing_cell(base), C.MARGINAL_ONLY)                    # swap not run
         self.assertEqual(classify_timing_cell({**base, "swap_excess_lo": 0.02}), C.MARGINAL_ONLY)  # uses latent
         self.assertEqual(classify_timing_cell({**base, "swap_excess_lo": -0.01}), C.PRIOR_MASKED)  # reads prior
 
-    def test_both_gates_pass(self) -> None:
-        c = classify_timing_cell({"evaluable": True, "precise": True, "ks_upper_ci": 0.03, "crps_skill_lo": 0.08})
-        self.assertEqual(c, C.DECODABLE_NONLINEAR)
+    def test_both_gates_pass_requires_positive_swap(self) -> None:
+        base = {"evaluable": True, "precise": True, "ks_upper_ci": 0.03, "crps_skill_lo": 0.08}
+        self.assertEqual(classify_timing_cell({**base, "swap_excess_lo": 0.5}), C.DECODABLE_NONLINEAR)
+        # KS + skill pass but swap non-positive => fail closed to PRIOR_MASKED, never DECODABLE.
+        self.assertEqual(classify_timing_cell({**base, "swap_excess_lo": 0.0}), C.PRIOR_MASKED)
 
     def test_underfloor(self) -> None:
         self.assertEqual(classify_timing_cell({"evaluable": False}), C.NOT_EVALUABLE)

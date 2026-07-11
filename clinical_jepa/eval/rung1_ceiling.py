@@ -282,10 +282,15 @@ def slot_order_row(arm, source, W, tr, dev, *, embedding_dim, E, slots, floor=OR
     swap_exact, _ = P.slot_exact_from_pvals(spv, [dev["slot_sets"][di[j]] for j in np.where(ok)[0]], best_t)
     acc = P.cluster_bootstrap_ci(exact, pats, n_boot=n_boot, seed=seed)
     exc = P.paired_excess_ci(exact[ok], swap_exact, pats[ok], n_boot=n_boot, seed=seed)
+    # This is exact all-slot TOKEN-SET (presence) reconstruction — an EASIER upper bound than
+    # the frozen exact-multiset/count target (Pi amended #3). Its failure far below the gate
+    # conservatively rules out the harder multiset target. The slot copy-floor was not run;
+    # an absolute-gate failure makes it moot (recorded, not hard-asserted).
     row.update({"m1_gate_ok": False, "m1_excess_lo": -1.0,
                 "m2_gate_ok": bool(acc["ci_lo"] >= SLOT_GATE), "m2_excess_lo": exc["ci_lo"], "m2_copy_ok": True,
-                "precise": bool((acc["ci_hi"] - acc["ci_lo"]) < 0.20),
-                "slot_exact_all": acc["point"], "slot_wise_f1": float(np.mean(f1)), "slot_thresh": best_t})
+                "slot_copy_floor": "NOT_RUN_MOOT", "precise": bool((acc["ci_hi"] - acc["ci_lo"]) < 0.20),
+                "slot_exact_all_token_set": acc["point"], "slot_tokenset_f1": float(np.mean(f1)),
+                "unmeasured_harder_target": "exact_multiset_with_counts", "slot_thresh": best_t})
     return row
 
 
@@ -316,7 +321,7 @@ def evaluate_cells(bundles: dict[tuple[str, str, float], dict[str, Any]], *, emb
     return rows
 
 
-def rows_to_manifest(rows: list[dict[str, Any]], *, run_config=None) -> dict[str, Any]:
+def rows_to_manifest(rows: list[dict[str, Any]], *, run_config=None, evaluator_provenance=None) -> dict[str, Any]:
     """Assemble a manifest from already-computed per-cell metric rows (lets a governed run
     process cell-by-cell to bound memory, then build the verdict once at the end)."""
     from clinical_jepa.eval.rung1_verdict import (
@@ -331,7 +336,7 @@ def rows_to_manifest(rows: list[dict[str, Any]], *, run_config=None) -> dict[str
         grouped.setdefault((row["arm"], prop), []).append(
             {"source": row["source"], "window_days": row["window_days"], "base_class": base})
     evals = [evaluate_property(a, p, cells) for (a, p), cells in grouped.items()]
-    manifest = build_rung1_manifest(evals, run_config=run_config)
+    manifest = build_rung1_manifest(evals, run_config=run_config, evaluator_provenance=evaluator_provenance)
     manifest["cell_metrics"] = rows
     manifest["generated_utc"] = now_utc()
     return manifest

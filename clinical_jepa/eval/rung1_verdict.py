@@ -42,16 +42,19 @@ def classify_timing_cell(metrics: dict[str, Any]) -> str:
     result gate #2.1."""
     if not metrics.get("evaluable", False):
         return NOT_EVALUABLE
+    swap_lo = metrics.get("swap_excess_lo")
+    if swap_lo is None:                              # fail CLOSED (Pi amended #2): a missing
+        return INCONCLUSIVE                          # attribution control cannot claim latent use
+    swap_ok = float(swap_lo) > 0.0
     ks_ok = float(metrics.get("ks_upper_ci", 1.0)) <= KS_D_GATE
     skill_ok = float(metrics.get("crps_skill_lo", -1.0)) >= CRPS_SKILL_GATE
     if not ks_ok:
         return NOT_DECODABLE if metrics.get("precise", False) else INCONCLUSIVE
-    if skill_ok:
-        return DECODABLE_NONLINEAR
-    swap_lo = metrics.get("swap_excess_lo")
-    if swap_lo is not None and float(swap_lo) <= 0.0:
+    if not swap_ok:                                  # non-positive swap => reads its prior
         return PRIOR_MASKED
-    return MARGINAL_ONLY
+    if skill_ok:
+        return DECODABLE_NONLINEAR                   # requires KS + skill + a POSITIVE own-swap
+    return MARGINAL_ONLY                             # calibrated + uses the latent, sub-gate skill
 
 
 def classify_order_cell(metrics: dict[str, Any]) -> str:
@@ -102,9 +105,11 @@ def evaluate_property(arm: str, prop: str, cells: list[dict[str, Any]]) -> dict[
     }
 
 
-def build_rung1_manifest(property_evals: list[dict[str, Any]], *, run_config: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_rung1_manifest(property_evals: list[dict[str, Any]], *, run_config: dict[str, Any] | None = None,
+                         evaluator_provenance: dict[str, Any] | None = None) -> dict[str, Any]:
     """Assemble the 1a incumbent record + 1b nominations. property_evals = outputs of
-    evaluate_property for every (arm, property)."""
+    evaluate_property for every (arm, property). ``evaluator_provenance`` (Pi amended #5) records
+    the evaluator code commit / run id beyond the frozen scalar config_hash."""
     rung1a: dict[str, Any] = {}
     rung1b: dict[str, dict[str, Any]] = {}
     for ev in property_evals:
@@ -131,6 +136,7 @@ def build_rung1_manifest(property_evals: list[dict[str, Any]], *, run_config: di
         "created_utc": now_utc(),
         "contract_version": CONTRACT_VERSION,
         "config_hash": config_hash(run_config),
+        "evaluator_provenance": evaluator_provenance or {},   # Pi amended #5: code commit / run id
         "aggregate_only": True,
         "test_access": False,
         "rung1a": rung1a,

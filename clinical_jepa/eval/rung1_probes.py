@@ -308,12 +308,16 @@ def slot_exact_from_pvals(pvals_list: list[np.ndarray], true_slot_sets: list[Any
     return exact, f1
 
 
-def slot_multiset_exact_hits(E: np.ndarray, slot_means: list[Any], true_slot_sets: list[Any],
+def slot_tokenset_exact_hits(E: np.ndarray, slot_means: list[Any], true_slot_sets: list[Any],
                              thresh: float) -> tuple[np.ndarray, np.ndarray]:
-    """Convenience wrapper: real temporal-slot fidelity (Pi Rung-1 result gate #2) — decode
-    each slot's token SET from its slot-mean via the analytic inverse (no oracle multiset),
-    then EXACT all-slot match. Returns (exact_all_slot_hits, slot_wise_micro_F1) per window."""
+    """Convenience wrapper: temporal-slot TOKEN-SET fidelity (Pi amended #3) — decode each
+    slot's token SET (presence, not multiset/counts) from its slot-mean via the analytic
+    inverse, then EXACT all-slot match. An EASIER upper bound than exact multiset recovery.
+    Returns (exact_all_slot_token_set_hits, slot_wise_micro_F1) per window."""
     return slot_exact_from_pvals(slot_pvals(analytic_pinv(E), slot_means), true_slot_sets, thresh)
+
+
+slot_multiset_exact_hits = slot_tokenset_exact_hits   # deprecated alias (misnomer; see above)
 
 
 def marginal_hurdle_quantiles(dt_train: Any, *, n_q: int = 9) -> tuple[float, np.ndarray, np.ndarray]:
