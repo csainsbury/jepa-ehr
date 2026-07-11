@@ -1,0 +1,233 @@
+"""Rung-2 SEPARATED-blueprint CONTRACT — the frozen numeric pre-registration (Pi v2 re-gate).
+
+Pi GO-WITH-CHANGES TO BUILD: scaffolding + synthetic tests + sub-gates 1/2 + frozen T1-T3 +
+continuous-time/multiplicity head. NOT authorized: governed exports, real-data training/dev
+eval, or T4 learned-target work (which needs the separately-gated semi-synthetic oracle).
+
+Every categorical gate below has concrete units / margins / adequacy floors / missing-data
+behaviour, content-hashed via `config_hash`. Pure-python + numpy (no torch) so the contract is
+cheap to import and fail-hard test. Inherits the Rung-1 spine.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any
+
+from clinical_jepa.eval.rung1_contract import (  # inherited spine
+    N_BOOT, SEED, SWAP_SEED, SENSITIVITY_HORIZONS, deterministic_derangement,
+    is_primary_cell, matched_head_hidden,
+)
+
+CONTRACT_VERSION = "rung2-contract-v1-pi-v2-regate"
+
+# ============================ cross-cutting ============================
+NOMINATION_ONLY = True          # ALL dev decisions are nomination-only (Pi cross-cutting #1)
+TEST_ACCESS = False             # test sealed
+# shared status vocabulary
+NOT_EVALUABLE = "NOT_EVALUABLE"
+INCONCLUSIVE = "INCONCLUSIVE"
+NEGATIVE = "NEGATIVE"
+EFFECT_RULED_OUT = "EFFECT_RULED_OUT"
+
+SUBGATES = ("sg1_rollout", "sg2_count", "sg3_order", "sg4_time")
+
+# ============================ sub-gate 1: rollout diagnosis ============================
+# Two estimands: DIRECT-horizon (horizon-conditioned; NO recursion/exposure-gap) and
+# RECURSIVE-transition (fixed-width NON-OVERLAPPING δ increments). The recursive path is
+# NOT_EVALUABLE unless the checkpoint's metadata proves it was trained on fixed-width
+# non-overlapping transition states (Pi #2 — likely absent for horizon-count-1 checkpoints).
+RECURSIVE_DELTA = {"SCID": 30.0, "MIMIC": 0.25}          # source-specific fixed increment width
+REQUIRE_TRANSITION_TRAINED_CHECKPOINT = True
+TRANSITION_META_KEY = "fixed_width_transition_trained"    # checkpoint manifest flag that must be True
+ROLLOUT_CLUSTER_FLOOR = 500
+
+# perturbation ensemble (ε chosen from train/synthetic ONLY, before dev)
+PERT_EPS_GRID = (0.01, 0.03, 0.1, 0.3)
+PERT_EPS = 0.1                                            # frozen operating point (plateau)
+PERT_ENSEMBLE_N = 16
+PERT_EPS_SELECTION = "train_or_synthetic_only"
+JACOBIAN_METHOD = "power_iteration_top_singular_value"    # report top singular value, not a scalar norm
+
+# frozen drift statistic + margins (so signature LABELS may be emitted; else continuous-only)
+DRIFT_STAT = "d_self_over_ambient_true_nn"                # d_self normalised by ambient true-true NN distance
+EXPOSURE_GAP_MARGIN = 0.02                                # practical margin for g_t
+DRIFT_SLOPE_TAU = 0.02
+SIG_COLLAPSE_DSELF_OVER_DNN = 0.90                        # d_self/d_NN ≥ this ⇒ no better than nearest wrong instance
+ROLLOUT_CI = 0.95
+# ρ_t is DESCRIPTIVE ONLY (Pi #1 — never load-bearing / never a signature discriminator)
+RHO_T_ROLE = "descriptive_only"
+SIGNATURES = ("HEALTHY", "DRIFT_DOMINANT", "COLLAPSE_DOMINANT", "GENUINE_UNIMODALITY",
+              "EMA_NONSTATIONARITY_DEFERRED")
+
+# ============================ sub-gate 2: count interface ============================
+# ONE matched family (Pi #3): A and B share the same frozen hurdle count-distribution family +
+# proper score, varying ONLY where count enters the interface/objective.
+COUNT_FAMILY = "hurdle_count"                            # zero-hurdle + count distribution
+COUNT_PRIMARY_SCORE = "ranked_probability_score_skill"   # proper distribution score (RPS skill)
+COUNT_NOMINATE_MARGIN = 0.02                             # paired margin in RPS-skill units
+COUNT_CLUSTER_FLOOR = 500
+COUNT_HEAD_PARAM_FORMULA = "matched_head_hidden"         # A/B share the matched param/FLOP budget
+COUNT_B_POINT_ESTIMATE_FALLBACK = "NOMINATE_FACTORIZED_STRUCTURAL"  # if B is a point estimate it cannot win a calibrated score
+NOMINATE_FACTORIZED = "NOMINATE_FACTORIZED"
+NOMINATE_CONCAT = "NOMINATE_CONCAT"
+NEITHER_ADEQUATE = "NEITHER_ADEQUATE"
+
+# ============================ sub-gate 3: order (frozen T1-T3; T4 barred) ============================
+ORDER_SUPPORT_FLOOR = 500                                # ≥500 eligible exact-fixed-multiset clusters / primary cell
+ORDER_L_MAX = 16
+ORDER_NO_SILENT_TRUNCATION = True
+ORDER_TIE_RULE = "frozen_tie_aware_token_sequence"       # reuse rung1 tie_aware_exact_order_hits
+ORDER_TEMPERATURE_SELECTION = "train_internal_only"
+# single primary bounded order-skill metric + the two non-redundant gates (G3.1/G3.3 de-duplicated)
+PRECEDENCE_SKILL_GATE = 0.10                             # content-prior-adjusted precedence-skill lower-CI
+ORDER_SWAP_EXCESS_GATE = 0.10                            # fixed-multiset predictor-swap excess lower-CI
+ORDER_T0_IMPROVEMENT_GATE = 0.10                         # improvement over T0 lower-CI (multiplicity-corrected)
+ORDER_MULTIPLICITY = "bonferroni_over_frozen_ladder"
+# bit accounting + T2 matched-bit ceiling
+BIT_ACCOUNTING = "seq_dim32_or_L_log2K"                  # frozen-E: L·D·32 ; VQ: L·log2 K
+T2_MATCHED_BIT_QUANTIZER = "uniform_scalar"
+T2_CEILING_RETENTION_TOL = 0.05                          # quantised T2 ceiling must stay within tol of unquantised
+DECOMP_METRIC = "bounded_order_skill"                    # 3-way decomp is on the SAME bounded score, telescoping
+FROZEN_TARGETS = ("T1_pooled_ordinal", "T2_seq_of_latents", "T3_ordinal_tagged_seq")
+T4_TARGET = "T4_vq_ordered_codes"                        # BARRED on governed data until the oracle
+ORDER_TARGET_FAMILIES = FROZEN_TARGETS + (T4_TARGET,)
+
+# ============================ sub-gate 4: continuous-time / multiplicity head ============================
+# NOT a marked TPP (marks are not gated in this blueprint). Timestamp-cluster factorization.
+CT_HEAD_NAME = "continuous_time_multiplicity_head"
+# 4A — zero/simultaneity (multiplicity), numeric
+GATE_4A_MULTIPLICITY_SKILL = 0.05                        # Brier/CRPS skill over context-stratified/rate-only baseline, lower-CI
+GATE_4A_SWAP_SKILL = 0.05                                # wrong-context swap skill lower-CI
+GATE_4A_ECE = 0.05                                       # calibration ECE upper-CI
+GATE_4A_CLUSTER_FLOOR = 500                              # ≥500 clusters, support reported by multiplicity class
+# p0 reliability alone cannot pass — multiplicity skill must also pass
+# 4B — positive tail, numeric
+GATE_4B_KS = 0.05                                        # positive-tail KS upper-CI
+GATE_4B_CRPS_SKILL = 0.05                                # over the context-observable stratified marginal, lower-CI
+GATE_4B_RATE_HEAD_IMPROVEMENT = 0.05                     # over the rate-only head, lower-CI
+GATE_4B_SWAP = 0.05                                      # rate/occupancy-matched wrong-context swap, lower-CI
+GATE_4B_CLUSTER_FLOOR = 500                              # positive-tail clusters
+GATE_4B_INTERVAL_FLOOR = 1000                            # positive intervals + precision sim
+# stratification: context-observable ONLY, bins frozen from train; observed-future = oracle-assisted
+CONTEXT_STRATA = ("occupancy_bin", "context_rate_quantile", "horizon")
+OBSERVED_FUTURE_STRATA = ("future_occupancy", "future_rate")   # oracle-assisted, non-primary
+# 4A/4B are SEPARATE + CONJUNCTIVE; a joint zero-aware proper score is SECONDARY only
+TIMING_JOINT_SCORE_ROLE = "secondary_descriptive"
+
+
+def requires_oracle(target: str) -> bool:
+    """T4 (learned VQ target) needs the separately-gated semi-synthetic oracle before ANY
+    governed real-data training/evaluation (Pi #7 / Q4)."""
+    return target == T4_TARGET
+
+
+def is_oracle_assisted_stratum(var: str) -> bool:
+    """Observed-future strata may never be the operational primary baseline (Pi #5)."""
+    return var in OBSERVED_FUTURE_STRATA
+
+
+def recursive_path_evaluable(checkpoint_meta: dict[str, Any] | None) -> bool:
+    """The recursive-transition path is NOT_EVALUABLE unless the checkpoint's metadata proves it
+    was trained on fixed-width non-overlapping transition states (Pi #2). No pseudo-rollouts."""
+    if not REQUIRE_TRANSITION_TRAINED_CHECKPOINT:
+        return True
+    return bool((checkpoint_meta or {}).get(TRANSITION_META_KEY, False))
+
+
+# ============================ fail-hard independence + stop-line (Pi #6) ============================
+NOMINATE_DIRECTION = "NOMINATE_DIRECTION"
+RETAIN_INCUMBENT = "RETAIN_INCUMBENT"
+ESCALATE_REDESIGN = "ESCALATE_REDESIGN"
+_NOMINATION_LABELS = frozenset({
+    NOMINATE_FACTORIZED, NOMINATE_CONCAT, NEITHER_ADEQUATE, NOMINATE_DIRECTION,
+    RETAIN_INCUMBENT, ESCALATE_REDESIGN, NOT_EVALUABLE, INCONCLUSIVE, NEGATIVE, EFFECT_RULED_OUT,
+})
+# metrics that ONLY the recursive-transition path may emit (direct-horizon rows must not)
+RECURSIVE_ONLY_METRICS = ("exposure_gap", "d_self_free", "d_self_tf", "recursive_step_k")
+
+
+def is_nomination_only_decision(label: str) -> bool:
+    """No dev decision may be an ADOPT/certify (Pi cross-cutting #1)."""
+    return label in _NOMINATION_LABELS and not str(label).upper().startswith("ADOPT")
+
+
+def assert_gates_independent(provenance_by_gate: dict[str, dict[str, Any]]) -> bool:
+    """Fail-hard if any TRAINED artifact (checkpoint/optimizer/run_id) or a per-gate config_hash is
+    shared across sub-gates. A common FROZEN context encoder is allowed and is NOT counted."""
+    seen: dict[Any, str] = {}
+    for gate, prov in provenance_by_gate.items():
+        for k in ("optimizer", "run_id", "trained_checkpoint", "config_hash"):
+            v = prov.get(k)
+            if v is None:
+                continue
+            if v in seen and seen[v] != gate:
+                raise AssertionError(f"gate-independence breach: {k}={v!r} shared by {seen[v]} and {gate}")
+            seen[v] = gate
+    return True
+
+
+def validate_direct_path_row(row: dict[str, Any]) -> bool:
+    """Direct cumulative-horizon rows must never carry recursive/exposure-gap metrics (Pi #6)."""
+    bad = [k for k in RECURSIVE_ONLY_METRICS if k in row]
+    if bad:
+        raise AssertionError(f"direct-horizon path must not emit recursive metrics {bad}")
+    return True
+
+
+def t4_governed_allowed(inputs_are_governed: bool, oracle_authorization: dict[str, Any] | None) -> bool:
+    """T4 on GOVERNED data is refused until a frozen semi-synthetic oracle authorization manifest
+    exists (Pi #7). Synthetic/safe-public T4 scaffolding is always allowed."""
+    if not inputs_are_governed:
+        return True
+    return bool((oracle_authorization or {}).get("oracle_frozen", False)
+                and (oracle_authorization or {}).get("pi_gate", "") == "PASS")
+
+
+def order_support_status(n_eligible_clusters: int) -> str:
+    """Below the exact-fixed-multiset support floor => NOT_EVALUABLE (no silent relaxation, Pi #4)."""
+    return "SUPPORTED" if int(n_eligible_clusters) >= ORDER_SUPPORT_FLOOR else NOT_EVALUABLE
+
+
+def frozen_contract() -> dict[str, Any]:
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "cross_cutting": {"nomination_only": NOMINATION_ONLY, "test_access": TEST_ACCESS,
+                          "subgates": list(SUBGATES)},
+        "sg1_rollout": {"recursive_delta": RECURSIVE_DELTA,
+                        "require_transition_trained_checkpoint": REQUIRE_TRANSITION_TRAINED_CHECKPOINT,
+                        "cluster_floor": ROLLOUT_CLUSTER_FLOOR, "pert_eps_grid": list(PERT_EPS_GRID),
+                        "pert_eps": PERT_EPS, "pert_ensemble_n": PERT_ENSEMBLE_N,
+                        "drift_stat": DRIFT_STAT, "exposure_gap_margin": EXPOSURE_GAP_MARGIN,
+                        "drift_slope_tau": DRIFT_SLOPE_TAU,
+                        "sig_collapse_dself_over_dnn": SIG_COLLAPSE_DSELF_OVER_DNN,
+                        "rho_t_role": RHO_T_ROLE, "signatures": list(SIGNATURES)},
+        "sg2_count": {"family": COUNT_FAMILY, "primary_score": COUNT_PRIMARY_SCORE,
+                      "nominate_margin": COUNT_NOMINATE_MARGIN, "cluster_floor": COUNT_CLUSTER_FLOOR,
+                      "b_point_estimate_fallback": COUNT_B_POINT_ESTIMATE_FALLBACK},
+        "sg3_order": {"support_floor": ORDER_SUPPORT_FLOOR, "l_max": ORDER_L_MAX,
+                      "no_silent_truncation": ORDER_NO_SILENT_TRUNCATION, "tie_rule": ORDER_TIE_RULE,
+                      "precedence_skill_gate": PRECEDENCE_SKILL_GATE,
+                      "swap_excess_gate": ORDER_SWAP_EXCESS_GATE,
+                      "t0_improvement_gate": ORDER_T0_IMPROVEMENT_GATE, "multiplicity": ORDER_MULTIPLICITY,
+                      "bit_accounting": BIT_ACCOUNTING, "t2_quantizer": T2_MATCHED_BIT_QUANTIZER,
+                      "t2_ceiling_retention_tol": T2_CEILING_RETENTION_TOL, "decomp_metric": DECOMP_METRIC,
+                      "frozen_targets": list(FROZEN_TARGETS), "t4_target": T4_TARGET},
+        "sg4_time": {"head": CT_HEAD_NAME,
+                     "gate_4a": {"multiplicity_skill": GATE_4A_MULTIPLICITY_SKILL,
+                                 "swap_skill": GATE_4A_SWAP_SKILL, "ece": GATE_4A_ECE,
+                                 "cluster_floor": GATE_4A_CLUSTER_FLOOR},
+                     "gate_4b": {"ks": GATE_4B_KS, "crps_skill": GATE_4B_CRPS_SKILL,
+                                 "rate_head_improvement": GATE_4B_RATE_HEAD_IMPROVEMENT,
+                                 "swap": GATE_4B_SWAP, "cluster_floor": GATE_4B_CLUSTER_FLOOR,
+                                 "interval_floor": GATE_4B_INTERVAL_FLOOR},
+                     "context_strata": list(CONTEXT_STRATA),
+                     "observed_future_strata_oracle_assisted": list(OBSERVED_FUTURE_STRATA),
+                     "joint_score_role": TIMING_JOINT_SCORE_ROLE},
+        "bootstrap": {"n_boot": N_BOOT, "seed": SEED, "swap_seed": SWAP_SEED},
+    }
+
+
+def config_hash(run_config: dict[str, Any] | None = None) -> str:
+    payload = {"contract": frozen_contract(), "run_config": run_config or {}}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

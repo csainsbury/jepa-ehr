@@ -170,7 +170,8 @@ source × exact lag/horizon × occupancy/rate/length, patient-disjoint.
   d_t^{self,tf}` (free-running − teacher-forced → isolates error compounding).
 - **Velocity/collapse (v0B predictor is DETERMINISTIC → no sampling ensemble):**
   `v_t^pop` = dispersion (trace-cov / effective-rank) of the predicted cloud; **collapse ratio
-  `ρ_t = v_t^pop / V_t^true`** — the **load-bearing control**: `ρ_t→0` = genuine attractor collapse;
+  `ρ_t = v_t^pop / V_t^true`** — **DESCRIPTIVE ONLY** (Pi; not a signature discriminator — a
+  deterministic mean-regressor has ρ_t<1 by Jensen at step 1): `ρ_t→0` is *suggestive of* collapse;
   `ρ_t≈const` with both clouds shrinking = **genuine long-horizon unimodality, NOT a defect**;
   `v_t^pert` = perturbation-ensemble spread (finite-difference local-contraction / Jacobian-norm).
   **Attractor identity:** `cos(ẑ_t, z̄_global)`, `cos(ẑ_t, z_empty)` name which fixed point a
@@ -336,7 +337,8 @@ head clear 4A∧4B **prediction-achieved** at SCID-30 (ceiling reachable by a pr
 `NOMINATE_DIRECTION(short_horizon_ct_head)`; all-cell ⇒ broad `NOMINATE`; flat ⇒
 `RETAIN_INCUMBENT`/`ESCALATE`. **Adequacy:** `TIMING_CLUSTER_FLOOR=500` + `TIMING_INTERVAL_FLOOR=1000`
 + the precision sim; report zero-fraction and positive-interval counts separately. **Compute:** ≪1
-GPU-hr incremental (reuses Rung-1 hurdle machinery; shares the context predictor with sub-gate 3).
+GPU-hr incremental (reuses Rung-1 hurdle machinery; **independent trained state — no shared trunk
+or predictor with sub-gate 3**; only a common FROZEN context encoder is allowed).
 
 ---
 
