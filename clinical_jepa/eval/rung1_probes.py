@@ -245,6 +245,41 @@ def crps_quantile_rows(quantiles: Any, y: Any) -> np.ndarray:
     return t1 - t2
 
 
+def hurdle_randomized_pit(p0: Any, pos_quantiles: Any, levels: Any, y: Any, *, seed: int = SEED) -> np.ndarray:
+    """Randomized PIT for a CONDITIONAL hurdle predictive (Pi R8 #7): a point mass p0 at
+    Δt=0 plus a positive continuous tail from per-row quantiles. y=0 -> PIT~U(0,p0);
+    y>0 -> p0 + (1-p0)·F_pos(y), randomized within the enclosing quantile step."""
+    p0 = np.asarray(p0, dtype=np.float64); y = np.asarray(y, dtype=np.float64)
+    q = np.asarray(pos_quantiles, dtype=np.float64); lv = np.asarray(levels, dtype=np.float64)
+    rng = np.random.default_rng(seed)
+    u = rng.uniform(size=len(y))
+    out = np.empty(len(y))
+    for i in range(len(y)):
+        if y[i] <= 0.0:
+            out[i] = u[i] * p0[i]
+        else:
+            below = np.searchsorted(q[i], y[i], side="left")
+            above = np.searchsorted(q[i], y[i], side="right")
+            lo = lv[below - 1] if below > 0 else 0.0
+            hi = lv[min(above, len(lv) - 1)] if above < len(lv) else 1.0
+            fpos = lo + u[i] * max(hi - lo, 0.0)
+            out[i] = p0[i] + (1.0 - p0[i]) * fpos
+    return np.clip(out, 0.0, 1.0)
+
+
+def hurdle_crps_rows(p0: Any, pos_quantiles: Any, y: Any, *, n_samp: int = 32, seed: int = SEED) -> np.ndarray:
+    """CRPS of the conditional hurdle predictive via a small per-row Monte-Carlo sample
+    (mass p0 at 0, else a positive quantile), vectorized through crps_quantile_rows."""
+    p0 = np.asarray(p0, dtype=np.float64); q = np.asarray(pos_quantiles, dtype=np.float64)
+    n, Q = q.shape
+    rng = np.random.default_rng(seed)
+    is_zero = rng.uniform(size=(n, n_samp)) < p0[:, None]
+    pick = rng.integers(0, Q, size=(n, n_samp))
+    samp = np.take_along_axis(q, pick, axis=1)
+    samp = np.where(is_zero, 0.0, samp)
+    return crps_quantile_rows(samp, y)
+
+
 # --------------------------------------------------------------------------- swap index
 def swap_partner_index(patients: list[str], seed: int) -> np.ndarray:
     """Deterministic on-manifold wrong-instance partner per row within one matching cell

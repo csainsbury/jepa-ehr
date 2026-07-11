@@ -95,7 +95,7 @@ def count_row(arm, source, W, tr, dev, *, embedding_dim, floor=COUNT_CLUSTER_FLO
 def timing_row(arm, source, W, tr, dev, *, embedding_dim, cluster_floor=TIMING_CLUSTER_FLOOR,
                interval_floor=TIMING_INTERVAL_FLOOR, n_boot=P.N_BOOT, seed=SEED) -> dict[str, Any]:
     import torch
-    from clinical_jepa.eval.rung1_decode import predict_quantiles, train_quantile_head
+    from clinical_jepa.eval.rung1_decode import predict_hurdle_timing, train_hurdle_timing_head
     # flatten inter-event intervals over non-empty >=2-event windows, carrying the patient.
     def flatten(bundle):
         dt, pat = [], []
@@ -134,19 +134,23 @@ def timing_row(arm, source, W, tr, dev, *, embedding_dim, cluster_floor=TIMING_C
         dt_tr, z_tr_i = dt_tr[selt], z_tr_i[selt]
     n_int = len(dt_dev)
     marg = P.fit_marginal_hurdle(dt_tr)
-    head, qs = train_quantile_head(torch.as_tensor(z_tr_i), torch.as_tensor(dt_tr.astype(np.float32)), embedding_dim)
-    q_dev = predict_quantiles(head, torch.as_tensor(z_dev_i))          # [n_int, n_q] predictive quantiles
-    # randomized-PIT KS via a per-interval conditional CDF from the quantiles
-    pit = _quantile_pit(q_dev, dt_dev, qs.cpu().numpy(), seed=seed)
+    # CONDITIONAL hurdle timing model (Pi R8 #7): models the Δt=0 point mass so the randomized
+    # PIT reflects the latent, not the evaluator. z+-conditional p0 + positive-tail quantiles.
+    head, qs = train_hurdle_timing_head(torch.as_tensor(z_tr_i), torch.as_tensor(dt_tr.astype(np.float32)), embedding_dim)
+    p0, q_dev = predict_hurdle_timing(head, torch.as_tensor(z_dev_i))
+    lv = qs.cpu().numpy()
+    pit = P.hurdle_randomized_pit(p0, q_dev, lv, dt_dev, seed=seed)
     ks = P.ks_d_upper_ci(pit, pat_dev, n_boot=n_boot, seed=seed)
-    # Vectorized CRPS (O(n·Q) / O(n·cap), not O(n·m²)): conditional from the per-row quantiles,
-    # marginal from the shared training Δt distribution (its self-term is a constant).
-    crps_cond = P.crps_quantile_rows(q_dev, dt_dev)
-    # CRPS must be non-negative; clip tiny negative estimator noise so the skill ratio is sane.
-    crps_cond = np.clip(crps_cond, 0.0, None)
-    crps_marg = np.clip(P.crps_marginal_rows(marg["pos_samples"], dt_dev, seed=seed), 1e-9, None)
+    # Conditional CRPS from the hurdle predictive; marginal CRPS from the shared hurdle marginal
+    # (zero mass + positive tail), both vectorized.
+    crps_cond = np.clip(P.hurdle_crps_rows(p0, q_dev, dt_dev, seed=seed), 0.0, None)
+    marg_p0 = float(marg["p0"]); marg_pos = np.asarray(marg["pos_samples"], dtype=np.float64)
+    marg_samples = np.where(np.random.default_rng(seed).uniform(size=min(len(marg_pos), 256)) < marg_p0,
+                            0.0, marg_pos[:min(len(marg_pos), 256)])
+    crps_marg = np.clip(P.crps_marginal_rows(marg_samples, dt_dev, seed=seed), 1e-9, None)
     skill = P.ratio_skill_ci(crps_cond, crps_marg, pat_dev, n_boot=n_boot, seed=seed)
-    row.update({"ks_upper_ci": ks["ci_hi"], "crps_skill_lo": skill["ci_lo"], "precise": True})
+    row.update({"ks_upper_ci": ks["ci_hi"], "crps_skill_lo": skill["ci_lo"],
+                "zero_rate": float((dt_dev <= 0).mean()), "precise": True})
     return row
 
 

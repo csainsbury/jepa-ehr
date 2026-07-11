@@ -155,6 +155,42 @@ def predict_quantiles(head: Any, z: Any) -> Any:
         return torch.cumsum(torch.nn.functional.softplus(head(z.detach().float())), dim=1).cpu().numpy()
 
 
+def train_hurdle_timing_head(z_train: Any, dt_train: Any, embedding_dim: int, *, n_q: int = 9,
+                             steps: int = 400, lr: float = 5e-3) -> tuple[Any, Any]:
+    """M2 conditional HURDLE timing readout (Pi R8 #7): z+ -> (zero_logit, n_q positive-Δt
+    quantiles). Models the Δt=0 point mass (simultaneous events) that a bare quantile head
+    cannot — otherwise the randomized PIT fails on the evaluator, not the latent. BCE on the
+    zero indicator + pinball on positive Δt. Returns (head, quantile_levels)."""
+    import torch
+    import torch.nn.functional as F
+    head = build_matched_head(z_train.shape[1], 1 + n_q, embedding_dim)
+    dt = dt_train.to(torch.float32)
+    is_zero = (dt <= 0).to(torch.float32)
+    pos = dt > 0
+    qs = torch.linspace(1.0 / (n_q + 1), n_q / (n_q + 1), n_q)
+
+    def loss(pred, _):
+        zlogit = pred[:, 0]
+        l = F.binary_cross_entropy_with_logits(zlogit, is_zero)
+        if bool(pos.any()):
+            q = torch.cumsum(F.softplus(pred[pos, 1:]), dim=1)     # monotone positive quantiles
+            e = dt[pos].view(-1, 1) - q
+            l = l + torch.mean(torch.maximum(qs * e, (qs - 1) * e))
+        return l
+    _fit_head(head, z_train.detach().float(), dt.view(-1, 1), loss, steps=steps, lr=lr)
+    return head, qs
+
+
+def predict_hurdle_timing(head: Any, z: Any) -> tuple[Any, Any]:
+    """Return (p0 [n], positive_quantiles [n, n_q]) for the conditional hurdle model."""
+    import torch
+    with torch.no_grad():
+        out = head(z.detach().float())
+        p0 = torch.sigmoid(out[:, 0]).cpu().numpy()
+        q = torch.cumsum(torch.nn.functional.softplus(out[:, 1:]), dim=1).cpu().numpy()
+    return p0, q
+
+
 def train_pairwise_order_head(z_train: Any, pair_feats: Any, pair_labels: Any, embedding_dim: int,
                               *, steps: int = 300, lr: float = 5e-3) -> Any:
     """M2 order readout: [z+ ⊕ emb(a) ⊕ emb(b)] -> P(a before b). For a permutation-invariant

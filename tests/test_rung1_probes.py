@@ -104,6 +104,29 @@ class TimingTests(unittest.TestCase):
         r = P.ks_d_upper_ci(pit, clusters, n_boot=300, seed=0)
         self.assertGreaterEqual(r["ci_hi"], r["point"])
 
+    def test_hurdle_pit_calibrated_with_zero_mass(self) -> None:
+        # A CORRECTLY specified conditional hurdle (Δt=0 mass + exp tail) yields ~Uniform PIT
+        # => small KS. This is the fix for the evaluator-artifact where a bare quantile head
+        # can't represent the zero mass and KS fails on the evaluator, not the latent.
+        rng = np.random.default_rng(0)
+        n = 20000
+        is0 = rng.random(n) < 0.3
+        dt = np.where(is0, 0.0, rng.exponential(2.0, size=n))
+        levels = np.linspace(0.1, 0.9, 9)
+        posq = -2.0 * np.log(1.0 - levels)                 # Exp(scale=2) quantiles
+        p0 = np.full(n, 0.3)
+        pit = P.hurdle_randomized_pit(p0, np.tile(posq, (n, 1)), levels, dt, seed=1)
+        self.assertLess(P.ks_d_uniform(pit), 0.03)
+
+    def test_hurdle_pit_miscalibrated_zero_rate_fails(self) -> None:
+        # Wrong p0 (model says 0 zeros but 40% are zero) -> PIT piles up -> large KS.
+        rng = np.random.default_rng(0)
+        n = 20000
+        dt = np.where(rng.random(n) < 0.4, 0.0, rng.exponential(2.0, size=n))
+        levels = np.linspace(0.1, 0.9, 9); posq = -2.0 * np.log(1.0 - levels)
+        pit = P.hurdle_randomized_pit(np.full(n, 0.0), np.tile(posq, (n, 1)), levels, dt, seed=1)
+        self.assertGreater(P.ks_d_uniform(pit), 0.10)
+
     def test_crps_conditional_beats_broad_marginal(self) -> None:
         rng = np.random.default_rng(0)
         y = rng.normal(size=200)
