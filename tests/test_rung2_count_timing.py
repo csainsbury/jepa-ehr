@@ -71,12 +71,15 @@ class T4RefusalTests(unittest.TestCase):
         guard_t4(inputs_are_governed=False, oracle_authorization=None)                      # synthetic OK
         with self.assertRaises(PermissionError):   # oracle_frozen+pi_gate alone insufficient (B4)
             guard_t4(inputs_are_governed=True, oracle_authorization={"oracle_frozen": True, "pi_gate": "PASS"})
-        full = {"oracle_frozen": True, "pi_gate": "PASS", "verdict": "synthetic_recovery_CERTIFIED",
-                "codebook_postdates_oracle": True, "labels_eval_only_verified": True,
-                "unlock_checks": {"U1": "PASS", "U2": "PASS"}, "precision_sim": {"adequate": True},
-                "realism_envelope": {"within_envelope": True},
+        from clinical_jepa.eval.rung2_contract import ORDER_UNLOCK_CHECKS
+        full = {"schema_version": "v2", "oracle_mechanism_hash": "m", "evaluator_commit": "c",
+                "certified_recipe_hash": "r", "held_out_family_ids": ["E"], "sealed_cert_run_id": "s",
+                "gate_event_ref": "e", "oracle_frozen": True, "pi_gate": "PASS",
+                "verdict": "synthetic_recovery_CERTIFIED", "codebook_postdates_oracle": True,
+                "labels_eval_only_verified": True, "unlock_checks": {c: "PASS" for c in ORDER_UNLOCK_CHECKS},
+                "precision_sim": {"adequate": True}, "realism_envelope": {"within_envelope": True},
                 "reference_bounds": {"R_bayes_beats_R0": True, "R0_null_pass": True, "R0_positive_fail": True,
-                                     "R_h_perp_order_fails_positive": True, "evaluator_realized_alpha": 0.03}}
+                                     "nuisance_incremental_margin_ok": True, "evaluator_realized_alpha": 0.03}}
         guard_t4(inputs_are_governed=True, oracle_authorization=full)                       # fully certified OK
 
 

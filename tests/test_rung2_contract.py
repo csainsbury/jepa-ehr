@@ -71,14 +71,17 @@ class OrderSupportTests(unittest.TestCase):
 
 
 def _full_oracle_manifest() -> dict:
-    """A fully-CERTIFIED oracle authorization manifest (the only thing that unlocks governed T4)."""
+    """A fully-certified, recipe-bound, property-specific order-T4 authorization manifest."""
     return {
+        "schema_version": "clinical-jepa-oracle-authorization-v2", "oracle_mechanism_hash": "mech123",
+        "evaluator_commit": "abc123", "certified_recipe_hash": "recipeXYZ",
+        "held_out_family_ids": ["E1", "E2"], "sealed_cert_run_id": "run77", "gate_event_ref": "evt-oracle-1",
         "oracle_frozen": True, "pi_gate": "PASS", "verdict": "synthetic_recovery_CERTIFIED",
         "codebook_postdates_oracle": True, "labels_eval_only_verified": True,
-        "unlock_checks": {"U1": "PASS", "U2": "PASS", "U3": "PASS", "U4": "PASS", "U6": "PASS"},
+        "unlock_checks": {c: "PASS" for c in C.ORDER_UNLOCK_CHECKS},
         "precision_sim": {"adequate": True}, "realism_envelope": {"within_envelope": True},
         "reference_bounds": {"R_bayes_beats_R0": True, "R0_null_pass": True, "R0_positive_fail": True,
-                             "R_h_perp_order_fails_positive": True, "evaluator_realized_alpha": 0.04},
+                             "nuisance_incremental_margin_ok": True, "evaluator_realized_alpha": 0.04},
     }
 
 
@@ -87,17 +90,23 @@ class OracleStopLineTests(unittest.TestCase):
         self.assertTrue(C.requires_oracle(C.T4_TARGET))
         self.assertFalse(C.requires_oracle("T2_seq_of_latents"))
         self.assertFalse(C.t4_governed_allowed(True, None))
-        # fail-closed: oracle_frozen+pi_gate alone is NOT enough (fable5 B4)
         self.assertFalse(C.t4_governed_allowed(True, {"oracle_frozen": True, "pi_gate": "PASS"}))
         self.assertTrue(C.t4_governed_allowed(True, _full_oracle_manifest()))
-        # any missing/failing field => refusal
-        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(), "verdict": "REFUTED"}))
+        # legacy plain "CERTIFIED" removed (Pi #7)
+        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(), "verdict": "CERTIFIED"}))
+        # missing provenance / failing check / bad reference => refusal
+        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(), "certified_recipe_hash": ""}))
         self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(),
-                                                      "unlock_checks": {"U1": "PASS", "U2": "FAIL"}}))
+                                                      "unlock_checks": {"U2_null": "FAIL"}}))
         self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(),
-                                                      "reference_bounds": {"R_bayes_beats_R0": False}}))
-        # synthetic/safe-public T4 scaffolding always allowed
+                                                      "reference_bounds": {"nuisance_incremental_margin_ok": False}}))
         self.assertTrue(C.t4_governed_allowed(False, None))
+
+    def test_authorization_bound_to_exact_recipe(self) -> None:
+        # a governed run presenting a DIFFERENT recipe hash than the certified one is refused (Pi #6)
+        m = _full_oracle_manifest()
+        self.assertTrue(C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ"))
+        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="a_different_recipe"))
 
     def test_observed_future_strata_are_oracle_assisted(self) -> None:
         self.assertTrue(C.is_oracle_assisted_stratum("future_occupancy"))

@@ -175,34 +175,51 @@ def validate_direct_path_row(row: dict[str, Any]) -> bool:
     return True
 
 
-def t4_governed_allowed(inputs_are_governed: bool, oracle_authorization: dict[str, Any] | None) -> bool:
-    """T4 on GOVERNED data is refused until a frozen, Pi-gated semi-synthetic oracle authorization
-    manifest CERTIFIES it (Pi #7). Synthetic/safe-public T4 scaffolding is always allowed.
+# the ORDER-T4 unlock is PROPERTY-SPECIFIC (Pi oracle #5): only order-relevant checks; timing
+# certification is a SEPARATE manifest and must NOT veto an order-only target.
+ORDER_UNLOCK_CHECKS = ("U1_order_recovery", "U2_null", "U3_monotone", "U4_nuisance_incremental",
+                       "U6_bandwidth_fair")
+_REQUIRED_MANIFEST_FIELDS = ("schema_version", "oracle_mechanism_hash", "evaluator_commit",
+                             "certified_recipe_hash", "held_out_family_ids", "sealed_cert_run_id",
+                             "gate_event_ref")
 
-    FAIL-CLOSED on the FULL oracle-authorization conjunction (fable5 B4 — the prior guard checked
-    only oracle_frozen+pi_gate, so a REFUTED / unlock-failing manifest would have passed). Any
-    missing field is a refusal."""
+
+def t4_governed_allowed(inputs_are_governed: bool, oracle_authorization: dict[str, Any] | None,
+                        *, presented_recipe_hash: str | None = None,
+                        expected_blueprint_hash: str | None = None) -> bool:
+    """Governed T4 (a learned VQ ORDER target) is refused until a frozen, Pi-gated oracle manifest
+    CERTIFIES the EXACT recipe presented (Pi oracle #5/#6/#7). Synthetic/safe-public scaffolding is
+    always allowed. FAIL-CLOSED on the full property-specific conjunction; any missing/stale field
+    is a refusal. Only ``synthetic_recovery_CERTIFIED`` is accepted (legacy ``CERTIFIED`` removed)."""
     if not inputs_are_governed:
         return True
     m = oracle_authorization or {}
     if not (m.get("oracle_frozen") is True and m.get("pi_gate") == "PASS"):
         return False
-    if m.get("verdict") not in ("synthetic_recovery_CERTIFIED", "CERTIFIED"):
+    if m.get("verdict") != "synthetic_recovery_CERTIFIED":               # legacy "CERTIFIED" removed (#7)
+        return False
+    if any(m.get(k) in (None, "") for k in _REQUIRED_MANIFEST_FIELDS):   # required provenance (#7)
+        return False
+    # bind authorization to the EXACT certified recipe (#6): the governed run must present it.
+    if presented_recipe_hash is not None and m.get("certified_recipe_hash") != presented_recipe_hash:
+        return False
+    if expected_blueprint_hash is not None and m.get("blueprint_hash") != expected_blueprint_hash:
         return False
     if not (m.get("codebook_postdates_oracle") is True and m.get("labels_eval_only_verified") is True):
         return False
+    # PROPERTY-SPECIFIC order unlock (#5): only the order checks; timing is a separate manifest.
     checks = m.get("unlock_checks", {})
-    if not (checks and all(v == "PASS" for v in checks.values())):
+    if not all(checks.get(c) == "PASS" for c in ORDER_UNLOCK_CHECKS):
         return False
     if not (m.get("precision_sim", {}).get("adequate") is True):
         return False
     if not (m.get("realism_envelope", {}).get("within_envelope") is True):
         return False
     rb = m.get("reference_bounds", {})
-    # fable5 B2/B3: R_bayes (context-Bayes ceiling) must beat R0; R0 nulls pass + positives fail;
-    # the other-channel h-leak reference R_{h⊥order} must FAIL positive; evaluator alpha <= 0.05.
+    # #2/#4: context-Bayes ceiling beats R0; R0 nulls pass + positives fail; nuisance-INCREMENTAL
+    # recovery clears its margin (replaces the impossible "R_{h⊥order} must fail"); alpha <= 0.05.
     if not (rb.get("R_bayes_beats_R0") is True and rb.get("R0_null_pass") is True
-            and rb.get("R0_positive_fail") is True and rb.get("R_h_perp_order_fails_positive") is True
+            and rb.get("R0_positive_fail") is True and rb.get("nuisance_incremental_margin_ok") is True
             and float(rb.get("evaluator_realized_alpha", 1.0)) <= 0.05):
         return False
     return True
