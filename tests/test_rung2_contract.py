@@ -70,14 +70,32 @@ class OrderSupportTests(unittest.TestCase):
         self.assertEqual(C.order_support_status(500), "SUPPORTED")
 
 
+def _full_oracle_manifest() -> dict:
+    """A fully-CERTIFIED oracle authorization manifest (the only thing that unlocks governed T4)."""
+    return {
+        "oracle_frozen": True, "pi_gate": "PASS", "verdict": "synthetic_recovery_CERTIFIED",
+        "codebook_postdates_oracle": True, "labels_eval_only_verified": True,
+        "unlock_checks": {"U1": "PASS", "U2": "PASS", "U3": "PASS", "U4": "PASS", "U6": "PASS"},
+        "precision_sim": {"adequate": True}, "realism_envelope": {"within_envelope": True},
+        "reference_bounds": {"R_bayes_beats_R0": True, "R0_null_pass": True, "R0_positive_fail": True,
+                             "R_h_perp_order_fails_positive": True, "evaluator_realized_alpha": 0.04},
+    }
+
+
 class OracleStopLineTests(unittest.TestCase):
-    def test_t4_governed_refused_without_frozen_oracle(self) -> None:
+    def test_t4_governed_refused_without_full_certification(self) -> None:
         self.assertTrue(C.requires_oracle(C.T4_TARGET))
         self.assertFalse(C.requires_oracle("T2_seq_of_latents"))
-        # governed T4 refused without a frozen, Pi-gated oracle
         self.assertFalse(C.t4_governed_allowed(True, None))
-        self.assertFalse(C.t4_governed_allowed(True, {"oracle_frozen": True, "pi_gate": "PENDING"}))
-        self.assertTrue(C.t4_governed_allowed(True, {"oracle_frozen": True, "pi_gate": "PASS"}))
+        # fail-closed: oracle_frozen+pi_gate alone is NOT enough (fable5 B4)
+        self.assertFalse(C.t4_governed_allowed(True, {"oracle_frozen": True, "pi_gate": "PASS"}))
+        self.assertTrue(C.t4_governed_allowed(True, _full_oracle_manifest()))
+        # any missing/failing field => refusal
+        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(), "verdict": "REFUTED"}))
+        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(),
+                                                      "unlock_checks": {"U1": "PASS", "U2": "FAIL"}}))
+        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(),
+                                                      "reference_bounds": {"R_bayes_beats_R0": False}}))
         # synthetic/safe-public T4 scaffolding always allowed
         self.assertTrue(C.t4_governed_allowed(False, None))
 

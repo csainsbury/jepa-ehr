@@ -176,12 +176,36 @@ def validate_direct_path_row(row: dict[str, Any]) -> bool:
 
 
 def t4_governed_allowed(inputs_are_governed: bool, oracle_authorization: dict[str, Any] | None) -> bool:
-    """T4 on GOVERNED data is refused until a frozen semi-synthetic oracle authorization manifest
-    exists (Pi #7). Synthetic/safe-public T4 scaffolding is always allowed."""
+    """T4 on GOVERNED data is refused until a frozen, Pi-gated semi-synthetic oracle authorization
+    manifest CERTIFIES it (Pi #7). Synthetic/safe-public T4 scaffolding is always allowed.
+
+    FAIL-CLOSED on the FULL oracle-authorization conjunction (fable5 B4 — the prior guard checked
+    only oracle_frozen+pi_gate, so a REFUTED / unlock-failing manifest would have passed). Any
+    missing field is a refusal."""
     if not inputs_are_governed:
         return True
-    return bool((oracle_authorization or {}).get("oracle_frozen", False)
-                and (oracle_authorization or {}).get("pi_gate", "") == "PASS")
+    m = oracle_authorization or {}
+    if not (m.get("oracle_frozen") is True and m.get("pi_gate") == "PASS"):
+        return False
+    if m.get("verdict") not in ("synthetic_recovery_CERTIFIED", "CERTIFIED"):
+        return False
+    if not (m.get("codebook_postdates_oracle") is True and m.get("labels_eval_only_verified") is True):
+        return False
+    checks = m.get("unlock_checks", {})
+    if not (checks and all(v == "PASS" for v in checks.values())):
+        return False
+    if not (m.get("precision_sim", {}).get("adequate") is True):
+        return False
+    if not (m.get("realism_envelope", {}).get("within_envelope") is True):
+        return False
+    rb = m.get("reference_bounds", {})
+    # fable5 B2/B3: R_bayes (context-Bayes ceiling) must beat R0; R0 nulls pass + positives fail;
+    # the other-channel h-leak reference R_{h⊥order} must FAIL positive; evaluator alpha <= 0.05.
+    if not (rb.get("R_bayes_beats_R0") is True and rb.get("R0_null_pass") is True
+            and rb.get("R0_positive_fail") is True and rb.get("R_h_perp_order_fails_positive") is True
+            and float(rb.get("evaluator_realized_alpha", 1.0)) <= 0.05):
+        return False
+    return True
 
 
 def order_support_status(n_eligible_clusters: int) -> str:

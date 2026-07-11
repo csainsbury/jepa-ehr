@@ -67,9 +67,17 @@ class T4RefusalTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             guard_t4(inputs_are_governed=True, oracle_authorization={"oracle_frozen": True, "pi_gate": "PENDING"})
 
-    def test_synthetic_t4_allowed(self) -> None:
-        guard_t4(inputs_are_governed=False, oracle_authorization=None)                      # OK
-        guard_t4(inputs_are_governed=True, oracle_authorization={"oracle_frozen": True, "pi_gate": "PASS"})
+    def test_synthetic_t4_allowed_governed_needs_full_cert(self) -> None:
+        guard_t4(inputs_are_governed=False, oracle_authorization=None)                      # synthetic OK
+        with self.assertRaises(PermissionError):   # oracle_frozen+pi_gate alone insufficient (B4)
+            guard_t4(inputs_are_governed=True, oracle_authorization={"oracle_frozen": True, "pi_gate": "PASS"})
+        full = {"oracle_frozen": True, "pi_gate": "PASS", "verdict": "synthetic_recovery_CERTIFIED",
+                "codebook_postdates_oracle": True, "labels_eval_only_verified": True,
+                "unlock_checks": {"U1": "PASS", "U2": "PASS"}, "precision_sim": {"adequate": True},
+                "realism_envelope": {"within_envelope": True},
+                "reference_bounds": {"R_bayes_beats_R0": True, "R0_null_pass": True, "R0_positive_fail": True,
+                                     "R_h_perp_order_fails_positive": True, "evaluator_realized_alpha": 0.03}}
+        guard_t4(inputs_are_governed=True, oracle_authorization=full)                       # fully certified OK
 
 
 if __name__ == "__main__":
