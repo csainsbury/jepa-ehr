@@ -1,7 +1,7 @@
 ---
 title: Rung 1 — frozen-decode ceiling RESULTS (dev; Pi R7/R8 + result-gate-corrected)
 created: 2026-07-11
-status: governed run complete + Pi Rung-1 result-gate REVISE folded in (order relabelled, real slot metric, timing M2 swap, symmetric CRPS); amended aggregate + independent recompute; DEV-ONLY ceiling (Pi Q8); TEST untouched
+status: governed run complete + Pi result-gate REVISE folded in + Pi amended-gate ACCEPT-WITH-CHANGES freeze (fail-closed timing swap, token-set rename, scoped swap claim, order NOT_EVALUATED explicit, evaluator provenance); aggregate-only, no rerun; DEV-ONLY ceiling (Pi Q8); TEST untouched
 substrate: joint MIMIC+SCI-D corrected 350M (vocab 1050); latent = per-source encode-empty v0B (reused from Rung 0)
 reporting: aggregate-only (per source×horizon-cell metrics, floor-adjusted excess, CIs, verdicts; no seq ids / tokens / embeddings / real paths)
 ---
@@ -19,12 +19,16 @@ evaluated on DEV once, **TEST sealed**.
 > per-instance exact count / order / timing fidelity**, not all generation.
 
 ## Verdict
-| Arm | count | order | timing |
-|-----|-------|-------|--------|
-| **mean_embed (1a)** | `NOT_DECODABLE` | `STRUCTURALLY_INVARIANT_CONTENT_PRIOR_ONLY` | `NOT_DECODABLE` (mostly `MARGINAL_ONLY`) |
-| tap_concat (1b) | `NOT_DECODABLE` | content-prior-only | `NOT_DECODABLE` — **direct-timing ceiling at SCID 30 d only** |
-| count_concat (1b) | **`DECODABLE_SIMPLE`** → nominate | content-prior-only | `NOT_DECODABLE` |
-| temporal_slot (1b) | `NOT_DECODABLE` | `NOT_DECODABLE` (real slot metric) | `NOT_DECODABLE` |
+Order is `NOT_EVALUATED` for the order-blind arms — the frozen **unconditional** raw exact-order
+ceiling was not measured; the direct-order failure is **structural** (permutation invariance),
+with an oracle-assisted companion only.
+
+| Arm | count | order (unconditional / structural) | timing |
+|-----|-------|------------------------------------|--------|
+| **mean_embed (1a)** | `NOT_DECODABLE` | `NOT_EVALUATED` (structurally invariant; oracle companion only) | `NOT_DECODABLE` (per-cell `MARGINAL_ONLY`) |
+| tap_concat (1b) | `NOT_DECODABLE` | `NOT_EVALUATED` (structurally invariant; oracle companion only) | `NOT_DECODABLE` — **direct-timing ceiling at SCID 30 d only** |
+| count_concat (1b) | **`DECODABLE_SIMPLE`** → nominate | `NOT_EVALUATED` (structurally invariant; oracle companion only) | `NOT_DECODABLE` |
+| temporal_slot (1b) | `NOT_DECODABLE` | `NOT_DECODABLE` (real token-set slot metric) | `NOT_DECODABLE` (`PRIOR_MASKED` at MIMIC) |
 
 **Sole nomination: `count_concat` → count target (an intentionally-trivial representation-
 sufficiency control).** No arm meets the per-instance order gate; timing has a short-horizon
@@ -54,8 +58,12 @@ coverage is strongly selected toward short N**: post-cap denominators + excluded
 are 130 (W30) → 5175 (W730) excluded, published per cell.
 
 ## Temporal-slot fidelity — the real metric (Pi result-gate #2)
-Exact all-slot token-multiset reconstruction decoded (non-oracle) from the per-slot means via
-the analytic pseudo-inverse, with the slot readout's own wrong-instance swap excess:
+Exact all-slot **token-SET (presence)** reconstruction decoded (non-oracle) from the per-slot
+means via the analytic pseudo-inverse, with the slot readout's own wrong-instance swap excess.
+This is an **easier upper bound** than the frozen exact-multiset/count target (`slot_exact_from_pvals`
+compares predicted vs true token *sets*, not counts); its failure far below 0.70 conservatively
+rules out the harder multiset target — **slot cardinalities were not decoded**, and the slot
+copy-floor was `NOT_RUN` (moot under an absolute-gate failure):
 
 | cell | M=4 exact / F1 / swap-excess | M=8 (sensitivity) |
 |------|-----------------------------:|------------------:|
@@ -65,19 +73,27 @@ the analytic pseudo-inverse, with the slot readout's own wrong-instance swap exc
 | MIMIC W2 | 0.003 / 0.11 / +0.00 | 0.007 / 0.10 |
 
 Slot fidelity is **genuinely present and latent-dependent** (positive swap excess) but **decays
-sharply with event density** and **never clears the 0.70 slot gate** → `NOT_DECODABLE`; **M=8 is
+sharply with event density** and **never clears the 0.70 token-set slot gate** → `NOT_DECODABLE`; **M=8 is
 non-rescuing** (marginally higher, still ≪0.70). So temporal-slot pooling does **not** nominate
-a coarse-temporal target. (Independent recompute: SCID W30 M=4 exact = 0.346 vs manifest 0.357.)
+a coarse-temporal target. (Independent recompute of SCID W30 M=4 token-set exact = **0.346** over
+the **first 2,000 non-empty dev windows** — a subsample of the full evaluable set the manifest's
+0.357 is computed over; consistent within subsample variation.)
 
 ## Timing — symmetric CRPS + M2's own swap; MARGINAL_ONLY + a short-horizon exception
 The conditional hurdle (Δt=0 point mass + randomized PIT) gives calibrated KS (upper-CI
 0.009–0.054). CRPS is now **sample-matched** (same hurdle estimator + 64 draws for conditional
 and marginal). Crucially, timing now runs **M2's own window-level wrong-instance swap**:
 
-- The swap excess is **positive** (SCID +1.4 to +3.2 days; MIMIC +0.005 to +0.016) → the timing
-  heads **do read the latent** — so the earlier `PRIOR_MASKED` was unwarranted. With calibrated
-  KS but sub-gate conditional skill and a *passing* swap, most cells are **`MARGINAL_ONLY`**
-  (uses the latent, reproduces ≈ the marginal, no gate-clearing per-instance skill).
+- The swap excess is **positive for the three timing heads `mean_embed` / `tap_concat` /
+  `count_concat` in every evaluable cell** (SCID +1.4 to +3.2 days; MIMIC +0.005 to +0.016) → for
+  those arms the heads **do read the latent**, so with calibrated KS but sub-gate conditional
+  skill their cells are **`MARGINAL_ONLY`**. It is **not positive everywhere**: `temporal_slot`
+  timing swap is **non-positive at MIMIC 0.25/0.5/1 d and the 2 d sensitivity** → those cells are
+  **`PRIOR_MASKED`** (the timing head reads its prior there). The "heads read the latent"
+  statement is scoped to the three non-slot arms.
+- **Fail-closed attribution:** a missing swap control yields `INCONCLUSIVE`, and both
+  `DECODABLE_NONLINEAR` and `MARGINAL_ONLY` require a *positive* own-swap; a non-positive swap is
+  `PRIOR_MASKED` (Pi amended #2).
 - **Short-horizon exception (Pi):** `tap_concat` **clears BOTH timing gates at SCID 30 d**
   (KS 0.015, CRPS-skill lower-CI **+0.101**) → a genuine **`DIRECT_TIMING_CEILING` at the
   shortest horizon** — but it fails the conjunctive all-cell rule (SCID 365 d KS upper-CI 0.054
@@ -107,9 +123,14 @@ the ~70 % (SCID) / ~98 % (MIMIC) Δt=0 mass means occupancy/simultaneity dominat
   implementation gate (a process deviation; aggregate data unaffected). This amended pass uses
   the result-gate-corrected contract.
 
-## Local artifacts (gitignored)
+## Local artifacts (gitignored) + provenance
 `run-workspace/local-governed/rung1/verdict/rung1-ceiling-manifest.json` (config_hash `aa823835…`,
-`slot_m8_sensitivity`, `process_notes`).
+`slot_m8_sensitivity`, `process_notes`). **Provenance (Pi amended #5):** the `aa823835…` config
+hash identifies the *frozen scalar/run config* (unchanged); the manifest additionally records
+`evaluator_provenance.evaluator_commit` (the corrected evaluator code), the governed-run log, and
+the superseded-manifest pointer. The amended-freeze corrections (fail-closed timing swap, token-set
+rename, provenance) are an **aggregate-only regeneration from the cached cell-metrics — no
+governed rerun** — and leave every arm/property decision unchanged.
 
 ## Next
 Route to Pi as the amended result gate (Pi: if the corrected timing/slot decisions are
