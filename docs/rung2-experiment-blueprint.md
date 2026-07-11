@@ -1,7 +1,7 @@
 ---
 title: Rung 2 — SEPARATED blueprint (rollout diagnosis · count interface · order target · continuous-time head)
 created: 2026-07-11
-status: DRAFT — design panel (2 proposers) + Cog preflight + fable5 falsifier pass folded in (7 blocking changes); T4 learned-target BARRED from dev; pre-registration pending Pi Rung-2 blueprint gate
+status: DRAFT v2 — design panel + Cog + fable5 pass + Pi Rung-2 blueprint-gate REVISE folded in; nomination-only; T4 learned-target barred (oracle-first); pending Pi re-gate
 substrate: joint MIMIC+SCI-D corrected 350M (vocab 1050); per-source encode-empty v0B latent (frozen, reused from Rung 0/1)
 reporting: aggregate-only; DEV-ONLY (inside the encoder's circle, Pi Q8); TEST sealed (no --confirm-test path)
 scope: 4 INDEPENDENT sub-gates, independent manifests, no cross-rescue (Pi ruling). Nomination ≠ adoption.
@@ -68,6 +68,62 @@ a co-trained (learned) target — the learned VQ codebook and every counterfactu
 claim wait for the semi-synthetic oracle.* On dev, the ceiling of a learned-target decision is
 `NOT_EVALUABLE`; of any other decision, `NOMINATE`.
 
+## Pi Rung-2 blueprint gate = REVISE — folded-in changes
+Pi accepted the four-way separation and the fable5 fixes but blocked on undefined/inconsistent
+contracts. Folded in:
+
+**Cross-cutting.** (a) **All dev decisions are NOMINATION-ONLY** — sub-gate 2's `ADOPT_*` → `NOMINATE_*`;
+adoption needs the later confirmation route. (b) **Operationally independent gates** — separate
+checkpoints / optimizers / configs / manifests / run IDs; a **common FROZEN context encoder is
+allowed**, but **no trainable trunk, trained state, or hyperparameter selection may cross gates**
+(sub-gate 4 does NOT share sub-gate 3's predictor). (c) **Freeze per-sub-gate** adequacy floors,
+practical margins, status vocabulary (`NOT_EVALUABLE`/`INCONCLUSIVE`/negative/effect-ruled-out),
+code commit + config hash + sensitivity-only cells — **no categorical signature may depend on an
+un-frozen visual curve.**
+
+**Sub-gate 1 (structural).** Nested cumulative horizons are **not** recursive transition states →
+split into a **direct-horizon path** and a **fixed-width non-overlapping recursive-transition path**
+(details below); a rollout path the checkpoint was not trained for is `NOT_EVALUABLE`, not faked.
+`ρ_t` descriptive everywhere; numeric CI/margin rules frozen or no HEALTHY/DRIFT/COLLAPSE labels;
+`PERT_EPS` from train/synthetic only; NN pools matched on source × exact lag/horizon × occupancy/
+rate/length, patient-disjoint.
+
+**Sub-gate 2.** Concretely matched predictive families (freeze B's normalization / loss weights /
+param budget / frozen-branch); same train examples + context-only features + a C1 target-count
+perturbation invariance test; **primary = a proper count-DISTRIBUTION score** (hurdle/NB,
+calibration/coverage), exact-count + excess secondary — if B stays a point estimate it cannot win a
+calibrated comparison (a deliberate interface limitation, not "fairness"). A default on a paired tie.
+
+**Sub-gate 3.** A train-only **content-match support audit** per source×horizon×occupancy bin
+(count eligible fixed-multiset partners + effective N); below floor → the fixed-multiset swap is
+`NOT_EVALUABLE` (no silent relaxation to approximate matching). Freeze all target/predictor
+mechanics (max sequence length, padding/EOS, no-silent-truncation, ties, exact **bit accounting**,
+the fixed quantizer for the matched-bit T2 ceiling, deterministic-vs-distributional predictor +
+sampling count + train-only temperature + fixed dev sweep, concrete G3.2 margins/multiplicity, a
+single non-redundant G3.1/G3.3, and a **named normalized loss** before writing any `1 = repr +
+bandwidth + predictor` — all terms must share one metric with telescoping anchors). T2 is an
+**intra-candidate** predictor-bottleneck anchor only (T2-vs-T4 ranking void).
+
+**Sub-gate 4.** Explicit **timestamp-cluster factorization** (time-to-next-distinct-timestamp ·
+same-timestamp multiplicity · marks) — else call it a continuous-time/multiplicity head, not a
+marked TPP (deterministic tie order must not become an order signal). **Numeric 4A gates** frozen
+(named proper score + practical improvement over a train-fitted stratified/rate-only baseline; ECE/
+Brier tolerance; multiplicity calibration; rate-matched swap lower-CI margin; adequacy by
+multiplicity class — `p₀` reliability alone cannot pass). Every stratification variable is
+**context-observable or context-predicted-and-train-frozen**; using *observed future* occupancy/rate
+to pick a stratum is **oracle-assisted**, labelled, never the operational primary baseline. **ENTRY
+/ swap controls act on the FROZEN CONTEXT latent** (corrupt context latents; rate/occupancy-matched
+wrong-*context* swaps) — `D(z⁺)−D(ẑ)` is **not** an intra-candidate decomposition for a direct
+context→time head; TAP's Rung-1 ceiling is a comparator, not the same target; and since the head is
+trained on Δt, call it a **direct held-out raw-quantity evaluation**, not "external by construction."
+
+**Open-question rulings:** Q1 T2 bandwidth-fairness is **intra-candidate only** (no T2-vs-T4
+ranking). Q2 frozen T1–T3 **may `NOMINATE_DIRECTION` on dev** iff support + all gates pass, else
+`NOT_EVALUABLE`. Q3 **4A/4B separate + conjunctive** (joint score secondary). Q4 **the semi-synthetic
+oracle is required before any governed real-data T4 training/evaluation** — freeze + implement the
+oracle (known order/intensity rules, nulls, overlap/failure cases, evaluator) *first* so it can't be
+tailored to a dev-favoured codebook; synthetic scaffolding + safe-public unit tests may proceed now.
+
 ## Sequencing & entry precondition
 Sub-gates run in order 1 → 2 → 3 → 4 but gate independently. Sub-gates 3/4 (which **train** a
 target/codebook/head) are additionally guarded by an **ENTRY GATE pulled forward from the Rung-3
@@ -90,10 +146,23 @@ budget; worst-primary-cell conjunction; MIMIC 2 d sensitivity-only; cluster floo
 (`predict_rollout_from_latent`, `recursive` vs `horizon_conditioned`). **Nothing new is trained.**
 This is a *diagnostic*, not a programme go/no-go — failure selects a stabiliser, never "dead".
 
-**Data path:** extend `export_mean_token_rollouts.py` — `--unit wall_clock` (rollout step *h* ↔ the
-frozen wall-clock horizon block `[t_query, t_query+W_h)`, so the 4 SCID / 3 MIMIC horizons **are**
-the multi-step ladder), `--autoregression-mode {recursive,horizon_conditioned}`, a **teacher-forced**
-export (roll from the true previous-horizon latent), and a seeded **perturbation-ensemble** export.
+**Two explicitly different estimands (Pi structural fix — the frozen cumulative horizons
+`{30,90,365,730}` are NESTED, not transition states):**
+- **Direct-horizon path:** context → each cumulative target `[t, t+W)` via the horizon-conditioned
+  predictor. Estimates **horizon decay only** — NO free-running recursion, NO exposure gap (there is
+  no previous "state" to feed).
+- **Recursive-transition path:** fixed/near-fixed **non-overlapping** increments of source-specific
+  width `δ` (SCID 30 d, MIMIC 0.25 d), target state `k = [t+(k−1)δ, t+kδ)` (reuse the Rung-0
+  `subwindow_blocks` fixed-width partition). **Teacher-forcing** feeds the TRUE previous increment
+  state; **free-running** feeds the predicted one. Evaluate endpoints nearest the frozen horizons and
+  record any width deviation. **If the existing checkpoint was not trained for this transition
+  semantics, the recursive path is `NOT_EVALUABLE`** — do not pretend nested-block prediction is
+  rollout. The exposure gap `g_t` and `d_t^self` vs `d_t^NN` live ONLY on this path.
+
+**Data path:** extend `export_mean_token_rollouts.py` with the two estimands above (direct via
+`horizon_conditioned`; recursive via fixed-δ non-overlapping states), a **teacher-forced** export
+(true previous *increment*), and a seeded **perturbation-ensemble** export. NN pools matched on
+source × exact lag/horizon × occupancy/rate/length, patient-disjoint.
 
 **Metrics (cosine, per source×horizon cell, cluster-bootstrap CIs):**
 - **Drift** `d_t^NN = 1−cos(ẑ_t, nearest patient-disjoint TRUE latent)` (off-manifold drift);
@@ -143,15 +212,21 @@ predictor trained on **context only** reach the count?
 budget, TRAIN→DEV-once, C1 leak-free (invariance-tested). Score **both A and B strictly as
 context→future-count predictors**; the 1.000 sufficiency number is a labelled
 `information_scope=target_representation_readout` line that **never drives the decision**.
-**Metrics:** exact-count-from-context (gate 0.80) + floor-adjusted excess (>0.10) vs modal / context-
-length rate-prior / patient-disjoint NN-copy; **calibration** (occupancy AUC/Brier + count PIT) — A
-is a proper hurdle distribution, B a point estimate in cosine space with no native uncertainty
-(pre-registered to favour A on ties). **Decision (`ADOPT_MARGIN_DELTA=0.02`):** `ADOPT_CONCAT(B)` iff
-B beats A by the paired margin **and** clears gate+excess; `ADOPT_FACTORIZED(A)` on tie/loss
-(default — supplies calibrated uncertainty, keeps count out of the cosine target geometry) ⇒ the
-Rung-1 count_concat nomination is **DECLINED-for-adoption** (sufficiency ≠ predictive superiority);
-`NEITHER_ADEQUATE` iff both fail from context (context→count predictability is the binding
-constraint). **fable5 reframe:** A wins the point-accuracy race near by construction (A has a proper
+**Matched families (Pi):** freeze B's target-scalar normalization, cosine/count loss weights,
+predictor param/FLOP budget, and whether the mean-latent branch is frozen; A and B use the **same
+train examples + context-only features** with a **C1 target-count perturbation invariance test**.
+**Metrics — primary = a proper count-DISTRIBUTION score** (hurdle/NB or another frozen distribution;
+calibration/coverage/ECE); exact-count-from-context (gate 0.80) + floor-adjusted excess (>0.10) vs
+modal / context-length rate-prior / patient-disjoint NN-copy are **secondary**. If B remains a point
+estimate it **cannot win** the calibrated-distribution comparison — that is a **deliberate interface
+limitation, not "fairness"** (or give both arms the same predictive family and vary only where count
+enters the target/interface). **Decision (nomination-only, `NOMINATE_MARGIN_DELTA=0.02`):**
+`NOMINATE_CONCAT(B)` iff B beats A by the paired margin on the primary score **and** clears
+gate+excess; `NOMINATE_FACTORIZED(A)` on a paired practical tie/loss (default — calibrated
+occupancy/count distribution, keeps count out of the cosine target geometry) ⇒ the Rung-1
+count_concat nomination is **not superior**; `NEITHER_ADEQUATE` iff both fail from context
+(context→count predictability is the binding constraint). Adoption needs the later confirmation
+route; the Rung-1 1.000 sufficiency is a **target-side positive control only**. **fable5 reframe:** A wins the point-accuracy race near by construction (A has a proper
 count loss; B's count is an unoptimised cosine side-channel) — so give B a **fair cosine+count
 multitask predictor**, and read the gate primarily as an **interface-calibration comparison** (the
 real deliverables are the sufficiency-vs-predictability gap and A's calibrated occupancy/count
@@ -173,8 +248,22 @@ Rung-1 forces a **non-pooling** candidate (pooled targets have no order ceiling)
 | **T3** ordinal-tagged seq-of-latents | predictor+decoder | order-robust seq target |
 | **T4** VQ ordered codes (TRAINED codebook, EMA target encoder) | target-encoder+codebook+decoder+predictor | **BUILT + unit-tested only; `NOT_EVALUABLE` for dev nomination until the oracle** (self-manufactured ceiling — fable5 #1). The Rung-2 dev order nomination comes from T1–T3 (frozen targets). |
 
+**Content-match support audit (Pi — BEFORE any GPU work, train-only / aggregate).** Per source×
+horizon×occupancy bin, count the clusters with an eligible **exact fixed-multiset partner** +
+effective sample size. Exact-multiset duplicates are likely rare → **if the support floor is not
+met, the fixed-multiset swap is `NOT_EVALUABLE`** (do NOT silently relax to approximate content
+matching); a train-fitted multiset→precedence prior may serve as an oracle-assisted floor, while
+within-instance controlled permutations remain the falsifiers.
+
 **Training (only T4 trains a target):** two-phase — Phase A EMA/stop-grad learn `f_ξ` on the future
-block + freeze codebook; Phase B train predictor + decoders against the frozen target. **Bandwidth
+block + freeze codebook; Phase B train predictor + decoders against the frozen target. **Freeze
+before running:** T2/T3 max sequence length + padding/EOS/count treatment + no-silent-truncation +
+repeated-token ties + target dim + **exact bit accounting**; the fixed quantizer for the matched-bit
+T2 ceiling (report quantization error + whether its decoder ceiling still clears); deterministic vs
+distributional predictor family + sampling count + temperature (train/internal-train only) + the
+fixed dev temperature sweep; concrete G3.2 margin/multiplicity + a single non-redundant G3.1/G3.3;
+and a **named normalized loss** for the 3-way decomposition (do not write `1 = repr + bandwidth +
+predictor` until all terms share one metric with telescoping anchors). **Bandwidth
 pricing:** every candidate reports `latent_bits`; a T4 win must beat (i) mean_embed quantised to the
 same bits and (ii) a **frozen-random-codebook** control at matched bits — else the "win" is
 bandwidth, not learning. **Codebook adequacy:** perplexity / dead-code fraction / usage entropy; a
@@ -206,24 +295,40 @@ K≈256–1024/L≈8–16, small predictor, matched decoders).
 
 ## Sub-gate 4 — continuous-time head + zero/simultaneity-aware calibration gate
 Rung-1 forces: Δt is a **point mass** (~70% zeros SCID / ~98% MIMIC = simultaneous events); TAP
-clears both timing gates at **SCID-30 d only**. **Structural advantage:** raw Δt is a
-**never-encoded raw quantity** → CRPS-skill/KS on Δt is **decoder-free and external by
-construction** — the *least* circular gate in the programme.
+clears both timing gates at **SCID-30 d only**. **Structural advantage (scoped, Pi):** raw Δt is a
+**never-encoded raw quantity**, so this is a **direct held-out raw-quantity evaluation** with no
+generative decoder in the gate — the *least* circular gate in the programme. But it is **not
+"external by construction"** (the head is trained on Δt, and the conditioning side is in-circle), so
+skill must be measured over a **context-observable stratified** marginal, not the global one.
 
-**Head (marked-TPP on the latent):** occupancy/timeline sub-model (how many distinct timestamps) +
-**simultaneity-multiplicity** sub-model (co-occurrence cluster size) + **hurdle** `p₀=P(Δt=0|context)`
-(reuse `train_hurdle_timing_head`, now context-conditioned) + positive-tail conditional density
-(monotone-quantile pinball or log-normal/Weibull mixture; time-rescaling randomized-PIT KS).
+**Head — explicit TIMESTAMP-CLUSTER factorization (Pi):** (1) time to the next **distinct timestamp**
+(positive inter-cluster time); (2) **multiplicity** = P(the next serialized event stays at the same
+timestamp) / cluster size; (3) marks within the cluster (only if "marked-TPP" is retained in the
+name — else call it a **continuous-time/multiplicity head**). Deterministic tie/serialization order
+must **not** become a mark/order signal. Trained on context (independent state — no shared trunk with
+sub-gate 3); reuse `train_hurdle_timing_head` machinery, context-conditioned.
 
-**Two SEPARATE gates (non-compensatory — the point mass must not mask absent tail signal):**
-- **4A zero/simultaneity:** conditional `p₀` reliability + multiplicity calibration (its swap-excess
-  isolates *which instances cluster*, beyond the easy marginal zero-fraction).
-- **4B positive-tail:** on Δt>0, zero-aware randomized-PIT **KS-D upper-CI ≤0.05 AND CRPS-skill
-  lower-CI ≥0.05 over a STRATIFIED marginal** (conditioned on occupancy/length bin × base-rate
-  quantile × horizon — NOT the global marginal) **AND** beats an explicit **rate-only baseline head**
-  (given only scalar rate/occupancy/horizon), CI-positive, under a **rate/occupancy-matched swap**
-  (fable5 #4). Blocks context-length→rate and occupancy→zero-fraction leakage; 4A keyed on the
-  multiplicity swap-excess (not p₀ reliability, which the marginal zero-fraction gives free).
+**Two SEPARATE gates (non-compensatory — the point mass must not mask absent tail signal); a joint
+zero-aware proper score is SECONDARY/descriptive only:**
+- **4A zero/simultaneity (numeric gates frozen):** a named proper score with a **practical
+  improvement** over a train-fitted stratified/rate-only baseline; multiplicity calibration/coverage
+  (ECE/Brier tolerance); a **rate-matched wrong-context swap** lower-CI margin; adequacy **by
+  multiplicity class**. `p₀` reliability ALONE cannot pass (it ≈ the marginal zero-fraction) — 4A is
+  keyed on the **multiplicity** conditional (which instances cluster).
+- **4B positive-tail:** condition on **Δt>0** and use the **positive-tail PIT** (the mixed
+  randomized-PIT stays an overall diagnostic); **KS-D upper-CI ≤0.05 AND CRPS-skill lower-CI ≥0.05
+  over a STRATIFIED marginal**, where every stratification variable is **context-observable or
+  context-predicted-and-train-frozen** (occupancy/length bin × base-rate quantile × horizon). Using
+  *observed future* occupancy/rate to pick a stratum is **oracle-assisted** — labelled, never the
+  operational primary baseline. Beats an explicit **rate-only baseline head** (scalar rate/occupancy/
+  horizon), CI-positive, under the **rate/occupancy-matched wrong-context swap**. Freeze positive-
+  interval cluster floors + proper-score margins **separately** from total-interval floors.
+
+**Controls act on the FROZEN CONTEXT latent (Pi), not a target z⁺:** corrupt the context latent
+(entry sensitivity) and use rate/occupancy-matched wrong-*context* swaps. `D(z⁺)−D(ẑ)` is **not** an
+intra-candidate decomposition for a direct context→time head — TAP's Rung-1 ceiling is a
+**comparator**, not the same target. Since the head is trained on Δt, this is a **direct held-out
+raw-quantity evaluation**, not "external by construction."
 
 Overall = **4A ∧ 4B**, worst-cell. **D(z⁺) vs D(ẑ) + the SCID-30 question:** (Q1) does the trained
 head clear 4A∧4B **prediction-achieved** at SCID-30 (ceiling reachable by a predictor)? (Q2) does it
@@ -271,16 +376,18 @@ GPU-hr incremental (reuses Rung-1 hurdle machinery; shares the context predictor
   anchor short of the oracle.
 - **Not followed:** `[[concepts/target-trial-emulation]]` (no action/counterfactual contrast here).
 
-## Open questions routed to the fable5 falsifier pass + Pi gate
-1. Is the T2 ceiling anchor (`D(z⁺)_order≈1`) an honest predictor-bottleneck isolator, or does its
-   `L·D` bandwidth make the split incomparable to T4's bit-budget?
-2. Is precedence-frequency agreement a strong enough decoder-free order anchor to **nominate on
-   dev**, or is *any* real-data order metric too inside the circle (⇒ order can't nominate without
-   the oracle)?
-3. Should 4A (zero/simultaneity) be gated separately from 4B (tail), or is a single joint zero-aware
-   proper score less gameable?
-4. Must the semi-synthetic oracle exist **before** any learned-target (T4) run (no learned target on
-   dev at all until the oracle is built)?
+## Open questions — RULED by Pi (blueprint gate)
+1. **T2 bandwidth-fairness = intra-candidate only** — `D(z_T2⁺)` vs `D(ẑ_T2)` at T2's own fixed
+   bandwidth is a valid predictor-bottleneck anchor; a matched-bit T2 companion may quantify
+   bandwidth loss (with its own ceiling reported); **T2-vs-T4 ranking is void**.
+2. **Order can NOMINATE_DIRECTION on dev (frozen T1–T3 only)** iff the content-match support audit +
+   content-prior skill + fixed-multiset/permutation controls + prediction-achieved gate + worst-cell
+   conjunction all pass; else `NOT_EVALUABLE`. Never adoption/certification.
+3. **4A and 4B stay separate + conjunctive**; a joint zero-aware score is descriptive/secondary.
+4. **The semi-synthetic oracle is required before ANY governed real-data T4 training/evaluation.**
+   Freeze + implement the oracle (known order/intensity rules, nulls, overlap/failure cases,
+   evaluator) *first* — so it can't be tailored to a dev-favoured codebook; synthetic scaffolding +
+   safe-public unit tests may proceed now.
 
 **Scout trigger:** SUGGEST a sanitized Cog scout on *"bandwidth-and-circle-depth-priced order-
 preserving JEPA targets (VQ ordered codes vs param-free seq-of-latents) and marked-TPP heads with a
