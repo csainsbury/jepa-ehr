@@ -68,19 +68,23 @@ class T4RefusalTests(unittest.TestCase):
             guard_t4(inputs_are_governed=True, oracle_authorization={"oracle_frozen": True, "pi_gate": "PENDING"})
 
     def test_synthetic_t4_allowed_governed_needs_full_cert(self) -> None:
+        from clinical_jepa.eval.rung2_contract import ORACLE_SCHEMA_VERSION, ORDER_UNLOCK_CHECKS
         guard_t4(inputs_are_governed=False, oracle_authorization=None)                      # synthetic OK
-        with self.assertRaises(PermissionError):   # oracle_frozen+pi_gate alone insufficient (B4)
+        with self.assertRaises(PermissionError):   # oracle_frozen+pi_gate alone insufficient
             guard_t4(inputs_are_governed=True, oracle_authorization={"oracle_frozen": True, "pi_gate": "PASS"})
-        from clinical_jepa.eval.rung2_contract import ORDER_UNLOCK_CHECKS
-        full = {"schema_version": "v2", "oracle_mechanism_hash": "m", "evaluator_commit": "c",
-                "certified_recipe_hash": "r", "held_out_family_ids": ["E"], "sealed_cert_run_id": "s",
-                "gate_event_ref": "e", "oracle_frozen": True, "pi_gate": "PASS",
-                "verdict": "synthetic_recovery_CERTIFIED", "codebook_postdates_oracle": True,
-                "labels_eval_only_verified": True, "unlock_checks": {c: "PASS" for c in ORDER_UNLOCK_CHECKS},
+        full = {"schema_version": ORACLE_SCHEMA_VERSION, "oracle_mechanism_hash": "m", "evaluator_commit": "c",
+                "certified_recipe_hash": "r", "recipe_registry_id": "reg", "held_out_family_ids": ["E1", "E2"],
+                "sealed_cert_run_id": "s", "gate_event_ref": "e", "blueprint_hash": "bp", "oracle_frozen": True,
+                "pi_gate": "PASS", "verdict": "synthetic_recovery_CERTIFIED", "codebook_postdates_oracle": True,
+                "labels_eval_only_verified": True, "governed_t4_real_output_ceiling": "NOMINATE",
+                "transfer_caveat": "synthetic only", "unlock_checks": {c: "PASS" for c in ORDER_UNLOCK_CHECKS},
                 "precision_sim": {"adequate": True}, "realism_envelope": {"within_envelope": True},
                 "reference_bounds": {"R_bayes_beats_R0": True, "R0_null_pass": True, "R0_positive_fail": True,
                                      "nuisance_incremental_margin_ok": True, "evaluator_realized_alpha": 0.03}}
-        guard_t4(inputs_are_governed=True, oracle_authorization=full)                       # fully certified OK
+        with self.assertRaises(PermissionError):   # identity args mandatory (omitted -> refuse)
+            guard_t4(inputs_are_governed=True, oracle_authorization=full)
+        guard_t4(inputs_are_governed=True, oracle_authorization=full,
+                 presented_recipe_hash="r", expected_blueprint_hash="bp")                   # fully certified OK
 
 
 if __name__ == "__main__":

@@ -175,39 +175,79 @@ def validate_direct_path_row(row: dict[str, Any]) -> bool:
     return True
 
 
+# ============ ORACLE (external-to-encoder synthetic SPECIFICATION TEST) frozen OC (Pi v3 #8) ============
+# The oracle is a recipe FALSIFIER, not a real-EHR certificate. These are concrete pre-registered
+# numbers (no "will be frozen"). Order units = order-skill (beyond-content-prior log-loss skill).
+ORACLE_SCHEMA_VERSION = "clinical-jepa-oracle-order-authorization-v3"
+ORACLE_R_BAYES_MARGIN = 0.05            # R_bayes must beat R0 by this lower-CI margin (else HIDDEN NULL)
+ORACLE_R_BAYES_MC_TOL = 0.01           # Monte-Carlo error tolerance for the R_bayes posterior estimate
+ORACLE_R_BAYES_MC_SEEDS = 8            # independent MC seeds for R_bayes
+ORACLE_NUISANCE_MARGIN = 0.05          # recipe INCREMENTAL skill over R_nuis (lower-CI)
+ORACLE_NULL_ALPHA = 0.05               # per-property null FPR (upper-CI)
+ORACLE_POWER_FLOOR = 0.80              # power at kappa_mid
+ORACLE_MONO_SPEARMAN = 0.90            # monotonicity Spearman lower-CI
+ORACLE_CALIB_SLOPE_BAND = (0.8, 1.2)   # recovery calibration slope band
+ORACLE_CALIB_INTERCEPT_TOL = 0.05
+ORACLE_N_NULL_SEEDS = 200
+ORACLE_N_POS_SEEDS = 100
+ORACLE_N_HELDOUT_FAMILIES = 2          # >=2 DISTINCT held-out structural meta-families
+ORACLE_CLUSTER_UNIT = "sequence"       # FPR aggregated per sequence, NOT per precedence-pair
+ORACLE_MULTIPLE_TESTING = "bonferroni_over_evaluable_cells"
+ORACLE_OFFGRID_KAPPA = (0.15, 0.6)     # off-grid certification knobs (not in the training grid)
+ORACLE_MDE_DEF = "smallest_kappa_with_power_ge_0.80"
+ORACLE_HIDDEN_NULL_RULE = "R_bayes_within_margin_of_R0_excluded_from_positive"
+ORACLE_SHORTCUT_MAX_SKILL = 0.10       # an h-projection-only shortcut method must NOT exceed this
+
 # the ORDER-T4 unlock is PROPERTY-SPECIFIC (Pi oracle #5): only order-relevant checks; timing
 # certification is a SEPARATE manifest and must NOT veto an order-only target.
 ORDER_UNLOCK_CHECKS = ("U1_order_recovery", "U2_null", "U3_monotone", "U4_nuisance_incremental",
                        "U6_bandwidth_fair")
-_REQUIRED_MANIFEST_FIELDS = ("schema_version", "oracle_mechanism_hash", "evaluator_commit",
-                             "certified_recipe_hash", "held_out_family_ids", "sealed_cert_run_id",
-                             "gate_event_ref")
+# every field below is MANDATORY for a governed T4 authorization; each is checked for exact
+# value/format/membership (not merely non-empty) — Pi v3 guard defect.
+_REQUIRED_MANIFEST_FIELDS = ("oracle_mechanism_hash", "evaluator_commit", "certified_recipe_hash",
+                             "recipe_registry_id", "sealed_cert_run_id", "gate_event_ref", "blueprint_hash")
+
+
+def _nonempty_str(x: Any) -> bool:
+    return isinstance(x, str) and len(x) > 0
 
 
 def t4_governed_allowed(inputs_are_governed: bool, oracle_authorization: dict[str, Any] | None,
                         *, presented_recipe_hash: str | None = None,
-                        expected_blueprint_hash: str | None = None) -> bool:
+                        expected_blueprint_hash: str | None = None,
+                        expected_schema_version: str = ORACLE_SCHEMA_VERSION) -> bool:
     """Governed T4 (a learned VQ ORDER target) is refused until a frozen, Pi-gated oracle manifest
-    CERTIFIES the EXACT recipe presented (Pi oracle #5/#6/#7). Synthetic/safe-public scaffolding is
-    always allowed. FAIL-CLOSED on the full property-specific conjunction; any missing/stale field
-    is a refusal. Only ``synthetic_recovery_CERTIFIED`` is accepted (legacy ``CERTIFIED`` removed)."""
+    CERTIFIES the EXACT recipe presented. Synthetic/safe-public scaffolding is always allowed.
+
+    FAIL-CLOSED on the FULL property-specific conjunction. The identity arguments are MANDATORY for
+    governed inputs (Pi v3): omitting ``presented_recipe_hash`` or ``expected_blueprint_hash`` is a
+    REFUSAL, not a skipped check. Only ``synthetic_recovery_CERTIFIED`` is accepted."""
     if not inputs_are_governed:
         return True
     m = oracle_authorization or {}
+    # identity args MANDATORY + exact (fail-closed, not skip)
+    if not (_nonempty_str(presented_recipe_hash) and _nonempty_str(expected_blueprint_hash)):
+        return False
+    if m.get("schema_version") != expected_schema_version:               # exact schema equality (#7)
+        return False
     if not (m.get("oracle_frozen") is True and m.get("pi_gate") == "PASS"):
         return False
-    if m.get("verdict") != "synthetic_recovery_CERTIFIED":               # legacy "CERTIFIED" removed (#7)
+    if m.get("verdict") != "synthetic_recovery_CERTIFIED":               # legacy "CERTIFIED" removed
         return False
-    if any(m.get(k) in (None, "") for k in _REQUIRED_MANIFEST_FIELDS):   # required provenance (#7)
+    if any(not _nonempty_str(m.get(k)) for k in _REQUIRED_MANIFEST_FIELDS):
         return False
-    # bind authorization to the EXACT certified recipe (#6): the governed run must present it.
-    if presented_recipe_hash is not None and m.get("certified_recipe_hash") != presented_recipe_hash:
+    if m.get("certified_recipe_hash") != presented_recipe_hash:          # exact recipe binding (#6)
         return False
-    if expected_blueprint_hash is not None and m.get("blueprint_hash") != expected_blueprint_hash:
+    if m.get("blueprint_hash") != expected_blueprint_hash:               # exact blueprint binding
+        return False
+    fams = m.get("held_out_family_ids")
+    if not (isinstance(fams, list) and len(set(fams)) >= ORACLE_N_HELDOUT_FAMILIES):  # >=2 distinct
         return False
     if not (m.get("codebook_postdates_oracle") is True and m.get("labels_eval_only_verified") is True):
         return False
-    # PROPERTY-SPECIFIC order unlock (#5): only the order checks; timing is a separate manifest.
+    if m.get("governed_t4_real_output_ceiling") != "NOMINATE" or not _nonempty_str(m.get("transfer_caveat")):
+        return False
+    # PROPERTY-SPECIFIC order unlock (#5): only the order checks, all PASS; timing is a separate manifest.
     checks = m.get("unlock_checks", {})
     if not all(checks.get(c) == "PASS" for c in ORDER_UNLOCK_CHECKS):
         return False
@@ -216,11 +256,11 @@ def t4_governed_allowed(inputs_are_governed: bool, oracle_authorization: dict[st
     if not (m.get("realism_envelope", {}).get("within_envelope") is True):
         return False
     rb = m.get("reference_bounds", {})
-    # #2/#4: context-Bayes ceiling beats R0; R0 nulls pass + positives fail; nuisance-INCREMENTAL
-    # recovery clears its margin (replaces the impossible "R_{h⊥order} must fail"); alpha <= 0.05.
+    # context-Bayes ceiling beats R0; R0 nulls pass + positives fail; nuisance-INCREMENTAL recovery
+    # clears its margin (replaces the impossible "R_{h⊥order} must fail"); alpha <= frozen bound.
     if not (rb.get("R_bayes_beats_R0") is True and rb.get("R0_null_pass") is True
             and rb.get("R0_positive_fail") is True and rb.get("nuisance_incremental_margin_ok") is True
-            and float(rb.get("evaluator_realized_alpha", 1.0)) <= 0.05):
+            and float(rb.get("evaluator_realized_alpha", 1.0)) <= ORACLE_NULL_ALPHA):
         return False
     return True
 

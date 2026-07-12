@@ -71,13 +71,15 @@ class OrderSupportTests(unittest.TestCase):
 
 
 def _full_oracle_manifest() -> dict:
-    """A fully-certified, recipe-bound, property-specific order-T4 authorization manifest."""
+    """A fully-certified, recipe-bound, property-specific v3 order-T4 authorization manifest."""
     return {
-        "schema_version": "clinical-jepa-oracle-authorization-v2", "oracle_mechanism_hash": "mech123",
-        "evaluator_commit": "abc123", "certified_recipe_hash": "recipeXYZ",
+        "schema_version": C.ORACLE_SCHEMA_VERSION, "oracle_mechanism_hash": "mech123",
+        "evaluator_commit": "abc123", "certified_recipe_hash": "recipeXYZ", "recipe_registry_id": "reg1",
         "held_out_family_ids": ["E1", "E2"], "sealed_cert_run_id": "run77", "gate_event_ref": "evt-oracle-1",
-        "oracle_frozen": True, "pi_gate": "PASS", "verdict": "synthetic_recovery_CERTIFIED",
-        "codebook_postdates_oracle": True, "labels_eval_only_verified": True,
+        "blueprint_hash": "bp999", "oracle_frozen": True, "pi_gate": "PASS",
+        "verdict": "synthetic_recovery_CERTIFIED", "codebook_postdates_oracle": True,
+        "labels_eval_only_verified": True, "governed_t4_real_output_ceiling": "NOMINATE",
+        "transfer_caveat": "synthetic recovery only; real claims stay NOMINATE",
         "unlock_checks": {c: "PASS" for c in C.ORDER_UNLOCK_CHECKS},
         "precision_sim": {"adequate": True}, "realism_envelope": {"within_envelope": True},
         "reference_bounds": {"R_bayes_beats_R0": True, "R0_null_pass": True, "R0_positive_fail": True,
@@ -85,28 +87,39 @@ def _full_oracle_manifest() -> dict:
     }
 
 
+def _ok(m):  # a passing governed call supplies BOTH identity args
+    return C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ", expected_blueprint_hash="bp999")
+
+
 class OracleStopLineTests(unittest.TestCase):
-    def test_t4_governed_refused_without_full_certification(self) -> None:
+    def test_synthetic_always_allowed_governed_needs_full_cert(self) -> None:
         self.assertTrue(C.requires_oracle(C.T4_TARGET))
-        self.assertFalse(C.requires_oracle("T2_seq_of_latents"))
+        self.assertTrue(C.t4_governed_allowed(False, None))                 # synthetic scaffolding OK
         self.assertFalse(C.t4_governed_allowed(True, None))
         self.assertFalse(C.t4_governed_allowed(True, {"oracle_frozen": True, "pi_gate": "PASS"}))
-        self.assertTrue(C.t4_governed_allowed(True, _full_oracle_manifest()))
-        # legacy plain "CERTIFIED" removed (Pi #7)
-        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(), "verdict": "CERTIFIED"}))
-        # missing provenance / failing check / bad reference => refusal
-        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(), "certified_recipe_hash": ""}))
-        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(),
-                                                      "unlock_checks": {"U2_null": "FAIL"}}))
-        self.assertFalse(C.t4_governed_allowed(True, {**_full_oracle_manifest(),
-                                                      "reference_bounds": {"nuisance_incremental_margin_ok": False}}))
-        self.assertTrue(C.t4_governed_allowed(False, None))
+        self.assertTrue(_ok(_full_oracle_manifest()))
 
-    def test_authorization_bound_to_exact_recipe(self) -> None:
-        # a governed run presenting a DIFFERENT recipe hash than the certified one is refused (Pi #6)
+    def test_identity_args_are_MANDATORY_not_skipped(self) -> None:
+        # Pi v3 guard defect: omitting the recipe/blueprint hash must REFUSE, not skip.
         m = _full_oracle_manifest()
-        self.assertTrue(C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ"))
-        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="a_different_recipe"))
+        self.assertFalse(C.t4_governed_allowed(True, m))                    # both omitted
+        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ"))  # blueprint omitted
+        self.assertFalse(C.t4_governed_allowed(True, m, expected_blueprint_hash="bp999"))    # recipe omitted
+        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="", expected_blueprint_hash="bp999"))
+
+    def test_mismatch_and_stale_fields_refused(self) -> None:
+        m = _full_oracle_manifest()
+        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="WRONG", expected_blueprint_hash="bp999"))
+        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ", expected_blueprint_hash="WRONG"))
+        self.assertFalse(_ok({**m, "verdict": "CERTIFIED"}))                # legacy verdict
+        self.assertFalse(_ok({**m, "schema_version": "v2"}))                # wrong schema
+        self.assertFalse(_ok({**m, "held_out_family_ids": ["E1"]}))         # <2 held-out families
+        self.assertFalse(_ok({**m, "held_out_family_ids": ["E1", "E1"]}))   # not DISTINCT
+        self.assertFalse(_ok({**m, "governed_t4_real_output_ceiling": "ADOPT"}))
+        self.assertFalse(_ok({**m, "transfer_caveat": ""}))
+        self.assertFalse(_ok({**m, "recipe_registry_id": ""}))
+        self.assertFalse(_ok({**m, "unlock_checks": {"U2_null": "FAIL"}}))
+        self.assertFalse(_ok({**m, "reference_bounds": {"nuisance_incremental_margin_ok": False}}))
 
     def test_observed_future_strata_are_oracle_assisted(self) -> None:
         self.assertTrue(C.is_oracle_assisted_stratum("future_occupancy"))
