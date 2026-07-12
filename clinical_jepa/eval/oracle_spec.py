@@ -35,7 +35,10 @@ SPEC_VERSION = "clinical-jepa-oracle-spec-v3"
 # OFF-grid kappa (ORACLE_OFFGRID_KAPPA in the contract) so a certifier cannot overfit a grid point.
 # ----------------------------------------------------------------------------------------------
 KAPPA_TRAIN_GRID: tuple[float, ...] = (0.0, 0.15, 0.30, 0.50, 0.75)
-KAPPA_OFFGRID: tuple[float, ...] = (0.22, 0.63)          # inside ORACLE_OFFGRID_KAPPA=(0.15,0.6)-ish band
+# Held-out OFF-GRID knobs: strictly INSIDE the frozen band ORACLE_OFFGRID_KAPPA=(0.15,0.6) and DISJOINT
+# from the train grid (Pi #5 — the earlier (0.22,0.63) put 0.63 outside the band). >=3 points so the
+# off-grid monotonicity check is real, not a degenerate 2-point Spearman.
+KAPPA_OFFGRID: tuple[float, ...] = (0.20, 0.35, 0.55)
 
 # Null-mixture weight: fraction of sequences in a cell drawn from the mechanistic null (order drawn
 # from the content-prior pi0 ONLY, independent of h). Positives and nulls share identical marginal
@@ -49,6 +52,16 @@ NULL_MIXTURE_WEIGHT: float = 0.5
 # SHOULD capture that leakage but must not exceed R_bayes.
 NUISANCE_LEAK_RHO: float = 0.6                            # proxy correlation in correlated-leak cells
 NUISANCE_MI_BITS_CAP: float = 0.5                         # leak is bounded, never order-sufficient
+
+# Executable generator numeric constants live HERE (the frozen config), not in the generator module,
+# so ``oracle_mechanism_hash`` binds the mechanism a run actually executes (Pi #5/#8: hashing prose
+# family strings does not bind the executable generator — a code change must move the hash).
+GENERATOR_CONFIG: dict[str, Any] = {
+    "d_h": 6, "d_ctx": 10, "d_item": 4, "l_items": 8,
+    "ctx_noise": 0.5, "hleak_noise": 0.5,
+    "driver_law": "standard_normal", "context_map": "linear", "item_coupling": "bilinear",
+    "mechanism_impl": "compact_linear_gaussian_smoke_fixture_v3",   # NAMED smoke fixture (Pi #4 answer)
+}
 
 
 @dataclass(frozen=True)
@@ -249,6 +262,7 @@ def oracle_mechanism_hash() -> str:
         "null_mixture_weight": NULL_MIXTURE_WEIGHT,
         "nuisance_leak_rho": NUISANCE_LEAK_RHO,
         "nuisance_mi_bits_cap": NUISANCE_MI_BITS_CAP,
+        "generator_config": GENERATOR_CONFIG,     # bind the EXECUTABLE mechanism, not just prose
     }
     return _hash_of(payload)
 

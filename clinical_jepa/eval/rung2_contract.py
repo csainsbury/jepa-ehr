@@ -210,7 +210,13 @@ ORACLE_NULL_SEQ_STATISTIC = "mean_beyond_prior_pair_skill_per_sequence"  # aggre
 ORACLE_NULL_MIN_PAIRS = 3              # a sequence needs >=this many eligible precedence pairs to count
 ORACLE_NULL_TIE_HANDLING = "exclude_same_class_ties"           # tied-class pairs carry no order info
 ORACLE_NULL_BOOTSTRAP_UNIT = "sequence"                        # FPR bootstrapped over sequences
-ORACLE_NULL_FIRE_RULE = "sequence_skill_lower_CI_gt_0"         # a firing null sequence = a false positive
+ORACLE_NULL_FIRE_RULE = "sequence_skill_lower_CI_gt_0"         # a firing null study = a false positive
+ORACLE_N_BOOT = 1000                  # bootstrap replicates for a study's skill CI (DISTINCT from the
+                                      # ORACLE_N_NULL_SEEDS independent null STUDIES — Pi #4 conflated them)
+ORACLE_NULL_STUDY_SEQS = 200          # sequences per independent null study (frozen study size)
+ORACLE_NULL_FIRE_ALPHA = 0.01         # one-sided level of the per-study fire test (stricter than the
+                                      # 0.05 unlock so the FPR UPPER CI clears 0.05 with margin)
+ORACLE_FPR_UPPER_CI_MAX = 0.05        # gate: one-sided 95% Clopper-Pearson UPPER bound on null FPR
 
 # the ORDER-T4 unlock is PROPERTY-SPECIFIC (Pi oracle #5): only order-relevant checks; timing
 # certification is a SEPARATE manifest and must NOT veto an order-only target.
@@ -233,26 +239,42 @@ def _distinct_nonempty_strs(x: Any, n: int) -> bool:
     return len(set(x)) >= n
 
 
+def _dget(m: Any, key: str) -> Any:
+    """Fail-closed nested read: a non-dict at `key` (or missing) yields None, never raises."""
+    return m.get(key) if isinstance(m, dict) else None
+
+
+def _finite_float(x: Any) -> float | None:
+    """Return x as a finite float, or None for non-numeric / bool / NaN / inf (fail-closed)."""
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return None
+    xf = float(x)
+    return xf if xf == xf and xf not in (float("inf"), float("-inf")) else None
+
+
 def t4_governed_allowed(inputs_are_governed: bool, oracle_authorization: dict[str, Any] | None,
-                        *, presented_recipe_hash: str | None = None,
-                        policy: dict[str, Any] | None = None,
-                        expected_schema_version: str = ORACLE_SCHEMA_VERSION) -> bool:
+                        *, presented_recipe_hash: str | None = None) -> bool:
     """Governed T4 (a learned VQ ORDER target) is refused until a frozen, Pi-gated oracle manifest
     CERTIFIES the EXACT recipe presented AND matches the TRUSTED COMMITTED oracle policy. Synthetic/
     safe-public scaffolding is always allowed.
 
-    FAIL-CLOSED (Pi consolidated re-gate): the blueprint/gate/mechanism/evaluator/registry/sealed-run
-    trust anchors come from the COMMITTED ``oracle_policy`` (not caller-supplied); only the presented
-    RECIPE hash is a run input. Omitting the recipe hash, an unpopulated/mismatched policy, malformed
-    provenance, or any failing check is a REFUSAL. Only ``synthetic_recovery_CERTIFIED`` is accepted."""
+    FAIL-CLOSED. There is NO caller-injectable trust root: the blueprint/gate/mechanism/schema/
+    evaluator/registry/sealed-run anchors ALL come from the committed ``oracle_policy`` (Pi #1 — a
+    ``policy=`` argument here would let the run operator supply a matching ad-hoc policy and pass).
+    The presented RECIPE hash is the ONLY run-supplied identity. The schema is the frozen constant,
+    not a caller argument. Any malformed manifest (wrong nested type, non-numeric alpha, …) REFUSES
+    rather than raising. Omitting the recipe hash, an empty/mismatched committed policy, or any failing
+    check is a REFUSAL. Only ``synthetic_recovery_CERTIFIED`` is accepted."""
     if not inputs_are_governed:
         return True
     from clinical_jepa.eval.oracle_policy import manifest_matches_policy  # committed trust anchor
-    m = oracle_authorization or {}
+    if not isinstance(oracle_authorization, dict):
+        return False
+    m = oracle_authorization
     # the presented recipe hash is the ONLY run-supplied identity (names the actual governed recipe).
     if not _nonempty_str(presented_recipe_hash):
         return False
-    if m.get("schema_version") != expected_schema_version:               # exact schema equality
+    if m.get("schema_version") != ORACLE_SCHEMA_VERSION:                  # frozen constant, not caller arg
         return False
     if not (m.get("oracle_frozen") is True and m.get("pi_gate") == "PASS"):
         return False
@@ -263,8 +285,8 @@ def t4_governed_allowed(inputs_are_governed: bool, oracle_authorization: dict[st
     if m.get("certified_recipe_hash") != presented_recipe_hash:          # exact recipe binding
         return False
     # TRUSTED anchor: blueprint/gate/mechanism/schema/evaluator/registry/sealed-run vs the COMMITTED
-    # policy — NOT a caller-supplied expected hash (Pi #1). Empty policy => refuse.
-    if not manifest_matches_policy(m, policy):
+    # policy ONLY — no alternate trust-root parameter exists. Empty committed policy => refuse.
+    if not manifest_matches_policy(m):
         return False
     if not _distinct_nonempty_strs(m.get("held_out_family_ids"), ORACLE_N_HELDOUT_FAMILIES):
         return False
@@ -273,17 +295,21 @@ def t4_governed_allowed(inputs_are_governed: bool, oracle_authorization: dict[st
     if m.get("governed_t4_real_output_ceiling") != "NOMINATE" or not _nonempty_str(m.get("transfer_caveat")):
         return False
     # PROPERTY-SPECIFIC order unlock: only the order checks, all PASS; timing is a separate manifest.
-    checks = m.get("unlock_checks", {})
-    if not all(checks.get(c) == "PASS" for c in ORDER_UNLOCK_CHECKS):
+    # All nested reads are type-guarded so a list/str/None in place of a dict REFUSES, not raises.
+    checks = m.get("unlock_checks")
+    if not (isinstance(checks, dict) and all(checks.get(c) == "PASS" for c in ORDER_UNLOCK_CHECKS)):
         return False
-    if not (m.get("precision_sim", {}).get("adequate") is True):
+    if _dget(m.get("precision_sim"), "adequate") is not True:
         return False
-    if not (m.get("realism_envelope", {}).get("within_envelope") is True):
+    if _dget(m.get("realism_envelope"), "within_envelope") is not True:
         return False
-    rb = m.get("reference_bounds", {})
+    rb = m.get("reference_bounds")
+    if not isinstance(rb, dict):
+        return False
+    alpha = _finite_float(rb.get("evaluator_realized_alpha"))
     if not (rb.get("R_bayes_beats_R0") is True and rb.get("R0_null_pass") is True
             and rb.get("R0_positive_fail") is True and rb.get("nuisance_incremental_margin_ok") is True
-            and float(rb.get("evaluator_realized_alpha", 1.0)) <= ORACLE_NULL_ALPHA):
+            and alpha is not None and alpha <= ORACLE_NULL_ALPHA):
         return False
     return True
 

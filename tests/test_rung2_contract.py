@@ -7,10 +7,12 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from clinical_jepa.eval import rung2_contract as C
+from clinical_jepa.eval import oracle_policy as OP
 
 
 class FrozenNumbersTests(unittest.TestCase):
@@ -97,9 +99,15 @@ def _test_policy() -> dict:
     }
 
 
-def _ok(m, policy=None):  # a passing governed call supplies the recipe hash + trusted policy
-    return C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ",
-                                 policy=policy if policy is not None else _test_policy())
+def _patch_committed(policy=None):
+    """Patch the COMMITTED policy (there is NO caller-injectable policy arg on the guard — Pi #1).
+    Tests must patch the trust root, not pass it in."""
+    return mock.patch.object(OP, "APPROVED_ORACLE_POLICY", policy if policy is not None else _test_policy())
+
+
+def _ok(m):  # a passing governed call supplies the recipe hash; trust root is the (patched) committed policy
+    with _patch_committed():
+        return C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ")
 
 
 class OracleStopLineTests(unittest.TestCase):
@@ -110,17 +118,39 @@ class OracleStopLineTests(unittest.TestCase):
         self.assertFalse(C.t4_governed_allowed(True, {"oracle_frozen": True, "pi_gate": "PASS"}))
         self.assertTrue(_ok(_full_oracle_manifest()))
 
+    def test_no_caller_injectable_trust_root(self) -> None:
+        # Pi #1 (reproduced defect): the guard must expose NO policy= parameter. Supplying a matching
+        # ad-hoc policy must be impossible — the only trust root is the committed module global.
+        import inspect
+        sig = inspect.signature(C.t4_governed_allowed)
+        self.assertNotIn("policy", sig.parameters)
+        self.assertNotIn("expected_schema_version", sig.parameters)
+
     def test_empty_committed_policy_refuses_even_a_full_manifest(self) -> None:
         # Pi #1: the trust anchor is the COMMITTED policy, which ships EMPTY -> fail-closed for all.
+        self.assertFalse(OP.policy_is_populated())                          # ships empty
         self.assertFalse(C.t4_governed_allowed(True, _full_oracle_manifest(),
                                                presented_recipe_hash="recipeXYZ"))  # default committed policy
-        self.assertFalse(C.t4_governed_allowed(True, _full_oracle_manifest(),
-                                               presented_recipe_hash="recipeXYZ", policy={}))  # unpopulated
+        with _patch_committed({}):                                         # explicitly unpopulated
+            self.assertFalse(C.t4_governed_allowed(True, _full_oracle_manifest(),
+                                                   presented_recipe_hash="recipeXYZ"))
 
     def test_recipe_hash_is_the_only_run_input_and_MANDATORY(self) -> None:
         m = _full_oracle_manifest()
-        self.assertFalse(C.t4_governed_allowed(True, m, policy=_test_policy()))              # recipe omitted
-        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="", policy=_test_policy()))
+        with _patch_committed():
+            self.assertFalse(C.t4_governed_allowed(True, m))                # recipe omitted
+            self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash=""))
+
+    def test_malformed_nested_manifest_refuses_not_raises(self) -> None:
+        # Pi #2 (reproduced defect): list/str/None where a dict is expected must REFUSE, never raise.
+        m = _full_oracle_manifest()
+        for bad in ({**m, "unlock_checks": ["U1_order_recovery"]},
+                    {**m, "reference_bounds": ["nope"]},
+                    {**m, "precision_sim": "adequate"},
+                    {**m, "realism_envelope": 3},
+                    {**m, "reference_bounds": {**m["reference_bounds"], "evaluator_realized_alpha": "low"}},
+                    {**m, "reference_bounds": {**m["reference_bounds"], "evaluator_realized_alpha": float("nan")}}):
+            self.assertFalse(_ok(bad))          # must return False, not raise
 
     def test_policy_mismatch_refused(self) -> None:
         # Anchors the caller can no longer choose: a manifest that disagrees with the committed policy fails.

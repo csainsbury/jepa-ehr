@@ -28,6 +28,14 @@ class FamilyInventoryTests(unittest.TestCase):
         for k in off.kappa_cells:
             self.assertNotIn(k, S.KAPPA_TRAIN_GRID)
 
+    def test_offgrid_kappa_inside_band_and_disjoint_from_train(self) -> None:
+        # Pi #5: off-grid knobs must lie strictly inside the frozen band and be disjoint from train.
+        lo, hi = C.ORACLE_OFFGRID_KAPPA
+        for k in S.KAPPA_OFFGRID:
+            self.assertTrue(lo < k < hi, f"{k} not strictly inside band ({lo},{hi})")
+            self.assertNotIn(k, S.KAPPA_TRAIN_GRID)
+        self.assertGreaterEqual(len(S.KAPPA_OFFGRID), 3)   # enough points for a real monotone check
+
     def test_every_family_has_null_and_both_nuisance_cells(self) -> None:
         for f in S.STRUCTURAL_FAMILIES:
             self.assertGreater(f.null_mixture_weight, 0.0)   # camouflaged nulls present
@@ -55,6 +63,19 @@ class HashTests(unittest.TestCase):
     def test_mechanism_and_calibration_hashes_differ(self) -> None:
         # Pi #6: calibration output has its OWN hash, separate from the mechanism hash.
         self.assertNotEqual(S.oracle_mechanism_hash(), S.calibration_hash())
+
+    def test_mechanism_hash_binds_executable_generator_config(self) -> None:
+        # Pi #5/#8 (reproduced defect): a change to the generator's numeric mechanism MUST move the
+        # hash. GENERATOR_CONFIG is what the generator actually executes.
+        from unittest import mock
+        base = S.oracle_mechanism_hash()
+        bumped = {**S.GENERATOR_CONFIG, "d_h": S.GENERATOR_CONFIG["d_h"] + 1}
+        with mock.patch.object(S, "GENERATOR_CONFIG", bumped):
+            self.assertNotEqual(S.oracle_mechanism_hash(), base)
+        # the generator reads the SAME constants the hash binds
+        from clinical_jepa.eval import oracle_generator as G
+        self.assertEqual(G.D_H, S.GENERATOR_CONFIG["d_h"])
+        self.assertEqual(G.L_ITEMS, S.GENERATOR_CONFIG["l_items"])
 
     def test_calibration_cannot_list_mechanism_as_tunable(self) -> None:
         tunable = set(S.CALIBRATION_SPEC["tunable_params"])

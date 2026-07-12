@@ -24,15 +24,18 @@ from dataclasses import dataclass
 import numpy as np
 
 from clinical_jepa.eval.oracle_spec import (
-    NUISANCE_LEAK_RHO, StructuralFamily, get_family,
+    GENERATOR_CONFIG, NUISANCE_LEAK_RHO, StructuralFamily, get_family,
 )
 
-D_H = 6         # driver (hidden or exogenous) dimension
-D_CTX = 10      # observed context feature dimension
-D_ITEM = 4      # observed per-item content feature dimension
-L_ITEMS = 8     # items whose order is certified, per sequence
-CTX_NOISE = 0.5
-HLEAK_NOISE = 0.5
+# The executable numeric mechanism is READ FROM the frozen spec's GENERATOR_CONFIG so that
+# oracle_mechanism_hash() binds exactly what runs here (Pi #5/#8). Changing any of these requires
+# editing the frozen spec, which moves the mechanism hash.
+D_H = GENERATOR_CONFIG["d_h"]           # driver (hidden or exogenous) dimension
+D_CTX = GENERATOR_CONFIG["d_ctx"]       # observed context feature dimension
+D_ITEM = GENERATOR_CONFIG["d_item"]     # observed per-item content feature dimension
+L_ITEMS = GENERATOR_CONFIG["l_items"]   # items whose order is certified, per sequence
+CTX_NOISE = GENERATOR_CONFIG["ctx_noise"]
+HLEAK_NOISE = GENERATOR_CONFIG["hleak_noise"]
 
 
 def _family_seed(family_id: str) -> int:

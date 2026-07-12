@@ -17,6 +17,7 @@ does not authorize anything (Pi #3).
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -78,12 +79,18 @@ def predict_context_blind(cell: GeneratedCell) -> np.ndarray:
     return _order_score(driver_hat, mech.M, cell.f)
 
 
+def _stable_seed(*parts: str) -> int:
+    """Deterministic seed from a cryptographic hash — reproducible across processes (unlike Python's
+    randomized ``hash()``, which varies with PYTHONHASHSEED; Pi #7 reproduced that non-determinism)."""
+    return int.from_bytes(hashlib.sha256("|".join(parts).encode()).digest()[:8], "big")
+
+
 def predict_context_bandwidth_control(cell: GeneratedCell) -> np.ndarray:
     """Bandwidth-matched control (U6): same context bit budget, but a RANDOM orthogonal posterior map
     that destroys the driver->context alignment. Skill here would mean order is being read from raw
     context bandwidth rather than correct context decoding; the proper predictor must beat it."""
     mech = mechanism_matrices(cell.family_id)
-    rng = np.random.default_rng(0xB17 ^ hash(cell.family_id) & 0xFFFF)
+    rng = np.random.default_rng(_stable_seed("u6_bandwidth_control", cell.family_id))
     q, _ = np.linalg.qr(rng.standard_normal((mech.A.shape[1], mech.A.shape[1])))
     driver_hat = (cell.x_ctx @ q) @ mech.A.T                  # rotate context before decoding
     return _order_score(driver_hat, mech.M, cell.f)

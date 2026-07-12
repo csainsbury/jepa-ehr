@@ -169,10 +169,16 @@ by `t4_governed_allowed`: `schema_version`, `oracle_mechanism_hash`, `blueprint_
 `realism_envelope.within_envelope`, and `reference_bounds` (`R_bayes_beats_R0`, `R0_null_pass`,
 `R0_positive_fail`, `nuisance_incremental_margin_ok`, `evaluator_realized_alpha ≤ ORACLE_NULL_ALPHA`).
 
-**Guard fail-closed (Pi v3 defect fixed + tested):** for governed inputs the caller MUST supply a
-non-empty `presented_recipe_hash` AND `expected_blueprint_hash`; **omission is a REFUSAL, not a
-skipped check.** `schema_version` must equal the expected exactly; `held_out_family_ids` must have ≥2
-DISTINCT entries; `governed_t4_real_output_ceiling` must be `NOMINATE` with a non-empty
+**Guard fail-closed (Pi implementation-gate defect fixed + tested):** the caller supplies ONLY a
+non-empty `presented_recipe_hash` (it names the actual governed recipe, matched against the manifest's
+`certified_recipe_hash`); **omission is a REFUSAL, not a skipped check.** Every OTHER trust anchor —
+`blueprint_hash`, `gate_event_ref`, `oracle_mechanism_hash`, `schema_version`, and evaluator/registry/
+sealed-run membership — is read from the **TRUSTED COMMITTED `oracle_policy`**, NOT from the run
+operator; `t4_governed_allowed` exposes no `policy=`/`expected_*` argument, because a caller-supplied
+expectation proves only string equality between two caller-controlled values, not approval. The
+committed policy ships EMPTY (fail-closed) until the implementation gate freezes it. `schema_version`
+equals the frozen constant exactly; `held_out_family_ids` must have ≥2 DISTINCT non-empty entries
+(malformed → refuse, not raise); `governed_t4_real_output_ceiling` must be `NOMINATE` with a non-empty
 `transfer_caveat`. The **timing-recovery** result is a separate `clinical-jepa-oracle-timing-recovery`
 manifest (E-T1..4) that does NOT gate the order target.
 
