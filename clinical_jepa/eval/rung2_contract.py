@@ -194,6 +194,13 @@ ORACLE_POWER_KAPPA_MID = 0.35          # the SINGLE power/MDE coupling point —
 ORACLE_MONO_SPEARMAN = 0.90            # monotonicity Spearman lower-CI
 ORACLE_CALIB_SLOPE_BAND = (0.8, 1.2)   # recovery calibration slope band
 ORACLE_CALIB_INTERCEPT_TOL = 0.05
+# calibration realism envelope — CONJUNCTIVE per source block (Pi 2nd-pass #3, exact thresholds)
+ORACLE_ENV_DT0_ABS = 0.02              # |Δt=0 fraction difference|
+ORACLE_ENV_TV = 0.05                   # six-class token/event distribution total variation
+ORACLE_ENV_KS = 0.05                   # length / positive-gap / per-seq-count distribution KS
+ORACLE_ENV_OCCUPANCY_ABS = 0.03        # mean class-occupancy fraction (distinct classes / C, C=6)
+ORACLE_ENV_N_CLASSES = 6
+ORACLE_ENV_MIN_DENOM = 500             # minimum denominator floor; below => NOT_EVALUABLE (never zero-fill)
 ORACLE_N_NULL_SEEDS = 200
 ORACLE_N_POS_SEEDS = 100
 ORACLE_N_HELDOUT_FAMILIES = 2          # >=2 DISTINCT held-out structural meta-families
