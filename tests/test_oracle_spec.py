@@ -28,13 +28,14 @@ class FamilyInventoryTests(unittest.TestCase):
         for k in off.kappa_cells:
             self.assertNotIn(k, S.KAPPA_TRAIN_GRID)
 
-    def test_offgrid_kappa_inside_band_and_disjoint_from_train(self) -> None:
-        # Pi #5: off-grid knobs must lie strictly inside the frozen band and be disjoint from train.
-        lo, hi = C.ORACLE_OFFGRID_KAPPA
+    def test_offgrid_endpoints_match_contract_and_are_disjoint(self) -> None:
+        # Pi 2nd-pass: the off-grid cells ARE the two frozen endpoints (0.15, 0.60), NOT a band; they
+        # must equal ORACLE_OFFGRID_KAPPA, be disjoint from the train grid, and be separate from kappa_mid.
+        self.assertEqual(tuple(S.KAPPA_OFFGRID), tuple(C.ORACLE_OFFGRID_KAPPA))
         for k in S.KAPPA_OFFGRID:
-            self.assertTrue(lo < k < hi, f"{k} not strictly inside band ({lo},{hi})")
             self.assertNotIn(k, S.KAPPA_TRAIN_GRID)
-        self.assertGreaterEqual(len(S.KAPPA_OFFGRID), 3)   # enough points for a real monotone check
+        self.assertNotIn(C.ORACLE_POWER_KAPPA_MID, S.KAPPA_TRAIN_GRID)
+        self.assertNotIn(C.ORACLE_POWER_KAPPA_MID, S.KAPPA_OFFGRID)   # power point is its own probe
 
     def test_every_family_has_null_and_both_nuisance_cells(self) -> None:
         for f in S.STRUCTURAL_FAMILIES:

@@ -34,11 +34,11 @@ SPEC_VERSION = "clinical-jepa-oracle-spec-v3"
 # more context-conditional order information. The TRAIN grid is on-grid; held-out families probe
 # OFF-grid kappa (ORACLE_OFFGRID_KAPPA in the contract) so a certifier cannot overfit a grid point.
 # ----------------------------------------------------------------------------------------------
-KAPPA_TRAIN_GRID: tuple[float, ...] = (0.0, 0.15, 0.30, 0.50, 0.75)
-# Held-out OFF-GRID knobs: strictly INSIDE the frozen band ORACLE_OFFGRID_KAPPA=(0.15,0.6) and DISJOINT
-# from the train grid (Pi #5 — the earlier (0.22,0.63) put 0.63 outside the band). >=3 points so the
-# off-grid monotonicity check is real, not a degenerate 2-point Spearman.
-KAPPA_OFFGRID: tuple[float, ...] = (0.20, 0.35, 0.55)
+# Pi 2nd-pass residual correction: the TWO frozen off-grid endpoints (0.15, 0.60) are the actual
+# held-out certification knobs (NOT a band, do not silently reinterpret). Train grid is DISJOINT from
+# them and drops 0.15; the power point 0.35 (ORACLE_POWER_KAPPA_MID) is separate again. All grids hashed.
+KAPPA_TRAIN_GRID: tuple[float, ...] = (0.0, 0.10, 0.30, 0.50, 0.75)
+KAPPA_OFFGRID: tuple[float, ...] = (0.15, 0.60)          # == ORACLE_OFFGRID_KAPPA (frozen endpoints)
 
 # Null-mixture weight: fraction of sequences in a cell drawn from the mechanistic null (order drawn
 # from the content-prior pi0 ONLY, independent of h). Positives and nulls share identical marginal

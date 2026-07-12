@@ -185,6 +185,8 @@ ORACLE_R_BAYES_MC_SEEDS = 8            # independent MC seeds for R_bayes
 ORACLE_NUISANCE_MARGIN = 0.05          # recipe INCREMENTAL skill over R_nuis (lower-CI)
 ORACLE_NULL_ALPHA = 0.05               # per-property null FPR (upper-CI)
 ORACLE_POWER_FLOOR = 0.80              # power at kappa_mid
+ORACLE_POWER_KAPPA_MID = 0.35          # the SINGLE power/MDE coupling point — DISJOINT from the train
+                                       # grid and from the two frozen off-grid endpoint probes (Pi 2nd-pass)
 ORACLE_MONO_SPEARMAN = 0.90            # monotonicity Spearman lower-CI
 ORACLE_CALIB_SLOPE_BAND = (0.8, 1.2)   # recovery calibration slope band
 ORACLE_CALIB_INTERCEPT_TOL = 0.05
@@ -193,7 +195,8 @@ ORACLE_N_POS_SEEDS = 100
 ORACLE_N_HELDOUT_FAMILIES = 2          # >=2 DISTINCT held-out structural meta-families
 ORACLE_CLUSTER_UNIT = "sequence"       # FPR aggregated per sequence, NOT per precedence-pair
 ORACLE_MULTIPLE_TESTING = "bonferroni_over_evaluable_cells"
-ORACLE_OFFGRID_KAPPA = (0.15, 0.6)     # off-grid certification knobs (not in the training grid)
+ORACLE_OFFGRID_KAPPA = (0.15, 0.6)     # the TWO frozen held-out endpoint probes (NOT a band, NOT in the
+                                       # train grid). Preserved exactly per Pi's 2nd-pass residual correction.
 ORACLE_MDE_DEF = "smallest_kappa_with_power_ge_0.80"
 ORACLE_HIDDEN_NULL_RULE = "R_bayes_within_margin_of_R0_excluded_from_positive"
 ORACLE_SHORTCUT_MAX_SKILL = 0.10       # an h-projection-only shortcut method must NOT exceed this
