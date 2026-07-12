@@ -138,7 +138,11 @@ def paired_contrast(a_vals: np.ndarray, b_vals: np.ndarray, *, seed: int = 0, n_
 
 def hidden_null_excluded(cell: LiteralCell, *, margin: float, seed: int = 0) -> bool:
     """Decide hidden-null from R_bayes − R0 BEFORE the recipe is inspected: if the fair context ceiling
-    does not beat the content prior by ``margin`` (lower-CI), the cell is a HIDDEN NULL and is excluded
-    from positive certification (Pi ORACLE_HIDDEN_NULL_RULE)."""
-    pc = paired_contrast(eo1_r_bayes(cell, seed=seed), eo1_r0(cell), seed=seed)
+    does not beat the content prior by ``margin`` (lower-CI) on the POSITIVE sequences, the cell is a
+    HIDDEN NULL and is excluded from positive certification (Pi ORACLE_HIDDEN_NULL_RULE). Scored on the
+    non-null sequences (the evaluator knows is_null) so the camouflage null mixture does not dilute the
+    ceiling — a true kappa=0 cell has no positive signal and is correctly excluded."""
+    pos = ~cell.is_null
+    pc = paired_contrast(restrict_to(eo1_r_bayes(cell, seed=seed), pos),
+                         restrict_to(eo1_r0(cell), pos), seed=seed)
     return pc.lower_ci < margin

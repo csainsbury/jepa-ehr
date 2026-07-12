@@ -118,6 +118,17 @@ def clopper_pearson_upper(k: int, n: int, *, conf: float = 0.95) -> float:
     return hi
 
 
+def clopper_pearson_lower(k: int, n: int, *, conf: float = 0.95) -> float:
+    """One-sided Clopper-Pearson LOWER confidence bound on a binomial rate — the fail-closed statistic
+    for a POWER study (report the lower bound on pass-rate, not the point estimate). By the symmetry
+    lower(k, n) = 1 - upper(n-k, n)."""
+    if n <= 0:
+        return 0.0
+    if k <= 0:
+        return 0.0
+    return 1.0 - clopper_pearson_upper(n - k, n, conf=conf)
+
+
 @dataclass(frozen=True)
 class NullOCStudy:
     n_studies: int          # independent null studies actually run (evaluable support)

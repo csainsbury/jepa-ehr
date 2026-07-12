@@ -185,6 +185,10 @@ ORACLE_R_BAYES_MC_SEEDS = 8            # independent MC seeds for R_bayes
 ORACLE_NUISANCE_MARGIN = 0.05          # recipe INCREMENTAL skill over R_nuis (lower-CI)
 ORACLE_NULL_ALPHA = 0.05               # per-property null FPR (upper-CI)
 ORACLE_POWER_FLOOR = 0.80              # power at kappa_mid
+ORACLE_PRECISION_N_STUDIES = 70        # frozen precision-sim study count (enough to bound type-I ≤ α
+                                       # under 0 observed false positives: rule-of-three 3/70 < 0.05)
+ORACLE_PRECISION_MC_TOL = 0.05         # precision-sim resolution tolerance (its own, NOT the tight
+                                       # R_bayes posterior MC tol) — refuse if the CI is coarser
 ORACLE_POWER_KAPPA_MID = 0.35          # the SINGLE power/MDE coupling point — DISJOINT from the train
                                        # grid and from the two frozen off-grid endpoint probes (Pi 2nd-pass)
 ORACLE_MONO_SPEARMAN = 0.90            # monotonicity Spearman lower-CI
