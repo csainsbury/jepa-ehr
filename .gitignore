@@ -68,3 +68,6 @@ latest*.txt
 # Local pi/cog runtime artifacts
 .pi/
 state/
+
+# Local agent-room / reviewer coordination bus
+coordination/

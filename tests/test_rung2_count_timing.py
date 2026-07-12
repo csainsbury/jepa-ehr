@@ -81,10 +81,14 @@ class T4RefusalTests(unittest.TestCase):
                 "precision_sim": {"adequate": True}, "realism_envelope": {"within_envelope": True},
                 "reference_bounds": {"R_bayes_beats_R0": True, "R0_null_pass": True, "R0_positive_fail": True,
                                      "nuisance_incremental_margin_ok": True, "evaluator_realized_alpha": 0.03}}
-        with self.assertRaises(PermissionError):   # identity args mandatory (omitted -> refuse)
+        with self.assertRaises(PermissionError):   # recipe hash mandatory (omitted -> refuse)
             guard_t4(inputs_are_governed=True, oracle_authorization=full)
-        guard_t4(inputs_are_governed=True, oracle_authorization=full,
-                 presented_recipe_hash="r", expected_blueprint_hash="bp")                   # fully certified OK
+        with self.assertRaises(PermissionError):
+            # Even a fully-formed manifest is refused: the production guard reads the COMMITTED
+            # approved-oracle policy, which ships EMPTY (fail-closed). No caller-supplied trust
+            # anchor can override it (Pi #1). The populated-policy positive path is covered by the
+            # pure-function t4_governed_allowed(..., policy=...) tests in test_rung2_contract.py.
+            guard_t4(inputs_are_governed=True, oracle_authorization=full, presented_recipe_hash="r")
 
 
 if __name__ == "__main__":

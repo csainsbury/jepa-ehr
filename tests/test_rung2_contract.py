@@ -87,8 +87,19 @@ def _full_oracle_manifest() -> dict:
     }
 
 
-def _ok(m):  # a passing governed call supplies BOTH identity args
-    return C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ", expected_blueprint_hash="bp999")
+def _test_policy() -> dict:
+    """A POPULATED trusted policy that matches _full_oracle_manifest (test-only; the committed
+    APPROVED_ORACLE_POLICY stays EMPTY until the implementation gate freezes it)."""
+    return {
+        "blueprint_hash": "bp999", "gate_event_ref": "evt-oracle-1", "oracle_mechanism_hash": "mech123",
+        "schema_version": C.ORACLE_SCHEMA_VERSION,
+        "evaluator_commits": ["abc123"], "recipe_registry_ids": ["reg1"], "sealed_cert_run_ids": ["run77"],
+    }
+
+
+def _ok(m, policy=None):  # a passing governed call supplies the recipe hash + trusted policy
+    return C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ",
+                                 policy=policy if policy is not None else _test_policy())
 
 
 class OracleStopLineTests(unittest.TestCase):
@@ -99,25 +110,40 @@ class OracleStopLineTests(unittest.TestCase):
         self.assertFalse(C.t4_governed_allowed(True, {"oracle_frozen": True, "pi_gate": "PASS"}))
         self.assertTrue(_ok(_full_oracle_manifest()))
 
-    def test_identity_args_are_MANDATORY_not_skipped(self) -> None:
-        # Pi v3 guard defect: omitting the recipe/blueprint hash must REFUSE, not skip.
+    def test_empty_committed_policy_refuses_even_a_full_manifest(self) -> None:
+        # Pi #1: the trust anchor is the COMMITTED policy, which ships EMPTY -> fail-closed for all.
+        self.assertFalse(C.t4_governed_allowed(True, _full_oracle_manifest(),
+                                               presented_recipe_hash="recipeXYZ"))  # default committed policy
+        self.assertFalse(C.t4_governed_allowed(True, _full_oracle_manifest(),
+                                               presented_recipe_hash="recipeXYZ", policy={}))  # unpopulated
+
+    def test_recipe_hash_is_the_only_run_input_and_MANDATORY(self) -> None:
         m = _full_oracle_manifest()
-        self.assertFalse(C.t4_governed_allowed(True, m))                    # both omitted
-        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ"))  # blueprint omitted
-        self.assertFalse(C.t4_governed_allowed(True, m, expected_blueprint_hash="bp999"))    # recipe omitted
-        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="", expected_blueprint_hash="bp999"))
+        self.assertFalse(C.t4_governed_allowed(True, m, policy=_test_policy()))              # recipe omitted
+        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="", policy=_test_policy()))
+
+    def test_policy_mismatch_refused(self) -> None:
+        # Anchors the caller can no longer choose: a manifest that disagrees with the committed policy fails.
+        m = _full_oracle_manifest()
+        self.assertFalse(_ok({**m, "blueprint_hash": "WRONG"}))            # blueprint not from policy
+        self.assertFalse(_ok({**m, "gate_event_ref": "evt-OTHER"}))        # wrong gate event
+        self.assertFalse(_ok({**m, "oracle_mechanism_hash": "WRONG"}))     # wrong mechanism
+        self.assertFalse(_ok({**m, "evaluator_commit": "stale999"}))       # stale evaluator not in allowlist
+        self.assertFalse(_ok({**m, "recipe_registry_id": "unknownReg"}))   # unknown registry id
+        self.assertFalse(_ok({**m, "sealed_cert_run_id": "reusedSeed"}))   # sealed-run not in allowlist
 
     def test_mismatch_and_stale_fields_refused(self) -> None:
         m = _full_oracle_manifest()
-        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="WRONG", expected_blueprint_hash="bp999"))
-        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="recipeXYZ", expected_blueprint_hash="WRONG"))
+        self.assertFalse(C.t4_governed_allowed(True, m, presented_recipe_hash="WRONG"))     # recipe != certified
         self.assertFalse(_ok({**m, "verdict": "CERTIFIED"}))                # legacy verdict
         self.assertFalse(_ok({**m, "schema_version": "v2"}))                # wrong schema
         self.assertFalse(_ok({**m, "held_out_family_ids": ["E1"]}))         # <2 held-out families
         self.assertFalse(_ok({**m, "held_out_family_ids": ["E1", "E1"]}))   # not DISTINCT
+        self.assertFalse(_ok({**m, "held_out_family_ids": ["E1", 2]}))      # malformed type -> refuse not raise
+        self.assertFalse(_ok({**m, "held_out_family_ids": ["E1", ""]}))     # empty-string family id
+        self.assertFalse(_ok({**m, "held_out_family_ids": "E1,E2"}))        # not even a list
         self.assertFalse(_ok({**m, "governed_t4_real_output_ceiling": "ADOPT"}))
         self.assertFalse(_ok({**m, "transfer_caveat": ""}))
-        self.assertFalse(_ok({**m, "recipe_registry_id": ""}))
         self.assertFalse(_ok({**m, "unlock_checks": {"U2_null": "FAIL"}}))
         self.assertFalse(_ok({**m, "reference_bounds": {"nuisance_incremental_margin_ok": False}}))
 
