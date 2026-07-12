@@ -28,7 +28,7 @@ from typing import Any
 
 import numpy as np
 
-from clinical_jepa.eval.oracle_contracts import canonical_hash, context_view
+from clinical_jepa.eval.oracle_contracts import canonical_hash, context_view, future_view
 from clinical_jepa.eval.oracle_spec import NUISANCE_LEAK_RHO, get_family
 from clinical_jepa.eval.rung2_contract import ORDER_SUPPORT_FLOOR
 
@@ -62,8 +62,9 @@ class LiteralCell:
     context_features: np.ndarray        # (N, D_CTX)
     item_features: np.ndarray           # (N, L, D_ITEM)
     observed_covariates: np.ndarray | None   # exogenous z for no-h; else None
-    # --- future (target-side; ceiling / label construction only) ---
+    # --- future (target-side; ceiling / target construction only, never a certification input) ---
     future_multiset: np.ndarray         # (N, L) class ids in [0, N_CLASSES)
+    future_events: np.ndarray           # (N, L) realized-order RANK of each item (0=first) — target-side
     future_timestamps: np.ndarray       # (N, L) event times, nondecreasing, Δt=0 within a cluster
     cluster_ids: np.ndarray             # (N, L) timestamp-cluster index per item
     multiplicity: np.ndarray            # (N, L) cluster size for each item's cluster
@@ -87,6 +88,13 @@ class LiteralCell:
 
     def context_view(self):
         return context_view(self.context_data())
+
+    def future_view(self):
+        """Target-side view (fit / ceiling only). Exposes the realized future ordering + multiset +
+        timestamps — NOT the eval-only true_order label object and NOT family identity."""
+        return future_view({"future_multiset": self.future_multiset,
+                            "future_events": self.future_events,
+                            "future_timestamps": self.future_timestamps})
 
 
 # ----------------------------------------------------------------------------------------------
@@ -121,6 +129,7 @@ def _nuisance(rng: np.random.Generator, s_true: np.ndarray, nuisance_cell: str) 
 def _finish(family_id, kappa, nuisance_cell, *, is_null, s_true, hidden, ctx, item_feats,
             covar, rng, allowlist, params, fam_channels, support_status) -> LiteralCell:
     future_multiset = rng.integers(0, N_CLASSES, size=(s_true.shape[0], L_ITEMS))
+    future_events = np.argsort(np.argsort(s_true, axis=1), axis=1)      # realized-order rank per item
     rate_scale = np.exp(0.3 * (ctx[:, 0] - ctx[:, 0].mean())) + 0.2     # per-seq positive timing scale
     ts, cid, mult = _marked_cluster_timing(rng, s_true.shape[0], rate_scale)
     u = _nuisance(rng, s_true, nuisance_cell)
@@ -130,7 +139,8 @@ def _finish(family_id, kappa, nuisance_cell, *, is_null, s_true, hidden, ctx, it
         family_id=family_id, kappa=float(kappa), nuisance_cell=nuisance_cell,
         is_null=is_null, true_order=s_true, nuisance_u=u, hidden_state=hidden,
         context_features=ctx, item_features=item_feats, observed_covariates=covar,
-        future_multiset=future_multiset, future_timestamps=ts, cluster_ids=cid, multiplicity=mult,
+        future_multiset=future_multiset, future_events=future_events,
+        future_timestamps=ts, cluster_ids=cid, multiplicity=mult,
         family_channels=fam_channels, observable_allowlist=allowlist,
         mechanism_params_hash=phash, support_status=support_status,
     )
