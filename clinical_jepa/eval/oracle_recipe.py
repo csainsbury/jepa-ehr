@@ -96,16 +96,19 @@ def _ridge_fit(X: np.ndarray, y: np.ndarray, lam: float = 1.0) -> np.ndarray:
     return np.linalg.solve(X.T @ X + lam * np.eye(X.shape[1]), X.T @ y)
 
 
-def _design(context: RestrictedView) -> np.ndarray:
+def _design(context: RestrictedView, *, use_interaction: bool = True) -> np.ndarray:
     """Per-item design matrix from context. The true order-score is BILINEAR (a hidden factor recovered
     from context, coupled to the item feature), so the design includes the context⊗item interaction
-    terms — a purely additive [context, item] model cannot represent context×item coupling."""
+    terms — a purely additive [context, item] model cannot represent context×item coupling (that
+    mis-specification is exactly the negligible-effect recipe: ``use_interaction=False``)."""
     ctx = np.asarray(context.get("context_features"), dtype=float)         # (N, D_CTX)
     item = np.asarray(context.get("item_features"), dtype=float)           # (N, L, D_ITEM)
     n, L, di = item.shape
     ctx_b = np.repeat(ctx[:, None, :], L, axis=1)                          # (N, L, D_CTX)
-    cross = (ctx_b[:, :, :, None] * item[:, :, None, :]).reshape(n, L, ctx.shape[1] * di)  # ctx⊗item
-    X = np.concatenate([ctx_b, item, cross], axis=2).reshape(n * L, -1)
+    blocks = [ctx_b, item]
+    if use_interaction:
+        blocks.append((ctx_b[:, :, :, None] * item[:, :, None, :]).reshape(n, L, ctx.shape[1] * di))
+    X = np.concatenate(blocks, axis=2).reshape(n * L, -1)
     return np.concatenate([X, np.ones((X.shape[0], 1))], axis=1)
 
 
@@ -113,21 +116,24 @@ class GoodContextRecipe(CandidateRecipe):
     """Fits a context+item -> order-score ridge on the target-side future ordering, then predicts from
     context ONLY. Recovers order for positive cells; never reads labels at predict time."""
 
-    def __init__(self) -> None:
+    def __init__(self, use_interaction: bool = True, code_identity: str = "good_context_recipe") -> None:
         self._w: np.ndarray | None = None
         self._L: int | None = None
+        self._use_interaction = use_interaction
+        self._code_identity = code_identity
 
     def spec(self) -> RecipeSpec:
         return RecipeSpec(architecture="ridge_context_order", target_encoder="rank_identity",
-                          codebook_cfg={"K": 0}, losses={"mse": 1.0}, optimizer="closed_form",
+                          codebook_cfg={"K": 0, "interaction": self._use_interaction},
+                          losses={"mse": 1.0}, optimizer="closed_form",
                           schedule="none", bit_accounting={"target_bits": 8},
                           decode_policy="pairwise_sigmoid", sampler_spec=SamplerSpec(),
                           decoder_sampler_spec=DecoderSamplerSpec(), split_ids={"v": 1},
                           seed_policy="sha256", evaluator_identity="oracle_eval_v3",
-                          code_identity="good_context_recipe")
+                          code_identity=self._code_identity)
 
     def fit(self, train: SplitViews, dev: SplitViews) -> FittedRecipeArtifact:
-        X = _design(train.context)                                         # context-only design
+        X = _design(train.context, use_interaction=self._use_interaction)  # context-only design
         y = self.encode_target(train.future).reshape(-1)                   # target-side ordering
         self._w = _ridge_fit(X, y)
         self._L = int(np.asarray(train.future.get("future_events")).shape[1])
@@ -136,9 +142,18 @@ class GoodContextRecipe(CandidateRecipe):
 
     def predict_latent(self, context: RestrictedView, sampler: SamplerSpec, seed: int) -> np.ndarray:
         assert self._w is not None, "fit before predict"
-        X = _design(context)
+        X = _design(context, use_interaction=self._use_interaction)
         n = np.asarray(context.get("context_features")).shape[0]
         return (X @ self._w).reshape(n, self._L)
+
+
+class NegligibleEffectRecipe(GoodContextRecipe):
+    """A mis-specified additive recipe (no context⊗item interaction): cannot represent the bilinear
+    order signal, so its E-O1 is statistically positive but NEGLIGIBLE — must FAIL the practical gate,
+    not certify (Pi: a nonzero-but-negligible synthetic effect must not authorize)."""
+
+    def __init__(self) -> None:
+        super().__init__(use_interaction=False, code_identity="negligible_effect_recipe")
 
 
 class ContextBlindRecipe(CandidateRecipe):
