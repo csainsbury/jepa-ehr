@@ -105,5 +105,41 @@ class HiddenNullAndPrecisionTests(unittest.TestCase):
         self.assertTrue(ue.train_family_readiness)
 
 
+class _ContaminatedRecipe(InvariantLearner):
+    """Simulates a recipe that (illegally) touched a held-out family during fit."""
+    def fit_on_train(self, *, seed: int = 0, n: int = 1200):
+        super().fit_on_train(seed=seed, n=n)
+        self.fit_provenance["families"] = sorted(set(self.fit_provenance["families"]) | {"E_no_h_exogenous"})
+        return self
+
+
+class ContaminationAndDeterminismTests(unittest.TestCase):
+    def test_held_out_contamination_is_refused(self) -> None:
+        # a recipe whose fit provenance includes a held-out family is refused before scoring.
+        with self.assertRaises(RuntimeError):
+            V.certify_recipe(lambda: _ContaminatedRecipe(), seed=0)
+
+    def test_recipe_and_artifact_hashes_are_deterministic(self) -> None:
+        r1 = InvariantLearner().fit_on_train(seed=0)
+        r2 = InvariantLearner().fit_on_train(seed=0)
+        self.assertEqual(r1.recipe_hash(), r2.recipe_hash())
+        self.assertEqual(r1.artifact().artifact_hash, r2.artifact().artifact_hash)
+
+    def test_artifact_hash_stable_across_held_out_evaluation(self) -> None:
+        # compute_unlock does NOT refit; the fitted artifact identity is unchanged by evaluation.
+        r = InvariantLearner().fit_on_train(seed=0)
+        before = r.artifact().artifact_hash
+        U.compute_unlock(r, seed=0)
+        self.assertEqual(r.artifact().artifact_hash, before)
+
+    def test_verdict_outcome_reproducible(self) -> None:
+        # same recipe + seed -> same outcome and identities (determinism; PYTHONHASHSEED checked in shell).
+        inv, _ = _Runs.get()
+        again = V.certify_recipe(lambda: InvariantLearner(), seed=0)
+        self.assertEqual(inv.verdict.outcome, again.verdict.outcome)
+        self.assertEqual(inv.recipe_hash, again.recipe_hash)
+        self.assertEqual(inv.artifact_hash, again.artifact_hash)
+
+
 if __name__ == "__main__":
     unittest.main()
