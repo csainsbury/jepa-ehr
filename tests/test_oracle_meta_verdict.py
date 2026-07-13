@@ -71,6 +71,28 @@ class PureFunctionTests(unittest.TestCase):
         self.assertEqual(v1.outcome, U.CERTIFIED_CANDIDATE)
 
 
+class SamplerAndBitTests(unittest.TestCase):
+    def test_sampled_decode_is_reproducible_and_sampler_is_exercised(self) -> None:
+        import numpy as np
+        from clinical_jepa.eval.oracle_meta_recipe import sampled_pairwise_probs
+        from clinical_jepa.eval.oracle_meta_gen import generate_meta_cell
+        r = InvariantLearner().fit_on_train(seed=0)
+        self.assertGreater(r.spec().sampler_spec.n_latent_samples, 1)   # a stochastic sampler is registered
+        cell = generate_meta_cell("E_no_h_exogenous", 0.60, "orthogonal", 200, seed=9)
+        p1 = sampled_pairwise_probs(r, cell, seed=5)
+        p2 = sampled_pairwise_probs(r, cell, seed=5)
+        self.assertTrue(np.allclose(p1, p2))                            # deterministic given the seed
+
+    def test_sampler_fingerprint_mismatch_is_refused(self) -> None:
+        with self.assertRaises(RuntimeError):
+            V.certify_recipe(lambda: InvariantLearner(), seed=0, presented_sampler_fingerprint="WRONG")
+
+    def test_bit_accounting_comes_from_the_registered_recipe(self) -> None:
+        r = InvariantLearner()
+        self.assertIn("control_bits", r.spec().bit_accounting)
+        self.assertIn("target_bits", r.spec().bit_accounting)
+
+
 class HiddenNullAndPrecisionTests(unittest.TestCase):
     def test_low_endpoint_is_hidden_null_and_precision_holds(self) -> None:
         recipe = InvariantLearner().fit_on_train(seed=0)

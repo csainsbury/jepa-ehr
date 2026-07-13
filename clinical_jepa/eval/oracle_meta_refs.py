@@ -177,7 +177,11 @@ def paired_skill_contrast(b_target: np.ndarray, b_comparator: np.ndarray, b_r0: 
 
 def briers_vs_r0(scores: np.ndarray, cell, *, temperature: float = 1.0, positives_only: bool = True) -> tuple:
     """(brier_per_seq, brier_r0_per_seq, npair) for a predictor's scores on a cell."""
-    probs = pairwise_probs(scores, temperature)
+    return briers_from_probs(pairwise_probs(scores, temperature), cell, positives_only=positives_only)
+
+
+def briers_from_probs(probs: np.ndarray, cell, *, positives_only: bool = True) -> tuple:
+    """As ``briers_vs_r0`` but from already-decoded pairwise probabilities (e.g. a SAMPLED decode)."""
     r0 = r0_pairwise(cell.family_id, cell.kappa, cell.item_classes)
     b_rec, b_r0, npair = per_sequence_briers(probs, cell.true_order, r0)
     if positives_only:

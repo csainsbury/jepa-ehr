@@ -161,16 +161,23 @@ class MemorizerRecipe:
         return _fitted_artifact(self.recipe_hash(), self._w, self._T)
 
 
+RECIPE_TARGET_BITS = 8
+RECIPE_CONTROL_BITS = 8
+
+
 def _recipe_spec(architecture: str, lam: float):
     from clinical_jepa.eval.oracle_contracts import DecoderSamplerSpec, RecipeSpec, SamplerSpec
     from clinical_jepa.eval.oracle_meta_gen import invariant_hash
     return RecipeSpec(
         architecture=architecture, target_encoder="gaussian_rank_quantile",
         codebook_cfg={"kind": "none"}, losses={"ridge_mse": 1.0}, optimizer="closed_form_ridge",
-        schedule="none", bit_accounting={"target_bits": 8, "control_bits": 8},
-        decode_policy="pairwise_sigmoid_temperature", sampler_spec=SamplerSpec(),
-        decoder_sampler_spec=DecoderSamplerSpec(), split_ids={"train_grid": list(FIT_KAPPAS)},
-        seed_policy="sha256", evaluator_identity="oracle_meta_eval_v4",
+        schedule="none", bit_accounting={"target_bits": RECIPE_TARGET_BITS, "control_bits": RECIPE_CONTROL_BITS},
+        decode_policy="pairwise_sigmoid_temperature",
+        sampler_spec=SamplerSpec(n_latent_samples=4, temperature=0.3, aggregation="mean_pairwise_prob",
+                                 common_random_numbers=True),
+        decoder_sampler_spec=DecoderSamplerSpec(n_decode_samples=1),
+        split_ids={"train_grid": list(FIT_KAPPAS)}, seed_policy="sha256",
+        evaluator_identity="oracle_meta_eval_v4",
         code_identity=f"{architecture}|lam={lam}|mech={invariant_hash()[:16]}")
 
 
@@ -178,6 +185,31 @@ def _fitted_artifact(recipe_hash: str, w, T: float):
     from clinical_jepa.eval.oracle_contracts import FittedRecipeArtifact, canonical_hash
     art = canonical_hash({"w_bytes": np.asarray(w, float).round(8).tobytes().hex(), "T": round(float(T), 6)})
     return FittedRecipeArtifact(recipe_hash, art, {"T": round(float(T), 6)})
+
+
+def sampler_fingerprint(recipe) -> str:
+    """Stable fingerprint of the recipe's REGISTERED sampler (used to refuse a sampler mismatch)."""
+    from clinical_jepa.eval.oracle_contracts import canonical_hash
+    s = recipe.spec().sampler_spec
+    return canonical_hash({"n": s.n_latent_samples, "T": s.temperature, "agg": s.aggregation,
+                           "crn": s.common_random_numbers, "seed_derivation": s.seed_derivation})
+
+
+def sampled_pairwise_probs(recipe, cell, *, seed: int) -> np.ndarray:
+    """Decode via the recipe's REGISTERED stochastic sampler: draw ``n_latent_samples`` predicted-latent
+    perturbations (common-random-number seed derivation), decode each, and aggregate the pairwise
+    probabilities. Deterministic given ``seed`` (reproducibility is asserted end-to-end)."""
+    sampler = recipe.spec().sampler_spec
+    scores = recipe.predict_scores(cell)
+    if sampler.n_latent_samples <= 1:
+        return R.pairwise_probs(scores, recipe._T)
+    rng = np.random.default_rng(seed)
+    acc = None
+    for _ in range(int(sampler.n_latent_samples)):
+        noisy = scores + sampler.temperature * rng.standard_normal(scores.shape)
+        p = R.pairwise_probs(noisy, recipe._T)
+        acc = p if acc is None else acc + p
+    return acc / sampler.n_latent_samples
 
 
 @dataclass(frozen=True)

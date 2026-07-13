@@ -25,11 +25,13 @@ from clinical_jepa.eval.rung2_contract import (
 )
 from clinical_jepa.eval.oracle_metrics import clopper_pearson_lower, clopper_pearson_upper
 
-RECIPE_BITS = 8               # matched bit budget the U6 controls use (a real recipe supplies its own)
-
-
 def _seed(*p: str) -> int:
     return int.from_bytes(hashlib.sha256("|".join(p).encode()).digest()[:4], "big")
+
+
+def _control_bits(recipe) -> int:
+    """The matched bit budget the U6 controls use — taken from the REGISTERED recipe, not hard-coded."""
+    return int(recipe.spec().bit_accounting.get("control_bits", 8))
 
 
 KAPPA_CERTIFY = max(KAPPA_HELDOUT_ENDPOINTS)      # the strong endpoint that must PASS the practical gates
@@ -85,7 +87,10 @@ class UnlockEvaluation:
 
 # ---- per-predictor briers on a cell ----
 def _recipe_briers(recipe, cell):
-    return R.briers_vs_r0(recipe.predict_scores(cell), cell, temperature=recipe._T)
+    # decode via the recipe's REGISTERED stochastic sampler (exercises sampling end-to-end).
+    from clinical_jepa.eval.oracle_meta_recipe import sampled_pairwise_probs
+    probs = sampled_pairwise_probs(recipe, cell, seed=_seed("sample", cell.family_id, str(cell.kappa)))
+    return R.briers_from_probs(probs, cell)
 
 
 def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger, seed: int) -> CellUnlock:
@@ -103,11 +108,12 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
                                     base_seed=_seed("rb", family_id, str(kappa)), alpha=a)
     if rb_r0[1] < ORACLE_R_BAYES_MARGIN:                     # hidden null: excluded before scoring
         return CellUnlock(family_id, kappa, role, "HIDDEN_NULL", {}, multiset_cluster_counts(cell))
-    # recipe + comparators
+    # recipe + comparators (U6 controls use the recipe's REGISTERED matched control bits)
+    bits = _control_bits(recipe)
     b_rec = _recipe_briers(recipe, cell)
     b_nuis = R.briers_vs_r0(R.r_nuis_scores(cell), cell)
-    b_me = R.briers_vs_r0(R.mean_embed_quantized_scores(cell, RECIPE_BITS), cell)
-    b_rc = R.briers_vs_r0(R.random_codebook_scores(cell, RECIPE_BITS, _seed("rc", family_id, str(kappa))), cell)
+    b_me = R.briers_vs_r0(R.mean_embed_quantized_scores(cell, bits), cell)
+    b_rc = R.briers_vs_r0(R.random_codebook_scores(cell, bits, _seed("rc", family_id, str(kappa))), cell)
     b0, npair = b_rec[1], b_rec[2]
 
     def contrast(comp_briers, tag):
@@ -126,9 +132,11 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
     nuis_leak_skill = 1.0 - bl_nuis[0].sum() / max(1e-9, bl_nuis[1].sum())
     # U6 random-codebook control must pass null / fail positive
     rc_pos_skill = 1.0 - b_rc[0].sum() / max(1e-9, b_rc[1].sum())
-    # E-O2 calibration vs context-Bayes
-    slope, intercept = R.e_o2_calibration(R.pairwise_probs(recipe.predict_scores(cell), recipe._T),
-                                          R.pairwise_probs(R.r_bayes_scores(cell), 1.0), cell.true_order)
+    # E-O2 calibration vs context-Bayes (recipe probs from the same sampled decode path)
+    from clinical_jepa.eval.oracle_meta_recipe import sampled_pairwise_probs
+    rec_probs = sampled_pairwise_probs(recipe, cell, seed=_seed("sample", family_id, str(kappa)))
+    slope, intercept = R.e_o2_calibration(rec_probs, R.pairwise_probs(R.r_bayes_scores(cell), 1.0),
+                                          cell.true_order)
     lo, hi = ORACLE_CALIB_SLOPE_BAND
     checks = {
         "recipe_minus_R0": (r0_lo, r0_lo >= ORACLE_EO1_SKILL_GATE),

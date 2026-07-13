@@ -37,10 +37,16 @@ def _split_assignment(seed_tag: str) -> SplitAssignment:
 
 
 def certify_recipe(recipe_factory: Callable, *, seed: int = 0,
-                   registry: REG.OracleRegistry | None = None) -> VerdictRecord:
-    """Full registry-integrated candidate certification of a fit-once recipe."""
+                   registry: REG.OracleRegistry | None = None,
+                   presented_sampler_fingerprint: str | None = None) -> VerdictRecord:
+    """Full registry-integrated candidate certification of a fit-once recipe. If a sampler fingerprint
+    is presented, it MUST match the recipe's registered sampler (a mismatch is refused)."""
+    from clinical_jepa.eval.oracle_meta_recipe import sampler_fingerprint
     reg = registry or REG.OracleRegistry()
     recipe = recipe_factory()
+    registered_fp = sampler_fingerprint(recipe)
+    if presented_sampler_fingerprint is not None and presented_sampler_fingerprint != registered_fp:
+        raise RuntimeError("sampler fingerprint mismatch — refusing to score with a non-registered sampler")
     rh = reg.register(recipe.spec())                              # identity recomputed by the registry
     reg.assign(rh, _split_assignment(str(seed)))                 # registry-owned split + seed ledger
     recipe.fit_on_train(seed=seed)                               # fit ONCE on the train assignment
@@ -51,6 +57,8 @@ def certify_recipe(recipe_factory: Callable, *, seed: int = 0,
     identities = {
         "recipe_hash": rh, "artifact_hash": artifact.artifact_hash,
         "mechanism_hash": invariant_hash(), "evaluator_identity": recipe.spec().evaluator_identity,
+        "sampler_fingerprint": registered_fp,
+        "bit_accounting": recipe.spec().bit_accounting,
         "split_assignment_hash": _split_assignment(str(seed)).assignment_hash(),
         "seed_ids": list(_split_assignment(str(seed)).seed_ids),
     }
