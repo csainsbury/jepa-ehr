@@ -43,6 +43,8 @@ STUDENT_T_DF = 4.0
 K_STATES = 6
 GLOBAL_INVARIANT_SEED = 0x0180AC1E
 SHORTCUT_STRENGTH = 2.0   # per-item train-family order leak strength on the item shortcut channel
+ZERO_GAP_RATE = 0.35      # base fraction of adjacent items sharing a timestamp (Δt=0 multiplicity)
+HAWKES_BRANCHING = 0.5    # T_realized_history self-excitation (branching ratio < 1, stable)
 
 # certification κ discipline: fit/dev-select on the TRAIN grid ONLY; held-out endpoints + κmid are OC-only.
 KAPPA_TRAIN_GRID = (0.0, 0.10, 0.30, 0.50, 0.75)
@@ -106,6 +108,7 @@ def invariant_hash() -> str:
         "ctx_noise": CTX_NOISE, "order_noise": ORDER_NOISE, "coupling_scale": COUPLING_SCALE,
         "class_mean_span": CLASS_MEAN_SPAN, "student_t_df": STUDENT_T_DF, "k_states": K_STATES,
         "shortcut_strength": SHORTCUT_STRENGTH, "coupling_norm": round(inv.coupling_norm, 9),
+        "zero_gap_rate": ZERO_GAP_RATE, "hawkes_branching": HAWKES_BRANCHING,
         "kappa_train_grid": KAPPA_TRAIN_GRID, "kappa_heldout": KAPPA_HELDOUT_ENDPOINTS, "kappa_mid": KAPPA_MID,
         "train_families": TRAIN_FAMILIES, "heldout_families": HELDOUT_FAMILIES,
         "multiset_bank": _MULTISET_BANK,
@@ -153,6 +156,9 @@ class MetaCell:
     observed_covariates: np.ndarray | None
     multiset_id: np.ndarray
     future_events: np.ndarray
+    future_timestamps: np.ndarray | None = None    # (N, L) nondecreasing; Δt=0 within a cluster
+    cluster_ids: np.ndarray | None = None          # (N, L) timestamp-cluster index per item
+    multiplicity: np.ndarray | None = None         # (N, L) size of each item's timestamp cluster
     observable_allowlist: tuple[str, ...] = ()
     support_status: str = "SUPPORTED"
 
@@ -166,7 +172,33 @@ class MetaCell:
 
     def future_view(self):
         return future_view({"future_multiset": self.item_classes, "future_events": self.future_events,
-                            "future_timestamps": None})
+                            "future_timestamps": self.future_timestamps})
+
+
+def _marked_timing(family_id: str, driver: np.ndarray, rng: np.random.Generator):
+    """Mechanism-driven marked-cluster timing: adjacent items share a timestamp (Δt=0 multiplicity)
+    with a driver-modulated probability; otherwise a strictly-positive inter-cluster gap whose rate is
+    driven by the family's driver summary (so the driver law measurably shapes timing). T_realized_
+    history adds stable Hawkes-like self-excitation. Returns (timestamps, cluster_ids, multiplicity)."""
+    n = driver.shape[0]
+    summ = driver.mean(axis=1)                                    # family-specific driver summary
+    rate_scale = np.exp(0.4 * (summ - summ.mean())) + 0.2         # >0, driver-modulated inter-cluster rate
+    zero_p = np.clip(ZERO_GAP_RATE + 0.1 * np.tanh(summ), 0.02, 0.9)
+    ts = np.zeros((n, L_ITEMS)); cid = np.zeros((n, L_ITEMS), dtype=int)
+    excite = np.zeros(n)
+    for j in range(1, L_ITEMS):
+        same = rng.random(n) < zero_p                            # Δt=0 (same cluster)
+        gap = rng.exponential(1.0, size=n) * (rate_scale + excite) + 1e-3
+        if family_id == "T_realized_history":
+            excite = HAWKES_BRANCHING * (excite + gap)           # bounded self-excitation (branching<1)
+        step = np.where(same, 0.0, gap)
+        ts[:, j] = ts[:, j - 1] + step
+        cid[:, j] = cid[:, j - 1] + (step > 0).astype(int)
+    mult = np.zeros((n, L_ITEMS), dtype=int)
+    for i in range(n):
+        counts = np.bincount(cid[i])
+        mult[i] = counts[cid[i]]
+    return ts, cid, mult
 
 
 def _repeated_multiset_support_ok(multiset_id: np.ndarray, floor: int) -> bool:
@@ -219,5 +251,8 @@ def generate_meta_cell(family_id: str, kappa: float, nuisance_cell: str, n_seque
         else ("context_features", "item_features")
     status = "SUPPORTED" if (support_floor <= 0 or _repeated_multiset_support_ok(ms_id, support_floor)) \
         else "SUPPORT_STARVED"
+    ts, cid, mult = _marked_timing(family_id, driver, rng)
     return MetaCell(family_id, float(kappa), nuisance_cell, is_null, s, u, driver, x_ctx, item_feats,
-                    classes, covar, ms_id, np.argsort(np.argsort(s, 1), 1), allow, status)
+                    classes, covar, ms_id, np.argsort(np.argsort(s, 1), 1),
+                    future_timestamps=ts, cluster_ids=cid, multiplicity=mult,
+                    observable_allowlist=allow, support_status=status)

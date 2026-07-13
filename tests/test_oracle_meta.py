@@ -111,6 +111,23 @@ class HashTests(unittest.TestCase):
             G.ORDER_NOISE = old
 
 
+class TimingTests(unittest.TestCase):
+    def test_marked_cluster_timing_and_driver_modulation(self) -> None:
+        for fam in ("T_latent_factor", "E_offgrid_heavytail", "T_realized_history"):
+            c = generate_meta_cell(fam, 0.5, "orthogonal", 400, seed=3)
+            self.assertTrue((c.multiplicity > 1).any())              # Δt=0 multiplicity clusters exist
+            dt = np.diff(c.future_timestamps, axis=1)
+            new_cluster = np.diff(c.cluster_ids, axis=1) > 0
+            self.assertTrue((dt[new_cluster] > 0).all())            # inter-cluster gaps strictly positive
+            self.assertTrue((np.abs(dt[~new_cluster]) < 1e-9).all())  # within-cluster Δt = 0
+        # the mechanism measurably shapes timing: the Hawkes history family has larger gaps
+        hist = generate_meta_cell("T_realized_history", 0.5, "orthogonal", 800, seed=4)
+        lat = generate_meta_cell("T_latent_factor", 0.5, "orthogonal", 800, seed=4)
+        hg = np.diff(hist.future_timestamps, 1)[np.diff(hist.cluster_ids, 1) > 0].mean()
+        lg = np.diff(lat.future_timestamps, 1)[np.diff(lat.cluster_ids, 1) > 0].mean()
+        self.assertGreater(hg, lg)
+
+
 class SupportAndNamingTests(unittest.TestCase):
     def test_support_uses_contract_floor(self) -> None:
         ok = generate_meta_cell("T_latent_factor", 0.60, "orthogonal", 4000, seed=5,

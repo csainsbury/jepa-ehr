@@ -12,10 +12,10 @@ def _ecdf(points):
     return tuple((float(s), float(c)) for s, c in points)
 
 
-def _agg(source="SCID", dt0=0.35, counts=(100, 100, 100, 100, 100, 100), occ=0.9,
+def _agg(source="SCID", dt0=0.35, counts=(1000, 1000, 1000, 1000, 1000, 1000), occ=0.9,
          n_seq=2000, n_clu=3000):
-    return AggregateStats(source=source, n_sequences=n_seq, n_events=6000, n_clusters=n_clu,
-                          n_positive_gaps=2500, class_counts=counts, delta_t_zero_fraction=dt0,
+    return AggregateStats(source=source, n_sequences=n_seq, n_events=sum(counts), n_clusters=n_clu,
+                          n_positive_gaps=2500, class_counts=tuple(counts), delta_t_zero_fraction=dt0,
                           length_ecdf=_ecdf([(1, 0.1), (5, 0.5), (10, 0.9), (20, 1.0)]),
                           positive_gap_ecdf=_ecdf([(0.1, 0.2), (1.0, 0.6), (5.0, 1.0)]),
                           count_ecdf=_ecdf([(1, 0.2), (5, 0.7), (15, 1.0)]),
@@ -84,6 +84,63 @@ class FitTests(unittest.TestCase):
         self.assertFalse(r.within_envelope)
         self.assertEqual(r.diagnostics.get("refused"), CAL.NOT_EVALUABLE)
         self.assertEqual(r.fitted_knobs, {})
+
+
+class StrengthenedValidationTests(unittest.TestCase):
+    def test_class_counts_must_reconcile_with_n_events(self) -> None:
+        bad = AggregateStats(source="SCID", n_sequences=2000, n_events=9999, n_clusters=3000,
+                             n_positive_gaps=2500, class_counts=(1000,) * 6, delta_t_zero_fraction=0.3,
+                             length_ecdf=_ecdf([(1, 0.5), (2, 1.0)]),
+                             positive_gap_ecdf=_ecdf([(0.1, 0.5), (1.0, 1.0)]),
+                             count_ecdf=_ecdf([(1, 0.5), (2, 1.0)]), mean_occupancy_fraction=0.9)
+        self.assertFalse(CAL.validate_aggregate_input(bad)[0])       # sum(counts) 6000 != n_events 9999
+
+    def test_malformed_ecdf_refused(self) -> None:
+        non_monotone = _ecdf([(1, 0.6), (2, 0.3), (3, 1.0)])          # cdf decreases
+        self.assertFalse(CAL._ecdf_valid(non_monotone))
+        not_final_1 = _ecdf([(1, 0.2), (2, 0.5)])                     # final mass != 1
+        self.assertFalse(CAL._ecdf_valid(not_final_1))
+        non_increasing_supp = _ecdf([(1, 0.2), (1, 0.6), (2, 1.0)])   # duplicate support
+        self.assertFalse(CAL._ecdf_valid(non_increasing_supp))
+
+    def test_event_and_gap_denominator_floors(self) -> None:
+        low = _agg(counts=(80, 80, 80, 80, 80, 80))                   # n_events 480 < ORACLE_ENV_MIN_DENOM
+        self.assertEqual(CAL.validate_aggregate_input(low)[1], CAL.NOT_EVALUABLE)
+
+    def test_source_mismatch_refused(self) -> None:
+        self.assertFalse(CAL.realism_envelope(_agg(source="SCID"), _agg(source="MIMIC")).within_envelope)
+        r = CAL.fit_calibration(_agg(source="MIMIC"), _agg(source="SCID"))
+        self.assertEqual(r.diagnostics.get("refused"), "source_mismatch")
+
+
+class TimingKnobTests(unittest.TestCase):
+    def test_timing_knobs_actually_move_the_gap_ecdf(self) -> None:
+        base = _agg()
+        slow = CAL._forward_aggregate(base, {"timing_rate_scale": 0.5, "gap_dispersion": 1.0})
+        fast = CAL._forward_aggregate(base, {"timing_rate_scale": 2.0, "gap_dispersion": 1.0})
+        # a smaller rate scale => larger gaps => the gap ECDF support shifts right (not inert).
+        self.assertGreater(slow.positive_gap_ecdf[-1][0], fast.positive_gap_ecdf[-1][0])
+        self.assertNotEqual(slow.positive_gap_ecdf, base.positive_gap_ecdf)
+
+    def test_full_input_hash_covers_ecdfs(self) -> None:
+        base, target = _agg(), _agg(dt0=0.4)
+        h1 = CAL.fit_calibration(target, base).input_hash
+        target2 = _agg(dt0=0.4)
+        # perturb only an ECDF point -> the input hash must change (full canonical input hashed).
+        object.__setattr__(target2, "count_ecdf", _ecdf([(1, 0.3), (5, 0.7), (15, 1.0)]))
+        self.assertNotEqual(h1, CAL.fit_calibration(target2, base).input_hash)
+
+
+class MultiSourceTests(unittest.TestCase):
+    def test_collection_requires_every_source_within_envelope(self) -> None:
+        good = _agg(source="SCID")
+        # SCID matches itself; MIMIC target differs from its base beyond the envelope (occupancy).
+        res = CAL.calibrate_sources(
+            targets={"SCID": _agg(source="SCID"), "MIMIC": _agg(source="MIMIC", occ=0.5)},
+            bases={"SCID": _agg(source="SCID"), "MIMIC": _agg(source="MIMIC", occ=0.9)})
+        self.assertTrue(res.per_source["SCID"].within_envelope)
+        self.assertFalse(res.per_source["MIMIC"].within_envelope)
+        self.assertFalse(res.all_sources_within_envelope)             # conjunction fails
 
 
 if __name__ == "__main__":
