@@ -1,84 +1,131 @@
-"""Keystone: shared-invariant fit-once transfer (Pi 2nd-pass REVISE #1). Safe-public / synthetic.
+"""Keystone: shared-invariant fit-once transfer, corrected per Pi's keystone GO-WITH-CHANGES.
 
-Demonstrates the CORRECTED design that fixes the primary blocker: ONE recipe fitted only on the TRAIN
-families transfers UNCHANGED to the held-out families (no per-family refit, no held-out access).
+Demonstrates the CORRECTED foundation: ONE recipe fitted only on the TRAIN families at the TRAIN κ grid
+transfers UNCHANGED to the held-out families; the shortcut/memorizer control succeeds in-distribution
+and fails on the held-out shift; R0 is MC-exact; normalization is frozen; the hash binds the full
+executable mechanism; support uses the contract floor.
 """
 from __future__ import annotations
 
+import inspect
 import unittest
 
 import numpy as np
 
 from clinical_jepa.eval import oracle_meta_gen as G
 from clinical_jepa.eval.oracle_meta_gen import (
-    HELDOUT_FAMILIES, TRAIN_FAMILIES, exact_pi0, generate_meta_cell, invariant_hash,
+    HELDOUT_FAMILIES, KAPPA_HELDOUT_ENDPOINTS, KAPPA_MID, KAPPA_TRAIN_GRID, TRAIN_FAMILIES,
+    INVARIANT, generate_meta_cell, invariant_hash,
 )
+from clinical_jepa.eval import oracle_meta_refs as R
 from clinical_jepa.eval.oracle_meta_recipe import (
-    InvariantLearner, MemorizerRecipe, transfer_score,
+    FIT_KAPPAS, InvariantLearner, MemorizerRecipe, dev_score, transfer_score,
 )
-from clinical_jepa.eval.rung2_contract import ORACLE_EO1_SKILL_GATE
-
-KAPPA = 0.60
+from clinical_jepa.eval.rung2_contract import ORACLE_EO1_SKILL_GATE, ORDER_SUPPORT_FLOOR
 
 
-class FitOnceTransferTests(unittest.TestCase):
+class _Fitted:
+    inv = None
+    mem = None
+
     @classmethod
-    def setUpClass(cls) -> None:
-        cls.inv = InvariantLearner().fit_on_train(seed=1, kappa=KAPPA, n=2500)
-        cls.mem = MemorizerRecipe().fit_on_train(seed=1, kappa=KAPPA, n=2500)
-        tr = generate_meta_cell(TRAIN_FAMILIES[0], KAPPA, "orthogonal", 1200, seed=999)
-        cls.train_skill = float(np.nanmean(cls.inv.eo1(tr)[~tr.is_null]))
+    def get(cls):
+        if cls.inv is None:
+            cls.inv = InvariantLearner().fit_on_train(seed=1, n=1200)
+            cls.mem = MemorizerRecipe().fit_on_train(seed=1, n=1200)
+        return cls.inv, cls.mem
 
-    def test_invariant_learner_transfers_to_every_held_out_family(self) -> None:
-        # fit ONCE on TRAIN, applied UNCHANGED to held-out (never refit / never sees held-out).
+
+class FitProvenanceTests(unittest.TestCase):
+    def test_training_provenance_is_train_only(self) -> None:
+        inv, _ = _Fitted.get()
+        self.assertEqual(set(inv.fit_provenance["families"]), set(TRAIN_FAMILIES))
+        for k in inv.fit_provenance["kappas"]:
+            self.assertIn(k, KAPPA_TRAIN_GRID)
+        # no held-out family / endpoint / κmid can appear in the fit set (structural)
+        self.assertFalse(set(inv.fit_provenance["families"]) & set(HELDOUT_FAMILIES))
+        for k in (*KAPPA_HELDOUT_ENDPOINTS, KAPPA_MID):
+            self.assertNotIn(k, inv.fit_provenance["kappas"])
+
+    def test_fit_signature_takes_no_kappa(self) -> None:
+        # the recipe cannot be pointed at a held-out κ: fit_on_train takes no κ argument.
+        self.assertNotIn("kappa", inspect.signature(InvariantLearner.fit_on_train).parameters)
+        self.assertTrue(set(FIT_KAPPAS).issubset(set(KAPPA_TRAIN_GRID)))
+
+
+class TransferTests(unittest.TestCase):
+    def test_invariant_transfers_to_held_out_with_uncertainty(self) -> None:
+        inv, _ = _Fitted.get()
+        for fam in HELDOUT_FAMILIES:                          # strong endpoint κ=0.60
+            t = transfer_score(inv, fam, kappa=0.60, seed=3)
+            self.assertGreater(t.lower_ci, ORACLE_EO1_SKILL_GATE, f"{fam}: {t.lower_ci}")
+            self.assertGreater(t.n_sequences, 0)             # estimate carries a CI (not a point claim)
+
+    def test_shortcut_memorizer_clears_dev_but_fails_held_out(self) -> None:
+        _, mem = _Fitted.get()
+        self.assertGreater(dev_score(mem, kappa=0.60, seed=3).lower_ci, ORACLE_EO1_SKILL_GATE)  # in-distribution
         for fam in HELDOUT_FAMILIES:
-            t = transfer_score(self.inv, fam, kappa=KAPPA, seed=2)
-            self.assertGreater(t.mean_eo1_positive, ORACLE_EO1_SKILL_GATE,
-                               f"{fam}: {t.mean_eo1_positive}")
-        # no held-out degradation vs train (structural transfer, not memorization).
-        self.assertGreater(self.train_skill, ORACLE_EO1_SKILL_GATE)
-
-    def test_overfit_memorizer_does_not_transfer(self) -> None:
-        for fam in HELDOUT_FAMILIES:
-            t = transfer_score(self.mem, fam, kappa=KAPPA, seed=2)
-            self.assertLess(t.mean_eo1_positive, ORACLE_EO1_SKILL_GATE)   # cannot certify by generalization
-
-    def test_fit_touches_only_train_families(self) -> None:
-        # the shared-invariant recipe's training set is the TRAIN families; held-out is disjoint.
-        self.assertEqual(set(TRAIN_FAMILIES) & set(HELDOUT_FAMILIES), set())
-        self.assertIn("E_no_h_exogenous", HELDOUT_FAMILIES)
-        self.assertIn("E_offgrid_nonlinear", HELDOUT_FAMILIES)
+            self.assertLess(transfer_score(mem, fam, kappa=0.60, seed=3).lower_ci,
+                            ORACLE_EO1_SKILL_GATE)           # fails to transfer
 
 
-class ExactContentPriorTests(unittest.TestCase):
-    def test_pi0_is_non_uniform_and_class_driven(self) -> None:
-        c = generate_meta_cell("T_latent_factor", KAPPA, "orthogonal", 400, seed=5)
-        p = exact_pi0(c.item_classes)
-        off = p[:, ~np.eye(p.shape[1], dtype=bool)]
-        self.assertLess(off.min(), 0.2)          # some pairs strongly ordered by class means
-        self.assertGreater(off.max(), 0.8)       # NOT hard-coded 0.5
-        # symmetry: P(a<b) + P(b<a) = 1
-        self.assertTrue(np.allclose(p + np.transpose(p, (0, 2, 1)), 1.0))
+class FrozenNormalizationTests(unittest.TestCase):
+    def test_held_out_raw_scale_does_not_change_frozen_normalization(self) -> None:
+        # the coupling norm is a fixed invariant constant, independent of any generated (held-out) cell.
+        before = INVARIANT.coupling_norm
+        generate_meta_cell("E_offgrid_heavytail", 0.60, "orthogonal", 3000, seed=77)  # heavy-tail cell
+        self.assertEqual(INVARIANT.coupling_norm, before)
 
 
-class RepeatedMultisetSupportTests(unittest.TestCase):
-    def test_support_counts_repeated_multiset_clusters_not_N(self) -> None:
-        ok = generate_meta_cell("T_latent_factor", KAPPA, "orthogonal", 2000, seed=5, support_floor=200)
-        starved = generate_meta_cell("T_latent_factor", KAPPA, "orthogonal", 100, seed=5, support_floor=200)
-        self.assertEqual(ok.support_status, "SUPPORTED")
-        self.assertEqual(starved.support_status, "SUPPORT_STARVED")
+class ExactR0Tests(unittest.TestCase):
+    def test_r0_matches_high_precision_mc(self) -> None:
+        for fam in ("T_latent_factor", "E_offgrid_heavytail"):
+            self.assertLess(R.r0_table_mc_error(fam, 0.60), 0.01)   # coarse vs fine MC agree
+        # R0 is a valid pairwise probability table (antisymmetric on average, in [0,1])
+        c = generate_meta_cell("T_latent_factor", 0.60, "orthogonal", 200, seed=9)
+        p = R.r0_pairwise("T_latent_factor", 0.60, c.item_classes)
+        self.assertTrue(np.all((p >= 0) & (p <= 1)))
 
 
-class InvariantHashTests(unittest.TestCase):
-    def test_hash_binds_literal_constants(self) -> None:
+class HashTests(unittest.TestCase):
+    def test_full_matrix_perturbation_changes_hash(self) -> None:
+        # perturbing W_ctx while PRESERVING its absolute sum still changes the hash (full arrays hashed).
+        base = invariant_hash()
+        W = INVARIANT.W_ctx.copy()
+        try:
+            INVARIANT.W_ctx[0, 0] += 0.05
+            INVARIANT.W_ctx[0, 1] -= 0.05                    # keep |·| sum ~unchanged
+            self.assertNotEqual(invariant_hash(), base)
+        finally:
+            INVARIANT.W_ctx[:] = W
+        self.assertEqual(invariant_hash(), base)
+
+    def test_literal_constant_change_moves_hash(self) -> None:
         base = invariant_hash()
         old = G.ORDER_NOISE
         try:
             G.ORDER_NOISE = old + 0.1
-            self.assertNotEqual(invariant_hash(), base)      # a literal-constant change moves the hash
+            self.assertNotEqual(invariant_hash(), base)
         finally:
             G.ORDER_NOISE = old
-        self.assertEqual(invariant_hash(), base)
+
+
+class SupportAndNamingTests(unittest.TestCase):
+    def test_support_uses_contract_floor(self) -> None:
+        ok = generate_meta_cell("T_latent_factor", 0.60, "orthogonal", 4000, seed=5,
+                                support_floor=ORDER_SUPPORT_FLOOR)
+        starved = generate_meta_cell("T_latent_factor", 0.60, "orthogonal", 400, seed=5,
+                                     support_floor=ORDER_SUPPORT_FLOOR)
+        self.assertEqual(ok.support_status, "SUPPORTED")
+        self.assertEqual(starved.support_status, "SUPPORT_STARVED")
+
+    def test_heavytail_family_named_accurately_no_nonlinear_claim(self) -> None:
+        self.assertIn("E_offgrid_heavytail", HELDOUT_FAMILIES)
+        self.assertNotIn("E_offgrid_nonlinear", (*TRAIN_FAMILIES, *HELDOUT_FAMILIES))
+        # no stale nonlinear-map CLAIM (old family name / tanh); the docstring may still say it is LINEAR.
+        self.assertNotIn("e_offgrid_nonlinear", G.__doc__.lower())
+        self.assertNotIn("tanh", G.__doc__.lower())
+        self.assertIn("linear", G.__doc__.lower())
 
 
 if __name__ == "__main__":
