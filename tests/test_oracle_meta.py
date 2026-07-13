@@ -56,16 +56,17 @@ class FitProvenanceTests(unittest.TestCase):
 class TransferTests(unittest.TestCase):
     def test_invariant_transfers_to_held_out_with_uncertainty(self) -> None:
         inv, _ = _Fitted.get()
-        for fam in HELDOUT_FAMILIES:                          # strong endpoint κ=0.60
-            t = transfer_score(inv, fam, kappa=0.60, seed=3)
+        for fam in HELDOUT_FAMILIES:                          # strong endpoint κ=0.60, adequate support
+            t = transfer_score(inv, fam, kappa=0.60, seed=3, n=5000)
             self.assertGreater(t.lower_ci, ORACLE_EO1_SKILL_GATE, f"{fam}: {t.lower_ci}")
             self.assertGreater(t.n_sequences, 0)             # estimate carries a CI (not a point claim)
 
     def test_shortcut_memorizer_clears_dev_but_fails_held_out(self) -> None:
         _, mem = _Fitted.get()
-        self.assertGreater(dev_score(mem, kappa=0.60, seed=3).lower_ci, ORACLE_EO1_SKILL_GATE)  # in-distribution
+        self.assertGreater(dev_score(mem, kappa=0.60, seed=3, n=3000).lower_ci,
+                           ORACLE_EO1_SKILL_GATE)             # in-distribution success
         for fam in HELDOUT_FAMILIES:
-            self.assertLess(transfer_score(mem, fam, kappa=0.60, seed=3).lower_ci,
+            self.assertLess(transfer_score(mem, fam, kappa=0.60, seed=3, n=3000).lower_ci,
                             ORACLE_EO1_SKILL_GATE)           # fails to transfer
 
 

@@ -55,6 +55,16 @@ def _ridge(X, y, lam):
     return np.linalg.solve(X.T @ X + lam * np.eye(X.shape[1]), X.T @ y)
 
 
+def _gauss_target(future_events: np.ndarray) -> np.ndarray:
+    """Map the integer within-sequence rank to a GAUSSIAN-quantile target Φ⁻¹((rank+0.5)/L). This puts
+    the recipe's predicted scores on the same (Gaussian) scale as the context-Bayes reference, so a
+    single decode temperature satisfies E-O2 calibration (slope≈1) AND E-O1 skill — the integer rank
+    target does not (its logit scale mismatches Bayes)."""
+    from scipy.special import ndtri
+    L = future_events.shape[1]
+    return ndtri((future_events + 0.5) / L).reshape(-1)
+
+
 def _pooled_skill(recipe, cell: MetaCell, positives_only=True):
     probs = R.pairwise_probs(recipe.predict_scores(cell), recipe._T)
     r0 = R.r0_pairwise(cell.family_id, cell.kappa, cell.item_classes)
@@ -65,16 +75,18 @@ def _pooled_skill(recipe, cell: MetaCell, positives_only=True):
 
 
 def _calibrate_temperature(recipe, *, seed: int) -> float:
-    """DEV temperature selection on a TRAIN-family DEV cell at a TRAIN-grid κ (never a held-out cell)."""
-    dev = generate_meta_cell(TRAIN_FAMILIES[0], FIT_KAPPAS[-1], "orthogonal", 800, seed=seed + 313131)
-    r0 = R.r0_pairwise(dev.family_id, dev.kappa, dev.item_classes)
-    best_t, best = 1.0, -1e9
+    """DEV temperature selection on a TRAIN-family DEV cell at a TRAIN-grid κ (never a held-out cell).
+    Targets the E-O2 calibration slope ≈ 1 against the context-Bayes reference (which also keeps the
+    recipe's confidence matched to Bayes); this simultaneously satisfies E-O2 and keeps E-O1 skill."""
+    dev = generate_meta_cell(TRAIN_FAMILIES[0], FIT_KAPPAS[-1], "orthogonal", 1500, seed=seed + 313131)
     scores = recipe.predict_scores(dev)
-    for t in (0.3, 0.5, 0.8, 1.2, 1.8, 2.5, 3.5, 5.0):
-        b_rec, b_r0, npair = R.per_sequence_briers(R.pairwise_probs(scores, t), dev.true_order, r0)
-        pt, _, _, _ = R.pooled_eo1_skill(b_rec, b_r0, np.where(~dev.is_null, npair, 0), base_seed=1)
-        if pt > best:
-            best, best_t = pt, t
+    bayes = R.pairwise_probs(R.r_bayes_scores(dev), 1.0)
+    best_t, best_gap = 1.0, 1e9
+    for t in np.linspace(0.4, 3.0, 27):
+        slope, _ = R.e_o2_calibration(R.pairwise_probs(scores, float(t)), bayes, dev.true_order)
+        gap = abs(slope - 1.0)
+        if gap < best_gap:
+            best_gap, best_t = gap, float(t)
     return best_t
 
 
@@ -89,7 +101,7 @@ class InvariantLearner:
             for j, kap in enumerate(FIT_KAPPAS):                 # ... over the TRAIN κ grid ONLY
                 c = generate_meta_cell(fam, kap, "orthogonal", n, seed=seed + 100 * i + 7 * j)
                 Xs.append(_bilinear(c.context_features, _legit_item(c.item_features)))
-                ys.append(c.future_events.reshape(-1).astype(float))
+                ys.append(_gauss_target(c.future_events))
                 self._L = c.true_order.shape[1]
                 fams.add(fam); kaps.add(kap)
         X = np.concatenate(Xs, 0); y = np.concatenate(ys, 0)
@@ -102,6 +114,15 @@ class InvariantLearner:
         X = _bilinear(cell.context_features, _legit_item(cell.item_features))
         return (X @ self._w).reshape(cell.context_features.shape[0], self._L)
 
+    def spec(self):
+        return _recipe_spec("invariant_bilinear_ridge", self._lam)
+
+    def recipe_hash(self) -> str:
+        return self.spec().recipe_hash()
+
+    def artifact(self):
+        return _fitted_artifact(self.recipe_hash(), self._w, self._T)
+
 
 class MemorizerRecipe:
     """Linear recipe over the FULL context (incl the shortcut). Clears the gate on a train-family DEV
@@ -109,23 +130,54 @@ class MemorizerRecipe:
 
     def __init__(self, lam: float = 1.0) -> None:
         self._w = None; self._lam = lam; self._L = None; self._T = 1.0
+        self.fit_provenance: dict = {}
 
     def fit_on_train(self, *, seed: int = 0, n: int = 1200) -> "MemorizerRecipe":
-        Xs, ys = [], []
+        Xs, ys, fams, kaps = [], [], set(), set()
         for i, fam in enumerate(TRAIN_FAMILIES):
             for j, kap in enumerate(FIT_KAPPAS):
                 c = generate_meta_cell(fam, kap, "orthogonal", n, seed=seed + 100 * i + 7 * j)
                 Xs.append(_linear(c.context_features, c.item_features))     # FULL ctx incl shortcut
-                ys.append(c.future_events.reshape(-1).astype(float))
+                ys.append(_gauss_target(c.future_events))
                 self._L = c.true_order.shape[1]
+                fams.add(fam); kaps.add(kap)
         X = np.concatenate(Xs, 0); y = np.concatenate(ys, 0)
         self._w = _ridge(X, y, self._lam)
         self._T = _calibrate_temperature(self, seed=seed)
+        self.fit_provenance = {"families": sorted(fams), "kappas": sorted(kaps)}
         return self
 
     def predict_scores(self, cell: MetaCell) -> np.ndarray:
         X = _linear(cell.context_features, cell.item_features)
         return (X @ self._w).reshape(cell.context_features.shape[0], self._L)
+
+    def spec(self):
+        return _recipe_spec("memorizer_linear_full_ctx", self._lam)
+
+    def recipe_hash(self) -> str:
+        return self.spec().recipe_hash()
+
+    def artifact(self):
+        return _fitted_artifact(self.recipe_hash(), self._w, self._T)
+
+
+def _recipe_spec(architecture: str, lam: float):
+    from clinical_jepa.eval.oracle_contracts import DecoderSamplerSpec, RecipeSpec, SamplerSpec
+    from clinical_jepa.eval.oracle_meta_gen import invariant_hash
+    return RecipeSpec(
+        architecture=architecture, target_encoder="gaussian_rank_quantile",
+        codebook_cfg={"kind": "none"}, losses={"ridge_mse": 1.0}, optimizer="closed_form_ridge",
+        schedule="none", bit_accounting={"target_bits": 8, "control_bits": 8},
+        decode_policy="pairwise_sigmoid_temperature", sampler_spec=SamplerSpec(),
+        decoder_sampler_spec=DecoderSamplerSpec(), split_ids={"train_grid": list(FIT_KAPPAS)},
+        seed_policy="sha256", evaluator_identity="oracle_meta_eval_v4",
+        code_identity=f"{architecture}|lam={lam}|mech={invariant_hash()[:16]}")
+
+
+def _fitted_artifact(recipe_hash: str, w, T: float):
+    from clinical_jepa.eval.oracle_contracts import FittedRecipeArtifact, canonical_hash
+    art = canonical_hash({"w_bytes": np.asarray(w, float).round(8).tobytes().hex(), "T": round(float(T), 6)})
+    return FittedRecipeArtifact(recipe_hash, art, {"T": round(float(T), 6)})
 
 
 @dataclass(frozen=True)

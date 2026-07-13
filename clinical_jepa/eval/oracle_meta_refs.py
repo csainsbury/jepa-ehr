@@ -17,10 +17,69 @@ from functools import lru_cache
 import numpy as np
 
 from clinical_jepa.eval.oracle_meta_gen import (
-    COUPLING_SCALE, INVARIANT, N_CLASSES, ORDER_NOISE, _driver, _raw_coupling,
+    COUPLING_SCALE, D_ITEM, INVARIANT, MetaCell, N_CLASSES, ORDER_NOISE, _driver, _raw_coupling,
 )
 
 EO1_TIE_ATOL = 1e-9
+
+
+# ---- reference / control predictors on a MetaCell (all read only context + item content, no labels) ----
+def r_bayes_scores(cell: MetaCell) -> np.ndarray:
+    """The fair CONTEXT ceiling: recover the driver from context via the analytic posterior map and
+    apply the SHARED coupling to the legitimate item content (the oracle may use mechanism knowledge)."""
+    inv = INVARIANT
+    driver_hat = cell.context_features @ inv.A.T
+    legit = cell.item_features[:, :, :D_ITEM]
+    coup = COUPLING_SCALE * _raw_coupling(driver_hat, inv.M, legit) / inv.coupling_norm
+    return inv.class_means[cell.item_classes] + cell.kappa * coup
+
+
+def r_nuis_scores(cell: MetaCell) -> np.ndarray:
+    """Nuisance-only predictor: rank items by the nuisance channel (eval-only reference, not a recipe)."""
+    return cell.nuisance_u.copy()
+
+
+def _quantize(x: np.ndarray, bits: int) -> np.ndarray:
+    lo, hi = x.min(), x.max()
+    levels = max(2, 2 ** min(int(bits), 16))
+    return np.round((x - lo) / (hi - lo + 1e-9) * (levels - 1)) / (levels - 1)
+
+
+def mean_embed_quantized_scores(cell: MetaCell, bits: int) -> np.ndarray:
+    """U6 control 1: order-blind mean-embed of the legitimate item content, quantized to matched bits."""
+    return _quantize(cell.item_features[:, :, :D_ITEM].mean(axis=2), bits)
+
+
+def random_codebook_scores(cell: MetaCell, bits: int, seed: int) -> np.ndarray:
+    """U6 control 2: a FROZEN random codebook at matched bits assigns each item a random score."""
+    rng = np.random.default_rng(seed)
+    legit = cell.item_features[:, :, :D_ITEM]
+    codebook = rng.standard_normal((max(2, 2 ** min(int(bits), 12)), D_ITEM))
+    idx = np.argmin(((legit[:, :, None, :] - codebook[None, None]) ** 2).sum(-1), axis=2)
+    return codebook[idx] @ rng.standard_normal(D_ITEM)
+
+
+def e_o2_calibration(recipe_probs: np.ndarray, ref_probs: np.ndarray, true_order: np.ndarray):
+    """E-O2: calibration of the recipe's predicted pairwise probabilities against the context-Bayes
+    reference probabilities. Fit p_recipe ≈ slope·p_ref + intercept on eligible pairs (logit space).
+    Returns (slope, intercept)."""
+    n, L, _ = recipe_probs.shape
+    iu, ju = np.triu_indices(L, k=1)
+    xs, ys = [], []
+    for s in range(n):
+        to = true_order[s]
+        elig = np.abs(to[iu] - to[ju]) > EO1_TIE_ATOL
+        if elig.any():
+            xs.append(ref_probs[s, iu, ju][elig])
+            ys.append(recipe_probs[s, iu, ju][elig])
+    if not xs:
+        return 0.0, 0.5
+    x = np.clip(np.concatenate(xs), 1e-4, 1 - 1e-4)
+    y = np.clip(np.concatenate(ys), 1e-4, 1 - 1e-4)
+    lx, ly = np.log(x / (1 - x)), np.log(y / (1 - y))
+    A = np.vstack([lx, np.ones_like(lx)]).T
+    slope, intercept = np.linalg.lstsq(A, ly, rcond=None)[0]
+    return float(slope), float(intercept)
 
 
 def pairwise_probs(scores: np.ndarray, temperature: float = 1.0) -> np.ndarray:
@@ -95,6 +154,35 @@ def pooled_eo1_skill(b_rec: np.ndarray, b_r0: np.ndarray, npair: np.ndarray, *,
     idx = rng.integers(0, n, size=(n_boot, n))
     boot = 1.0 - br[idx].sum(1) / np.maximum(1e-9, b0[idx].sum(1))
     return point, float(np.quantile(boot, alpha / 2)), float(np.quantile(boot, 1 - alpha / 2)), n
+
+
+def paired_skill_contrast(b_target: np.ndarray, b_comparator: np.ndarray, b_r0: np.ndarray,
+                          npair: np.ndarray, *, n_boot: int = 1000, base_seed: int = 0,
+                          alpha: float = 0.05):
+    """PAIRED skill contrast (target − comparator), both relative to R0, over the SAME resampled
+    sequences: contrast = (Σ Brier_comparator − Σ Brier_target) / Σ Brier_R0. Returns (point, lower_ci).
+    For recipe−R0 pass b_comparator = b_r0 (=> the recipe's own skill)."""
+    keep = npair > 0
+    bt, bc, b0 = b_target[keep], b_comparator[keep], b_r0[keep]
+    n = bt.shape[0]
+    if n == 0 or b0.sum() <= 0:
+        return 0.0, 0.0
+    point = float((bc.sum() - bt.sum()) / b0.sum())
+    rng = np.random.default_rng(base_seed)
+    idx = rng.integers(0, n, size=(n_boot, n))
+    denom = np.maximum(1e-9, b0[idx].sum(1))
+    boot = (bc[idx].sum(1) - bt[idx].sum(1)) / denom
+    return point, float(np.quantile(boot, alpha))       # one-sided lower bound at alpha
+
+
+def briers_vs_r0(scores: np.ndarray, cell, *, temperature: float = 1.0, positives_only: bool = True) -> tuple:
+    """(brier_per_seq, brier_r0_per_seq, npair) for a predictor's scores on a cell."""
+    probs = pairwise_probs(scores, temperature)
+    r0 = r0_pairwise(cell.family_id, cell.kappa, cell.item_classes)
+    b_rec, b_r0, npair = per_sequence_briers(probs, cell.true_order, r0)
+    if positives_only:
+        npair = np.where(~cell.is_null, npair, 0)
+    return b_rec, b_r0, npair
 
 
 def per_sequence_eo1(probs: np.ndarray, true_order: np.ndarray, class_ids: np.ndarray, *,
