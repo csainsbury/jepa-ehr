@@ -58,61 +58,96 @@ def _logistic_fit(X: np.ndarray, y: np.ndarray, *, l2: float = 1.0, iters: int =
     return w
 
 
-def _pair_dataset(cell: MetaCell, feats: np.ndarray, rng, max_pairs: int) -> tuple:
-    """Within-sequence precedence pairs on POSITIVE sequences: X = φ_i − φ_j, y = 1[item i precedes j]."""
-    pos = np.nonzero(~cell.is_null)[0]
-    L = cell.true_order.shape[1]
+def _pairs_from(feats: np.ndarray, ranks: np.ndarray, rng, max_pairs: int) -> tuple:
+    """Within-sequence precedence pairs: X = φ_i − φ_j, y = 1[item i precedes j] (rank_i < rank_j)."""
+    n, L = ranks.shape
     iu, ju = np.triu_indices(L, k=1)
-    Xs, ys = [], []
-    for s in pos:
-        to = cell.true_order[s]
-        y = (to[iu] < to[ju]).astype(float)                              # i precedes j
-        d = feats[s, iu] - feats[s, ju]
-        Xs.append(d); ys.append(y)
-    X = np.concatenate(Xs, 0); Y = np.concatenate(ys, 0)
-    if X.shape[0] > max_pairs:
-        idx = rng.choice(X.shape[0], size=max_pairs, replace=False)
-        X, Y = X[idx], Y[idx]
-    return X, Y
+    y = (ranks[:, iu] < ranks[:, ju]).astype(float).reshape(-1)
+    d = (feats[:, iu] - feats[:, ju]).reshape(n * len(iu), -1)
+    if d.shape[0] > max_pairs:
+        idx = rng.choice(d.shape[0], size=max_pairs, replace=False)
+        d, y = d[idx], y[idx]
+    return d, y
+
+
+class RegistryDataLoader:
+    """Registry-OWNED training data source (Pi #1). Given a SplitAssignment it yields ONLY capability
+    views (context + future) for the TRAIN families over the TRAIN κ grid, and records the EXTERNAL
+    access trace. Contamination refusal reads this trace, NOT recipe-reported metadata; a recipe that
+    fits only from this loader cannot read a held-out family / κ."""
+
+    def __init__(self, assignment, *, seed: int, n: int = 1200) -> None:
+        self.assignment = assignment
+        self._seed = seed
+        self._n = n
+        self._accessed: list[tuple[str, float]] = []
+
+    def train_iter(self):
+        for i, fam in enumerate(self.assignment.train):
+            for j, kap in enumerate(FIT_KAPPAS):
+                self._accessed.append((fam, float(kap)))
+                c = generate_meta_cell(fam, kap, "orthogonal", self._n, seed=self._seed + 100 * i + 7 * j,
+                                       null_weight=0.0)                   # clean positive training order
+                yield c.context_view(), c.future_view()
+
+    def dev_cell(self) -> MetaCell:
+        fam, kap = self.assignment.train[0], FIT_KAPPAS[-1]
+        self._accessed.append((fam, float(kap)))
+        return generate_meta_cell(fam, kap, "orthogonal", 1500, seed=self._seed + 313131, null_weight=0.0)
+
+    def access_trace(self) -> dict:
+        return {"families": sorted({f for f, _ in self._accessed}),
+                "kappas": sorted({k for _, k in self._accessed})}
+
+
+def default_loader(*, seed: int, n: int = 1200) -> RegistryDataLoader:
+    from clinical_jepa.eval.oracle_contracts import SplitAssignment
+    a = SplitAssignment(train=TRAIN_FAMILIES, dev=("dev",), sealed_cert=(), family_ids=TRAIN_FAMILIES,
+                        seed_ids=(f"s{seed}",))
+    return RegistryDataLoader(a, seed=seed, n=n)
 
 
 class _Ranker:
-    """Fit-once pairwise-logistic ranker. ``_legit`` restricts the item columns; ``_ctx_interaction``
-    toggles the context⊗item features that carry the GENERALIZABLE order signal."""
-    _legit = True                       # invariant learner uses legitimate item content only
-    _ctx_interaction = True             # ... and the context⊗item interaction (transfers to held-out)
+    """Fit-once pairwise-logistic ranker. Predicts from a ContextView ONLY (no label/family access).
+    ``_legit`` restricts the item columns; ``_ctx_interaction`` toggles the context⊗item features that
+    carry the GENERALIZABLE order signal."""
+    _legit = True
+    _ctx_interaction = True
 
     def __init__(self, l2: float = 1.0) -> None:
         self._w = None; self._l2 = l2; self._L = None; self._T = 1.0
         self.fit_provenance: dict = {}
 
-    def _feats(self, cell: MetaCell) -> np.ndarray:
-        item = _legit_item(cell.item_features) if self._legit else cell.item_features
-        if self._ctx_interaction:
-            return _item_features(cell.context_features, item)            # [item, context⊗item]
-        return item                                                      # item content ONLY (no ctx signal)
+    # ---- capability-enforced feature extraction: reads ONLY allowlisted context channels ----
+    def _feats_from_view(self, context_view) -> np.ndarray:
+        ctx = np.asarray(context_view.get("context_features"), float)     # allowlisted
+        item = np.asarray(context_view.get("item_features"), float)       # allowlisted
+        item = item[:, :, :D_ITEM] if self._legit else item
+        return _item_features(ctx, item) if self._ctx_interaction else item
 
-    def fit_on_train(self, *, seed: int = 0, n: int = 1200, max_pairs: int = 40000):
-        rng = np.random.default_rng(seed + 555)
-        Xs, Ys, fams, kaps = [], [], set(), set()
-        per = max(1, max_pairs // (len(TRAIN_FAMILIES) * len(FIT_KAPPAS)))
-        for i, fam in enumerate(TRAIN_FAMILIES):                          # TRAIN families ...
-            for j, kap in enumerate(FIT_KAPPAS):                          # ... TRAIN κ grid ONLY
-                c = generate_meta_cell(fam, kap, "orthogonal", n, seed=seed + 100 * i + 7 * j)
-                X, Y = _pair_dataset(c, self._feats(c), rng, per)
-                Xs.append(X); Ys.append(Y); fams.add(fam); kaps.add(kap)
-                self._L = c.true_order.shape[1]
+    def fit(self, loader: RegistryDataLoader, *, max_pairs: int = 40000):
+        rng = np.random.default_rng(_stable_seed("fit", str(loader._seed)))
+        views = list(loader.train_iter())
+        per = max(1, max_pairs // max(1, len(views)))
+        Xs, Ys = [], []
+        for cv, fv in views:                                             # (context_view, future_view)
+            feats = self._feats_from_view(cv)
+            ranks = np.asarray(fv.get("future_events"))                  # target-side ordering
+            X, Y = _pairs_from(feats, ranks, rng, per)
+            Xs.append(X); Ys.append(Y); self._L = ranks.shape[1]
         self._w = _logistic_fit(np.concatenate(Xs, 0), np.concatenate(Ys, 0), l2=self._l2)
-        self._T = self._calibrate_temperature(seed=seed)                  # DEV scale to match π* sharpness
-        self.fit_provenance = {"families": sorted(fams), "kappas": sorted(kaps)}
+        self._T = self._calibrate_temperature(loader.dev_cell())
+        self.fit_provenance = loader.access_trace()                      # EXTERNAL trace (not self-reported)
         return self
 
-    def _calibrate_temperature(self, *, seed: int) -> float:
-        """DEV decode-temperature on a TRAIN-family DEV cell at a TRAIN-grid κ (never a held-out cell):
-        the ranker's ordering transfers but its logit SCALE is calibrated to the train-κ sharpness, so a
-        single decode temperature rescales its confidence to the context-Bayes π* (E-O2 slope ≈ 1)."""
-        dev = generate_meta_cell(TRAIN_FAMILIES[0], FIT_KAPPAS[-1], "orthogonal", 1500, seed=seed + 313131)
-        scores = self.predict_scores(dev); bayes = R.r_bayes_probs(dev)
+    def fit_on_train(self, *, seed: int = 0, n: int = 1200, max_pairs: int = 40000):
+        """Convenience: fit through a default registry-owned loader (for tests / standalone use)."""
+        return self.fit(default_loader(seed=seed, n=n), max_pairs=max_pairs)
+
+    def _calibrate_temperature(self, dev: MetaCell) -> float:
+        """DEV decode-temperature on a TRAIN dev cell: rescale the ranker's confidence to the context-
+        Bayes π* (E-O2 slope ≈ 1). Uses dev labels/π* only — a permitted dev-calibration step."""
+        scores = self.predict_from_view(dev.context_view()); bayes = R.r_bayes_probs(dev)
         best_t, best_gap = 1.0, 1e9
         for t in np.linspace(0.25, 2.0, 36):
             slope, _ = R.e_o2_calibration(R.pairwise_probs(scores, float(t)), bayes, dev.true_order)
@@ -120,10 +155,12 @@ class _Ranker:
                 best_gap, best_t = abs(slope - 1.0), float(t)
         return best_t
 
-    def predict_scores(self, cell: MetaCell) -> np.ndarray:
-        # ranker score f_k with sigmoid(f_i−f_j)=P(i≺j); NEGATE so the decode convention (higher score
-        # = LATER) holds: pairwise_probs(−f) = sigmoid((−f_j)−(−f_i)) = sigmoid(f_i−f_j) = P(i≺j).
-        return -(self._feats(cell) @ self._w)                            # (N, L)
+    def predict_from_view(self, context_view) -> np.ndarray:
+        """The ONLY prediction entry point — a ContextView, never a MetaCell. Negated so higher = later."""
+        return -(self._feats_from_view(context_view) @ self._w)          # (N, L)
+
+    def predict_scores(self, cell: MetaCell) -> np.ndarray:              # internal helper: builds the view
+        return self.predict_from_view(cell.context_view())
 
     def recipe_hash(self) -> str:
         return self.spec().recipe_hash()
@@ -147,6 +184,17 @@ class MemorizerRecipe(_Ranker):
     _ctx_interaction = False
     def spec(self):
         return _recipe_spec("memorizer_shortcut_ranker", self._l2)
+
+
+class LabelPeekingRecipe(InvariantLearner):
+    """A recipe that CHEATS by reaching for the eval label through the ContextView. The capability view
+    DENIES it (CapabilityError) — the boundary is physical, not a convention (Pi #1 deny-test)."""
+    def spec(self):
+        return _recipe_spec("label_peeking_recipe", self._l2)
+
+    def predict_from_view(self, context_view) -> np.ndarray:
+        context_view.get("true_order")                                   # DENIED -> CapabilityError
+        return super().predict_from_view(context_view)
 
 
 def _pooled_skill(recipe, cell: MetaCell, positives_only=True):
@@ -197,7 +245,7 @@ def sampled_pairwise_probs(recipe, cell, *, seed: int) -> np.ndarray:
     perturbations (common-random-number seed derivation), decode each, and aggregate the pairwise
     probabilities. Deterministic given ``seed`` (reproducibility is asserted end-to-end)."""
     sampler = recipe.spec().sampler_spec
-    scores = recipe.predict_scores(cell)
+    scores = recipe.predict_from_view(cell.context_view())              # ContextView ONLY — no labels
     if sampler.n_latent_samples <= 1:
         return R.pairwise_probs(scores, recipe._T)
     rng = np.random.default_rng(seed)

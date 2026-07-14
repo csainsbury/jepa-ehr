@@ -19,52 +19,80 @@ from clinical_jepa.eval.oracle_unlock import (
 )
 
 
+from clinical_jepa.eval.oracle_meta_gen import KAPPA_TRAIN_GRID
+
+NO_CALIBRATION = ""            # empty => registry authorization_ready() is False (Pi #9: no real calibration)
+
+
 @dataclass(frozen=True)
 class VerdictRecord:
     verdict: CandidateVerdict
     recipe_hash: str
     artifact_hash: str
     registry_outcome: str            # CERTIFIED | REFUTED (registry state)
-    authorization_ready: bool        # synthetic-recovery readiness ONLY (never governed T4)
+    synthetic_registry_complete: bool  # outcome CERTIFIED + seeds retired + identities (NOT gov auth)
+    authorization_ready: bool        # requires a REAL approved calibration hash -> False in this stage
 
 
 def _split_assignment(seed_tag: str) -> SplitAssignment:
-    """Registry-OWNED assignment: train/held-out family membership, disjoint, with unique seed IDs."""
+    """Registry-OWNED assignment: train/held-out family membership, disjoint, with UNIQUE seed IDs."""
     seeds = tuple(f"seed::{seed_tag}::{i}" for i in range(4))
     return SplitAssignment(train=TRAIN_FAMILIES, dev=("dev::" + TRAIN_FAMILIES[0],),
                            sealed_cert=HELDOUT_FAMILIES, family_ids=(*TRAIN_FAMILIES, *HELDOUT_FAMILIES),
                            seed_ids=seeds)
 
 
+def _validate_assignment(a: SplitAssignment) -> None:
+    if len(set(a.seed_ids)) != len(a.seed_ids):
+        raise RuntimeError("duplicate seed IDs within the assignment")
+    if set(a.train) & set(a.sealed_cert):
+        raise RuntimeError("train / held-out (sealed_cert) families are not disjoint")
+    if not (set(a.train) <= set(a.family_ids) and set(a.sealed_cert) <= set(a.family_ids)):
+        raise RuntimeError("assignment train/held-out not covered by family_ids")
+
+
 def certify_recipe(recipe_factory: Callable, *, seed: int = 0,
                    registry: REG.OracleRegistry | None = None,
                    presented_sampler_fingerprint: str | None = None) -> VerdictRecord:
-    """Full registry-integrated candidate certification of a fit-once recipe. If a sampler fingerprint
-    is presented, it MUST match the recipe's registered sampler (a mismatch is refused)."""
-    from clinical_jepa.eval.oracle_meta_recipe import sampler_fingerprint
+    """Full registry-integrated candidate certification. The recipe fits ONLY from a registry-owned
+    data loader; contamination is refused from that loader's EXTERNAL access trace (not recipe-reported
+    metadata). A capability violation (label read) or sampler mismatch is refused."""
+    from clinical_jepa.eval.oracle_contracts import CapabilityError
+    from clinical_jepa.eval.oracle_meta_recipe import RegistryDataLoader, sampler_fingerprint
     reg = registry or REG.OracleRegistry()
     recipe = recipe_factory()
     registered_fp = sampler_fingerprint(recipe)
     if presented_sampler_fingerprint is not None and presented_sampler_fingerprint != registered_fp:
         raise RuntimeError("sampler fingerprint mismatch — refusing to score with a non-registered sampler")
-    rh = reg.register(recipe.spec())                              # identity recomputed by the registry
-    reg.assign(rh, _split_assignment(str(seed)))                 # registry-owned split + seed ledger
-    recipe.fit_on_train(seed=seed)                               # fit ONCE on the train assignment
-    # provenance guard: the fit touched only TRAIN families (never held-out).
-    if set(recipe.fit_provenance["families"]) & set(HELDOUT_FAMILIES):
-        raise RuntimeError("recipe fit provenance touched a held-out family")
+    assignment = _split_assignment(str(seed))
+    _validate_assignment(assignment)                             # dup seeds / disjointness (Pi #9)
+    rh = reg.register(recipe.spec())                             # identity recomputed by the registry
+    reg.assign(rh, assignment)                                  # registry-owned split + seed ledger
+    loader = RegistryDataLoader(assignment, seed=seed)          # the ONLY training data source (Pi #1)
+    try:
+        recipe.fit(loader)                                     # fit ONCE via the loader's capability views
+    except CapabilityError:
+        raise RuntimeError("capability violation during fit — recipe reached for a non-context channel")
+    # EXTERNAL contamination guard: the loader's access trace must be train-only (not recipe-reported).
+    tr = loader.access_trace()
+    if set(tr["families"]) & set(HELDOUT_FAMILIES) or not set(tr["kappas"]) <= set(KAPPA_TRAIN_GRID):
+        raise RuntimeError("loader access trace touched a held-out family / non-train κ")
     artifact = recipe.artifact()
     identities = {
         "recipe_hash": rh, "artifact_hash": artifact.artifact_hash,
         "mechanism_hash": invariant_hash(), "evaluator_identity": recipe.spec().evaluator_identity,
-        "sampler_fingerprint": registered_fp,
-        "bit_accounting": recipe.spec().bit_accounting,
-        "split_assignment_hash": _split_assignment(str(seed)).assignment_hash(),
-        "seed_ids": list(_split_assignment(str(seed)).seed_ids),
+        "sampler_fingerprint": registered_fp, "bit_accounting": recipe.spec().bit_accounting,
+        "split_assignment_hash": assignment.assignment_hash(), "seed_ids": list(assignment.seed_ids),
+        "access_trace": tr,
     }
-    unlock = compute_unlock(recipe, seed=seed, identities=identities)
+    try:
+        unlock = compute_unlock(recipe, seed=seed, identities=identities)
+    except CapabilityError:
+        raise RuntimeError("capability violation during scoring — recipe reached for a non-context channel")
     verdict = certify_from_unlock(unlock)
     outcome = REG.OUTCOME_CERTIFIED if verdict.outcome == CERTIFIED_CANDIDATE else REG.OUTCOME_REFUTED
     reg.record_outcome(rh, outcome, artifact, evaluator_identity=identities["evaluator_identity"],
-                       mechanism_hash=identities["mechanism_hash"], calibration_hash="synthetic_no_calibration")
-    return VerdictRecord(verdict, rh, artifact.artifact_hash, outcome, reg.authorization_ready(rh))
+                       mechanism_hash=identities["mechanism_hash"], calibration_hash=NO_CALIBRATION)
+    complete = outcome == REG.OUTCOME_CERTIFIED and all(reg.seed_state(s) == REG.SEED_RETIRED
+                                                        for s in assignment.seed_ids)
+    return VerdictRecord(verdict, rh, artifact.artifact_hash, outcome, complete, reg.authorization_ready(rh))

@@ -41,8 +41,22 @@ class AcceptanceMatrixTests(unittest.TestCase):
         inv, mem = _Runs.get()
         self.assertEqual(inv.registry_outcome, REG.OUTCOME_CERTIFIED)
         self.assertEqual(mem.registry_outcome, REG.OUTCOME_REFUTED)
-        self.assertTrue(inv.authorization_ready)      # synthetic-recovery readiness (NOT governed T4)
-        self.assertFalse(mem.authorization_ready)     # a refuted recipe never authorizes
+        self.assertTrue(inv.synthetic_registry_complete)   # certified + seeds retired + identities
+        self.assertFalse(mem.synthetic_registry_complete)
+        # authorization-ready requires a REAL approved calibration hash -> False in this stage (Pi #9).
+        self.assertFalse(inv.authorization_ready)
+        self.assertFalse(mem.authorization_ready)
+
+    def test_predict_is_capability_restricted(self) -> None:
+        # a recipe that reaches for an eval label through the ContextView is DENIED (physical boundary).
+        from clinical_jepa.eval.oracle_meta_recipe import LabelPeekingRecipe
+        from clinical_jepa.eval.oracle_contracts import CapabilityError
+        from clinical_jepa.eval.oracle_meta_gen import generate_meta_cell
+        cell = generate_meta_cell("E_no_h_exogenous", 0.60, "orthogonal", 50, seed=1)
+        with self.assertRaises(CapabilityError):
+            cell.context_view().get("true_order")                        # label not in the context capability
+        with self.assertRaises(RuntimeError):                            # denied end-to-end
+            V.certify_recipe(lambda: LabelPeekingRecipe(), seed=0)
 
     def test_recipe_and_artifact_identities_are_bound(self) -> None:
         inv, _ = _Runs.get()
@@ -115,19 +129,28 @@ class HiddenNullAndPrecisionTests(unittest.TestCase):
         self.assertTrue(ue.train_family_readiness)
 
 
-class _ContaminatedRecipe(InvariantLearner):
-    """Simulates a recipe that (illegally) touched a held-out family during fit."""
-    def fit_on_train(self, *, seed: int = 0, n: int = 1200):
-        super().fit_on_train(seed=seed, n=n)
-        self.fit_provenance["families"] = sorted(set(self.fit_provenance["families"]) | {"E_no_h_exogenous"})
+class _LyingRecipe(InvariantLearner):
+    """Self-reports a clean provenance but the EXTERNAL loader trace is authoritative — a recipe cannot
+    lie its way past contamination since the loader is the only data source."""
+    def fit(self, loader, *, max_pairs: int = 40000):
+        super().fit(loader, max_pairs=max_pairs)
+        self.fit_provenance = {"families": ["E_no_h_exogenous"], "kappas": [0.60]}  # a LIE (ignored)
         return self
 
 
 class ContaminationAndDeterminismTests(unittest.TestCase):
-    def test_held_out_contamination_is_refused(self) -> None:
-        # a recipe whose fit provenance includes a held-out family is refused before scoring.
-        with self.assertRaises(RuntimeError):
-            V.certify_recipe(lambda: _ContaminatedRecipe(), seed=0)
+    def test_contamination_uses_external_loader_trace_not_self_report(self) -> None:
+        # the registry-owned loader is the ONLY data source; its trace is train-only and authoritative.
+        from clinical_jepa.eval.oracle_meta_recipe import RegistryDataLoader
+        from clinical_jepa.eval.oracle_meta_gen import KAPPA_TRAIN_GRID, HELDOUT_FAMILIES
+        loader = RegistryDataLoader(V._split_assignment("t"), seed=0)
+        list(loader.train_iter()); loader.dev_cell()
+        tr = loader.access_trace()
+        self.assertFalse(set(tr["families"]) & set(HELDOUT_FAMILIES))     # never a held-out family
+        self.assertTrue(set(tr["kappas"]) <= set(KAPPA_TRAIN_GRID))       # never a non-train κ
+        # a recipe that LIES about its provenance still certifies via the (clean) external trace.
+        self.assertEqual(V.certify_recipe(lambda: _LyingRecipe(), seed=0).registry_outcome,
+                         REG.OUTCOME_CERTIFIED)
 
     def test_recipe_and_artifact_hashes_are_deterministic(self) -> None:
         r1 = InvariantLearner().fit_on_train(seed=0)
