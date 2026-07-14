@@ -227,9 +227,39 @@ def _recipe_spec(architecture: str, lam: float):
 
 
 def _fitted_artifact(recipe_hash: str, w, T: float):
+    """Full-byte fitted-parameter identity (Pi #8): exact dtype/shape/contiguous bytes, not rounded."""
     from clinical_jepa.eval.oracle_contracts import FittedRecipeArtifact, canonical_hash
-    art = canonical_hash({"w_bytes": np.asarray(w, float).round(8).tobytes().hex(), "T": round(float(T), 6)})
-    return FittedRecipeArtifact(recipe_hash, art, {"T": round(float(T), 6)})
+    wa = np.ascontiguousarray(w, dtype=np.float64)
+    art = canonical_hash({"w_bytes": wa.tobytes().hex(), "dtype": str(wa.dtype), "shape": list(wa.shape),
+                          "T_bytes": np.float64(T).tobytes().hex()})
+    return FittedRecipeArtifact(recipe_hash, art, {"T": float(T)})
+
+
+def _quantize_latent(scores: np.ndarray, bits: int) -> np.ndarray:
+    """Quantize the per-item latent to a FROZEN ``bits``-level uniform code before decoding (Pi #7): the
+    candidate's information budget is actually bit-limited, matched to the U6 controls' bit budget."""
+    lo, hi = float(scores.min()), float(scores.max())
+    if hi - lo < 1e-12:
+        return scores
+    levels = max(2, 2 ** int(bits))
+    q = np.round((scores - lo) / (hi - lo) * (levels - 1))
+    return lo + q / (levels - 1) * (hi - lo)
+
+
+def sequence_bits(bit_accounting: dict, n_items: int) -> int:
+    """The ONE total-sequence-bit formula: n_items × target_bits (the quantized per-item latent). Both
+    the candidate and the U6 controls are accounted under this same formula (Pi #7)."""
+    return int(n_items) * int(bit_accounting.get("target_bits", 8))
+
+
+def validate_bit_budget(recipe, n_items: int) -> None:
+    """Fail-closed bit-accounting: control_bits must not EXCEED target_bits under the shared formula
+    (the controls cannot be given a larger information budget than the candidate)."""
+    ba = recipe.spec().bit_accounting
+    if int(ba.get("control_bits", 8)) > int(ba.get("target_bits", 8)):
+        raise RuntimeError("bit-budget mismatch: control bits exceed the candidate's target bits")
+    if sequence_bits(ba, n_items) <= 0:
+        raise RuntimeError("non-positive sequence bit budget")
 
 
 def sampler_fingerprint(recipe) -> str:
@@ -245,13 +275,14 @@ def sampled_pairwise_probs(recipe, cell, *, seed: int) -> np.ndarray:
     perturbations (common-random-number seed derivation), decode each, and aggregate the pairwise
     probabilities. Deterministic given ``seed`` (reproducibility is asserted end-to-end)."""
     sampler = recipe.spec().sampler_spec
-    scores = recipe.predict_from_view(cell.context_view())              # ContextView ONLY — no labels
+    bits = int(recipe.spec().bit_accounting.get("target_bits", 8))
+    scores = _quantize_latent(recipe.predict_from_view(cell.context_view()), bits)  # ContextView + bit-limited
     if sampler.n_latent_samples <= 1:
         return R.pairwise_probs(scores, recipe._T)
     rng = np.random.default_rng(seed)
     acc = None
     for _ in range(int(sampler.n_latent_samples)):
-        noisy = scores + sampler.temperature * rng.standard_normal(scores.shape)
+        noisy = _quantize_latent(scores + sampler.temperature * rng.standard_normal(scores.shape), bits)
         p = R.pairwise_probs(noisy, recipe._T)
         acc = p if acc is None else acc + p
     return acc / sampler.n_latent_samples

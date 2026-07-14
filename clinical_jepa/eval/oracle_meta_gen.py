@@ -99,22 +99,34 @@ def _shared_invariant() -> _Invariant:
 INVARIANT = _shared_invariant()
 
 
+def _array_id(a: np.ndarray) -> dict:
+    """Full-byte array identity: exact contiguous bytes + dtype + shape (Pi #8 — not rounded)."""
+    ac = np.ascontiguousarray(a)
+    return {"bytes": ac.tobytes().hex(), "dtype": str(ac.dtype), "shape": list(ac.shape)}
+
+
+def _scalar_id(x: float) -> str:
+    return np.float64(x).tobytes().hex()                     # exact scalar encoding
+
+
 def invariant_hash() -> str:
-    """Hash the FULL executable invariant + every literal constant + code version (Pi #4)."""
+    """Hash the FULL executable invariant + every literal constant + code version (Pi #4/#8) — exact
+    array/scalar BYTES (dtype, shape, contiguous bytes), so any sub-rounding change moves the hash."""
     inv = INVARIANT
     return canonical_hash({
         "version": GENERATOR_VERSION, "seed": GLOBAL_INVARIANT_SEED,
         "D_H": D_H, "D_CTX": D_CTX, "D_ITEM": D_ITEM, "L": L_ITEMS, "N_CLASSES": N_CLASSES,
-        "ctx_noise": CTX_NOISE, "order_noise": ORDER_NOISE, "coupling_scale": COUPLING_SCALE,
-        "class_mean_span": CLASS_MEAN_SPAN, "student_t_df": STUDENT_T_DF, "k_states": K_STATES,
-        "shortcut_strength": SHORTCUT_STRENGTH, "coupling_norm": round(inv.coupling_norm, 9),
-        "zero_gap_rate": ZERO_GAP_RATE, "hawkes_branching": HAWKES_BRANCHING,
-        "kappa_train_grid": KAPPA_TRAIN_GRID, "kappa_heldout": KAPPA_HELDOUT_ENDPOINTS, "kappa_mid": KAPPA_MID,
+        "ctx_noise": _scalar_id(CTX_NOISE), "order_noise": _scalar_id(ORDER_NOISE),
+        "coupling_scale": _scalar_id(COUPLING_SCALE), "class_mean_span": _scalar_id(CLASS_MEAN_SPAN),
+        "student_t_df": _scalar_id(STUDENT_T_DF), "k_states": K_STATES,
+        "shortcut_strength": _scalar_id(SHORTCUT_STRENGTH), "coupling_norm": _scalar_id(inv.coupling_norm),
+        "zero_gap_rate": _scalar_id(ZERO_GAP_RATE), "hawkes_branching": _scalar_id(HAWKES_BRANCHING),
+        "kappa_train_grid": [_scalar_id(k) for k in KAPPA_TRAIN_GRID],
+        "kappa_heldout": [_scalar_id(k) for k in KAPPA_HELDOUT_ENDPOINTS], "kappa_mid": _scalar_id(KAPPA_MID),
         "train_families": TRAIN_FAMILIES, "heldout_families": HELDOUT_FAMILIES,
         "multiset_bank": _MULTISET_BANK,
-        "W_ctx": np.round(inv.W_ctx, 8).tolist(), "M": np.round(inv.M, 8).tolist(),
-        "class_means": np.round(inv.class_means, 8).tolist(),
-        "class_embed": np.round(inv.class_embed, 8).tolist(),
+        "W_ctx": _array_id(inv.W_ctx), "M": _array_id(inv.M),
+        "class_means": _array_id(inv.class_means), "class_embed": _array_id(inv.class_embed),
     })
 
 

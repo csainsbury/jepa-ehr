@@ -58,9 +58,11 @@ def certify_recipe(recipe_factory: Callable, *, seed: int = 0,
     data loader; contamination is refused from that loader's EXTERNAL access trace (not recipe-reported
     metadata). A capability violation (label read) or sampler mismatch is refused."""
     from clinical_jepa.eval.oracle_contracts import CapabilityError
-    from clinical_jepa.eval.oracle_meta_recipe import RegistryDataLoader, sampler_fingerprint
+    from clinical_jepa.eval.oracle_meta_gen import L_ITEMS
+    from clinical_jepa.eval.oracle_meta_recipe import RegistryDataLoader, sampler_fingerprint, validate_bit_budget
     reg = registry or REG.OracleRegistry()
     recipe = recipe_factory()
+    validate_bit_budget(recipe, L_ITEMS)                        # fail-closed bit accounting (Pi #7)
     registered_fp = sampler_fingerprint(recipe)
     if presented_sampler_fingerprint is not None and presented_sampler_fingerprint != registered_fp:
         raise RuntimeError("sampler fingerprint mismatch — refusing to score with a non-registered sampler")

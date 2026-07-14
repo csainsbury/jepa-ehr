@@ -101,6 +101,17 @@ class HashTests(unittest.TestCase):
             INVARIANT.W_ctx[:] = W
         self.assertEqual(invariant_hash(), base)
 
+    def test_sub_rounding_perturbation_moves_hash(self) -> None:
+        # Pi #8: full-byte hash — a change far below any rounding threshold still moves the hash.
+        base = invariant_hash()
+        W = INVARIANT.W_ctx.copy()
+        try:
+            INVARIANT.W_ctx[0, 0] += 1e-11
+            self.assertNotEqual(invariant_hash(), base)
+        finally:
+            INVARIANT.W_ctx[:] = W
+        self.assertEqual(invariant_hash(), base)
+
     def test_literal_constant_change_moves_hash(self) -> None:
         base = invariant_hash()
         old = G.ORDER_NOISE

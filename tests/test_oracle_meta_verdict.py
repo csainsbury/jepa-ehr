@@ -126,6 +126,22 @@ class SamplerAndBitTests(unittest.TestCase):
         self.assertIn("control_bits", r.spec().bit_accounting)
         self.assertIn("target_bits", r.spec().bit_accounting)
 
+    def test_over_budget_control_bits_refused(self) -> None:
+        import dataclasses
+        from clinical_jepa.eval.oracle_meta_recipe import InvariantLearner, validate_bit_budget
+        class _Over(InvariantLearner):
+            def spec(self):
+                return dataclasses.replace(super().spec(),
+                                           bit_accounting={"target_bits": 8, "control_bits": 16})
+        with self.assertRaises(RuntimeError):
+            validate_bit_budget(_Over(), 8)                              # controls can't exceed candidate bits
+
+    def test_full_byte_artifact_hash_sub_rounding(self) -> None:
+        r = InvariantLearner().fit_on_train(seed=0)
+        a1 = r.artifact().artifact_hash
+        r._w[0] += 1e-10                                                 # sub-rounding change
+        self.assertNotEqual(a1, r.artifact().artifact_hash)             # full-byte hash moves
+
 
 class HiddenNullAndPrecisionTests(unittest.TestCase):
     def test_kappa0_is_hidden_null_and_precision_holds(self) -> None:
