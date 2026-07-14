@@ -44,7 +44,8 @@ K_STATES = 6
 GLOBAL_INVARIANT_SEED = 0x0180AC1E
 SHORTCUT_STRENGTH = 2.0   # per-item train-family order leak strength on the item shortcut channel
 ZERO_GAP_RATE = 0.35      # base fraction of adjacent items sharing a timestamp (Δt=0 multiplicity)
-HAWKES_BRANCHING = 0.5    # T_realized_history self-excitation (branching ratio < 1, stable)
+HISTORY_GAP_DECAY = 0.5   # T_realized_history accumulated-prior-gap dependence (bounded, <1) —
+                          # a history-dependent gap process, NOT a self-exciting event intensity
 
 # certification κ discipline: fit/dev-select on the TRAIN grid ONLY; held-out endpoints + κmid are OC-only.
 KAPPA_TRAIN_GRID = (0.0, 0.10, 0.30, 0.50, 0.75)
@@ -120,7 +121,7 @@ def invariant_hash() -> str:
         "coupling_scale": _scalar_id(COUPLING_SCALE), "class_mean_span": _scalar_id(CLASS_MEAN_SPAN),
         "student_t_df": _scalar_id(STUDENT_T_DF), "k_states": K_STATES,
         "shortcut_strength": _scalar_id(SHORTCUT_STRENGTH), "coupling_norm": _scalar_id(inv.coupling_norm),
-        "zero_gap_rate": _scalar_id(ZERO_GAP_RATE), "hawkes_branching": _scalar_id(HAWKES_BRANCHING),
+        "zero_gap_rate": _scalar_id(ZERO_GAP_RATE), "history_gap_decay": _scalar_id(HISTORY_GAP_DECAY),
         "kappa_train_grid": [_scalar_id(k) for k in KAPPA_TRAIN_GRID],
         "kappa_heldout": [_scalar_id(k) for k in KAPPA_HELDOUT_ENDPOINTS], "kappa_mid": _scalar_id(KAPPA_MID),
         "train_families": TRAIN_FAMILIES, "heldout_families": HELDOUT_FAMILIES,
@@ -191,18 +192,19 @@ def _marked_timing(family_id: str, driver: np.ndarray, rng: np.random.Generator)
     """Mechanism-driven marked-cluster timing: adjacent items share a timestamp (Δt=0 multiplicity)
     with a driver-modulated probability; otherwise a strictly-positive inter-cluster gap whose rate is
     driven by the family's driver summary (so the driver law measurably shapes timing). T_realized_
-    history adds stable Hawkes-like self-excitation. Returns (timestamps, cluster_ids, multiplicity)."""
+    history uses a bounded HISTORY-DEPENDENT gap process (accumulated prior gaps), NOT a self-
+    exciting event intensity. Returns (timestamps, cluster_ids, multiplicity)."""
     n = driver.shape[0]
     summ = driver.mean(axis=1)                                    # family-specific driver summary
     rate_scale = np.exp(0.4 * (summ - summ.mean())) + 0.2         # >0, driver-modulated inter-cluster rate
     zero_p = np.clip(ZERO_GAP_RATE + 0.1 * np.tanh(summ), 0.02, 0.9)
     ts = np.zeros((n, L_ITEMS)); cid = np.zeros((n, L_ITEMS), dtype=int)
-    excite = np.zeros(n)
+    hist = np.zeros(n)
     for j in range(1, L_ITEMS):
         same = rng.random(n) < zero_p                            # Δt=0 (same cluster)
-        gap = rng.exponential(1.0, size=n) * (rate_scale + excite) + 1e-3
+        gap = rng.exponential(1.0, size=n) * (rate_scale + hist) + 1e-3
         if family_id == "T_realized_history":
-            excite = HAWKES_BRANCHING * (excite + gap)           # bounded self-excitation (branching<1)
+            hist = HISTORY_GAP_DECAY * (hist + gap)               # bounded history-dependent gap (<1)
         step = np.where(same, 0.0, gap)
         ts[:, j] = ts[:, j - 1] + step
         cid[:, j] = cid[:, j - 1] + (step > 0).astype(int)

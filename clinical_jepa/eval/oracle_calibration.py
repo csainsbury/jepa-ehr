@@ -15,7 +15,8 @@ from typing import Any
 import numpy as np
 
 from clinical_jepa.eval.oracle_contracts import canonical_hash
-from clinical_jepa.eval.oracle_spec import CALIBRATION_SPEC, calibration_hash, oracle_mechanism_hash
+from clinical_jepa.eval.oracle_spec import CALIBRATION_SPEC
+from clinical_jepa.eval.oracle_meta_gen import invariant_hash
 from clinical_jepa.eval.rung2_contract import (
     ORACLE_ENV_DT0_ABS, ORACLE_ENV_KS, ORACLE_ENV_MIN_DENOM, ORACLE_ENV_N_CLASSES,
     ORACLE_ENV_OCCUPANCY_ABS, ORACLE_ENV_TV,
@@ -24,6 +25,23 @@ from clinical_jepa.eval.rung2_contract import (
 # the ONLY knobs calibration may move (Pi: predeclared scale/nuisance knobs; hard bounds from the spec)
 TUNABLE_KNOBS = tuple(CALIBRATION_SPEC["tunable_params"].keys())
 NOT_EVALUABLE = "NOT_EVALUABLE"
+# the FROZEN required source set — calibrate_sources must cover EXACTLY these (Pi #10)
+REQUIRED_SOURCES = ("SCID", "MIMIC")
+# the aggregate fields calibration binds (Pi #10: the calibration schema hash must bind AggregateStats).
+_AGG_FIELDS = ("source", "n_sequences", "n_events", "n_clusters", "n_positive_gaps", "class_counts",
+               "delta_t_zero_fraction", "length_ecdf", "positive_gap_ecdf", "count_ecdf",
+               "mean_occupancy_fraction")
+
+
+def calibration_schema_hash() -> str:
+    """Hash the EXACT calibration schema (Pi #10): aggregate fields, tunable knobs + bounds, the frozen
+    conjunctive-envelope constants, and the required source set. Distinct from the mechanism hash."""
+    return canonical_hash({
+        "agg_fields": _AGG_FIELDS, "tunable": {k: list(v) for k, v in CALIBRATION_SPEC["tunable_params"].items()},
+        "envelope": {"dt0": ORACLE_ENV_DT0_ABS, "ks": ORACLE_ENV_KS, "tv": ORACLE_ENV_TV,
+                     "occ": ORACLE_ENV_OCCUPANCY_ABS, "n_classes": ORACLE_ENV_N_CLASSES,
+                     "min_denom": ORACLE_ENV_MIN_DENOM},
+        "required_sources": REQUIRED_SOURCES})
 
 
 @dataclass(frozen=True)
@@ -194,10 +212,14 @@ def fit_calibration(target: AggregateStats, base: AggregateStats) -> Calibration
     UNCHANGED — calibration provably cannot mutate the mechanism/grids/seeds/evaluator/registry."""
     ok, reason = validate_aggregate_input(target)
     if not ok:
-        return CalibrationResult({}, False, "", str(calibration_hash()), "", oracle_mechanism_hash(),
-                                 {"refused": reason})
+        return CalibrationResult({}, False, "", calibration_schema_hash(), "", invariant_hash(),
+                                 {"refused": "target_" + reason})
+    ok_b, reason_b = validate_aggregate_input(base)              # validate the BASE too (Pi #10)
+    if not ok_b:
+        return CalibrationResult({}, False, "", calibration_schema_hash(), "", invariant_hash(),
+                                 {"refused": "base_" + reason_b})
     if target.source != base.source:
-        return CalibrationResult({}, False, "", str(calibration_hash()), "", oracle_mechanism_hash(),
+        return CalibrationResult({}, False, "", calibration_schema_hash(), "", invariant_hash(),
                                  {"refused": "source_mismatch"})
     # deterministic grid solve of ALL FOUR tunable knobs to match the target marginals.
     knobs = {k: float(np.mean(CALIBRATION_SPEC["tunable_params"][k])) for k in TUNABLE_KNOBS}
@@ -224,8 +246,8 @@ def fit_calibration(target: AggregateStats, base: AggregateStats) -> Calibration
     return CalibrationResult(
         fitted_knobs=fitted_knobs, within_envelope=env.within_envelope,
         input_hash=canonical_hash({"target": _agg_full(target), "base": _agg_full(base)}),  # FULL canonical input
-        spec_hash=str(calibration_hash()), fitted_param_hash=canonical_hash(fitted_knobs),
-        mechanism_hash=oracle_mechanism_hash(),
+        spec_hash=calibration_schema_hash(), fitted_param_hash=canonical_hash(fitted_knobs),
+        mechanism_hash=invariant_hash(),
         diagnostics={"envelope": {k: v for k, (v, _) in env.checks.items()},
                      "class_tv": best_tv, "gap_ks": best_gap},
     )
@@ -246,19 +268,25 @@ def _agg_full(a: AggregateStats) -> dict[str, Any]:
 class CollectionCalibrationResult:
     per_source: dict[str, CalibrationResult]
     all_sources_within_envelope: bool        # multi-source CONJUNCTION: every block must pass
+    source_coverage_ok: bool                 # covers EXACTLY the frozen required source set
     combined_hash: str
+    schema_hash: str
+    mechanism_hash: str
 
 
 def calibrate_sources(targets: dict[str, AggregateStats],
                       bases: dict[str, AggregateStats]) -> CollectionCalibrationResult:
-    """Multi-source conjunctive calibration: fit each source block independently; the collection is
-    accepted ONLY if EVERY source block falls within its own envelope (Pi #8)."""
+    """Multi-source conjunctive calibration over the FROZEN required source set (Pi #10): the collection
+    is accepted ONLY if the targets cover EXACTLY ``REQUIRED_SOURCES`` and EVERY source block falls
+    within its own envelope. Unexpected/missing sources fail coverage."""
+    coverage_ok = set(targets) == set(REQUIRED_SOURCES)
     per = {}
     for src, tgt in targets.items():
         base = bases.get(src)
         per[src] = (fit_calibration(tgt, base) if base is not None
-                    else CalibrationResult({}, False, "", "", "", oracle_mechanism_hash(),
+                    else CalibrationResult({}, False, "", calibration_schema_hash(), "", invariant_hash(),
                                            {"refused": "missing_base_for_source"}))
-    ok = bool(per) and all(r.within_envelope for r in per.values())
-    combined = canonical_hash({s: r.input_hash + r.fitted_param_hash for s, r in per.items()})
-    return CollectionCalibrationResult(per, ok, combined)
+    ok = coverage_ok and bool(per) and all(r.within_envelope for r in per.values())
+    combined = canonical_hash({s: per[s].input_hash + per[s].fitted_param_hash for s in sorted(per)})
+    return CollectionCalibrationResult(per, ok, coverage_ok, combined,
+                                       calibration_schema_hash(), invariant_hash())

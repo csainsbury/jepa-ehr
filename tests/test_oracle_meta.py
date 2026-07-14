@@ -131,7 +131,7 @@ class TimingTests(unittest.TestCase):
             new_cluster = np.diff(c.cluster_ids, axis=1) > 0
             self.assertTrue((dt[new_cluster] > 0).all())            # inter-cluster gaps strictly positive
             self.assertTrue((np.abs(dt[~new_cluster]) < 1e-9).all())  # within-cluster Δt = 0
-        # the mechanism measurably shapes timing: the Hawkes history family has larger gaps
+        # the mechanism measurably shapes timing: the history-dependent-gap family has larger gaps
         hist = generate_meta_cell("T_realized_history", 0.5, "orthogonal", 800, seed=4)
         lat = generate_meta_cell("T_latent_factor", 0.5, "orthogonal", 800, seed=4)
         hg = np.diff(hist.future_timestamps, 1)[np.diff(hist.cluster_ids, 1) > 0].mean()

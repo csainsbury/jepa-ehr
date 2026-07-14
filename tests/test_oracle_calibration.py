@@ -5,7 +5,7 @@ import unittest
 
 from clinical_jepa.eval import oracle_calibration as CAL
 from clinical_jepa.eval.oracle_calibration import AggregateStats
-from clinical_jepa.eval.oracle_spec import oracle_mechanism_hash
+from clinical_jepa.eval.oracle_meta_gen import invariant_hash
 
 
 def _ecdf(points):
@@ -72,17 +72,21 @@ class FitTests(unittest.TestCase):
         self.assertEqual(r1.fitted_param_hash, r2.fitted_param_hash)   # deterministic
         self.assertAlmostEqual(r1.fitted_knobs["zero_gap_bias"], 0.42, places=6)
 
-    def test_calibration_cannot_mutate_the_mechanism(self) -> None:
-        before = oracle_mechanism_hash()
+    def test_calibration_binds_the_canonical_mechanism_identity(self) -> None:
+        # Pi #10: calibration's mechanism hash is the CANONICAL invariant_hash (not the legacy spec).
+        before = invariant_hash()
         r = CAL.fit_calibration(_agg(), _agg())
-        self.assertEqual(r.mechanism_hash, before)      # mechanism hash unchanged by calibration
-        self.assertEqual(oracle_mechanism_hash(), before)
+        self.assertEqual(r.mechanism_hash, before)      # bound to the whole-pass mechanism
+        self.assertEqual(invariant_hash(), before)      # unchanged by calibration
         self.assertNotEqual(r.fitted_param_hash, r.spec_hash)   # separate hashes
+        self.assertEqual(r.spec_hash, CAL.calibration_schema_hash())   # spec_hash = frozen schema
 
-    def test_fit_refuses_invalid_target(self) -> None:
+    def test_fit_refuses_invalid_target_or_base(self) -> None:
         r = CAL.fit_calibration(_agg(n_seq=10), _agg())    # under-supported target
         self.assertFalse(r.within_envelope)
-        self.assertEqual(r.diagnostics.get("refused"), CAL.NOT_EVALUABLE)
+        self.assertEqual(r.diagnostics.get("refused"), "target_" + CAL.NOT_EVALUABLE)
+        rb = CAL.fit_calibration(_agg(), _agg(n_seq=10))   # under-supported BASE (validated too, Pi #10)
+        self.assertEqual(rb.diagnostics.get("refused"), "base_" + CAL.NOT_EVALUABLE)
         self.assertEqual(r.fitted_knobs, {})
 
 
@@ -133,14 +137,27 @@ class TimingKnobTests(unittest.TestCase):
 
 class MultiSourceTests(unittest.TestCase):
     def test_collection_requires_every_source_within_envelope(self) -> None:
-        good = _agg(source="SCID")
         # SCID matches itself; MIMIC target differs from its base beyond the envelope (occupancy).
         res = CAL.calibrate_sources(
             targets={"SCID": _agg(source="SCID"), "MIMIC": _agg(source="MIMIC", occ=0.5)},
             bases={"SCID": _agg(source="SCID"), "MIMIC": _agg(source="MIMIC", occ=0.9)})
+        self.assertTrue(res.source_coverage_ok)                       # covers exactly {SCID, MIMIC}
         self.assertTrue(res.per_source["SCID"].within_envelope)
         self.assertFalse(res.per_source["MIMIC"].within_envelope)
         self.assertFalse(res.all_sources_within_envelope)             # conjunction fails
+        self.assertEqual(res.mechanism_hash, invariant_hash())        # bound to the canonical mechanism
+
+    def test_incomplete_or_extra_source_set_fails_coverage(self) -> None:
+        # missing MIMIC -> coverage fails even though SCID passes its envelope (Pi #10 required source set).
+        res = CAL.calibrate_sources(targets={"SCID": _agg(source="SCID")},
+                                    bases={"SCID": _agg(source="SCID")})
+        self.assertFalse(res.source_coverage_ok)
+        self.assertFalse(res.all_sources_within_envelope)
+        # an UNEXPECTED extra source also fails coverage.
+        res2 = CAL.calibrate_sources(
+            targets={"SCID": _agg(source="SCID"), "MIMIC": _agg(source="MIMIC"), "EXTRA": _agg(source="EXTRA")},
+            bases={"SCID": _agg(source="SCID"), "MIMIC": _agg(source="MIMIC"), "EXTRA": _agg(source="EXTRA")})
+        self.assertFalse(res2.source_coverage_ok)
 
 
 if __name__ == "__main__":
