@@ -87,40 +87,23 @@ def pairwise_probs(scores: np.ndarray, temperature: float = 1.0) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-diff / max(1e-6, temperature)))
 
 
-@lru_cache(maxsize=64)
-def r0_table(family_id: str, kappa: float, n_mc: int = 60000, seed: int = 12345) -> tuple:
-    """P(a≺b | class_a, class_b) for this family/κ by MC over driver-law + item-noise + order-noise.
-    Returns an (N_CLASSES, N_CLASSES) tuple-of-tuples (hashable for caching)."""
-    inv = INVARIANT
-    rng = np.random.default_rng(seed)
-    driver, _ = _driver(family_id, n_mc, rng)                    # (n_mc, D_H) family-law driver
-    tab = np.full((N_CLASSES, N_CLASSES), 0.5)
-    # one item per class per sample; s_c = cm[c] + κ·coupling_c + order noise (shared driver within a draw)
-    cm = inv.class_means
-    items = {}
-    for c in range(N_CLASSES):
-        feat = inv.class_embed[c] + 0.3 * rng.standard_normal((n_mc, inv.class_embed.shape[1]))
-        coup = COUPLING_SCALE * np.einsum("nd,de,ne->n", driver, inv.M, feat) / inv.coupling_norm
-        items[c] = cm[c] + kappa * coup + ORDER_NOISE * rng.standard_normal(n_mc)
-    for a in range(N_CLASSES):
-        for b in range(N_CLASSES):
-            if a != b:
-                tab[a, b] = float(np.mean(items[a] < items[b]))
-    return tuple(map(tuple, tab))
-
-
 def r0_pairwise(family_id: str, kappa: float, class_ids: np.ndarray) -> np.ndarray:
-    """(N, L, L) content-prior P(a≺b) from the (family,κ) class-pair table indexed by item classes."""
-    tab = np.array(r0_table(family_id, float(kappa)))
-    ca = class_ids[:, :, None]; cb = class_ids[:, None, :]
-    return tab[ca, cb]
+    """(N, L, L) EXACT content-prior P(a≺b | classes) — the conditional Bayes reference (oracle_meta_bayes)."""
+    from clinical_jepa.eval.oracle_meta_bayes import r0_pairwise as _exact_r0
+    return _exact_r0(family_id, float(kappa), class_ids)
+
+
+def r_bayes_probs(cell: MetaCell) -> np.ndarray:
+    """(N, L, L) EXACT context-Bayes π*(a≺b | context, content) — the fair ceiling and the E-O2 /
+    hidden-null reference (a proper pairwise probability, NOT a sigmoid of posterior-mean scores)."""
+    from clinical_jepa.eval.oracle_meta_bayes import pi_star_pairwise
+    return pi_star_pairwise(cell, cell.kappa)
 
 
 def r0_table_mc_error(family_id: str, kappa: float) -> float:
-    """Max |coarse-MC − fine-MC| over the class-pair table — the R0-vs-high-precision-MC validation."""
-    coarse = np.array(r0_table(family_id, float(kappa), n_mc=60000, seed=12345))
-    fine = np.array(r0_table(family_id, float(kappa), n_mc=400000, seed=999))
-    return float(np.abs(coarse - fine).max())
+    """R0 vs independent high-precision MC (the conditional-estimand validation, oracle_meta_bayes)."""
+    from clinical_jepa.eval.oracle_meta_bayes import reference_mc_error
+    return reference_mc_error(family_id, float(kappa), which="r0")
 
 
 def per_sequence_briers(probs: np.ndarray, true_order: np.ndarray, r0_probs: np.ndarray):

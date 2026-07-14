@@ -36,7 +36,7 @@ D_ITEM = 5                # 0..D_ITEM-1 legitimate item content; item dim D_ITEM
 L_ITEMS = 8
 N_CLASSES = 6
 CTX_NOISE = 0.2
-ORDER_NOISE = 0.08
+ORDER_NOISE = 0.35
 COUPLING_SCALE = 1.6
 CLASS_MEAN_SPAN = 0.6
 STUDENT_T_DF = 4.0
@@ -91,7 +91,7 @@ def _shared_invariant() -> _Invariant:
     ref = np.random.default_rng(GLOBAL_INVARIANT_SEED + 7)       # FIXED reference draw (not a scored cell)
     d_ref = ref.standard_normal((20000, D_H))
     cls = np.array(_MULTISET_BANK)[ref.integers(0, len(_MULTISET_BANK), 20000)]
-    it_ref = class_embed[cls] + 0.3 * ref.standard_normal((20000, L_ITEMS, D_ITEM))
+    it_ref = class_embed[cls]                                    # EXACT item content (no residual)
     coupling_norm = float(_raw_coupling(d_ref, M, it_ref).std())
     return _Invariant(W, M, class_means, class_embed, A, coupling_norm)
 
@@ -228,17 +228,21 @@ def generate_meta_cell(family_id: str, kappa: float, nuisance_cell: str, n_seque
     classes = np.array(_MULTISET_BANK)[ms_id]
     perm = np.argsort(rng.standard_normal((n, L)), axis=1)
     classes = np.take_along_axis(classes, perm, axis=1)
-    legit_item = inv.class_embed[classes] + 0.3 * rng.standard_normal((n, L, D_ITEM))
+    # EXACT item content: item features ARE the class embedding (no per-item residual). The content the
+    # recipe sees is therefore EXACTLY the class, so R0/π* condition on the complete content channel and
+    # the class-pair reference tables are Bayes-exact (Pi #2).
+    legit_item = inv.class_embed[classes]
     coupling = COUPLING_SCALE * _raw_coupling(driver, inv.M, legit_item) / inv.coupling_norm  # FROZEN scale
     cm = inv.class_means[classes]
     is_null = rng.random(n) < null_weight
     ctx_term = np.where(is_null[:, None], 0.0, kappa * coupling)
     s = cm + ctx_term + ORDER_NOISE * rng.standard_normal((n, L))
-    # PER-ITEM SHORTCUT (item dim D_ITEM): train families leak the item's (rank-centered) order; held-out
-    # families put pure noise there. A recipe that reads it clears in-distribution but fails to transfer.
+    # PER-ITEM PRE-FUTURE SHORTCUT (item dim D_ITEM): a train-stable / held-out-broken spurious channel
+    # built from the (pre-future) coupling — NOT from realized order/rank (Pi #2, label isolation). Train
+    # families leak the coupling; held-out families put pure noise there.
     if is_train_family:
-        rank_c = (np.argsort(np.argsort(s, 1), 1) - (L - 1) / 2.0) / L
-        shortcut = SHORTCUT_STRENGTH * rank_c + 0.3 * rng.standard_normal((n, L))
+        cz = (coupling - coupling.mean(1, keepdims=True)) / (coupling.std(1, keepdims=True) + 1e-9)
+        shortcut = SHORTCUT_STRENGTH * cz + 0.3 * rng.standard_normal((n, L))       # pre-future coupling leak
     else:
         shortcut = rng.standard_normal((n, L))                                      # pure noise on held-out
     item_feats = np.concatenate([legit_item, shortcut[:, :, None]], axis=2)         # (N, L, D_ITEM+1)

@@ -103,7 +103,7 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
     leak = generate_meta_cell(family_id, kappa, "correlated_leak", 4000, seed=seed + 12)
     a = ledger.ci_alpha()
     # reference bracket (computed BEFORE recipe inspection for the hidden-null decision)
-    br_bayes = R.briers_vs_r0(R.r_bayes_scores(cell), cell)
+    br_bayes = R.briers_from_probs(R.r_bayes_probs(cell), cell)
     rb_r0 = R.paired_skill_contrast(br_bayes[0], br_bayes[1], br_bayes[1], br_bayes[2],
                                     base_seed=_seed("rb", family_id, str(kappa)), alpha=a)
     if rb_r0[1] < ORACLE_R_BAYES_MARGIN:                     # hidden null: excluded before scoring
@@ -135,7 +135,7 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
     # E-O2 calibration vs context-Bayes (recipe probs from the same sampled decode path)
     from clinical_jepa.eval.oracle_meta_recipe import sampled_pairwise_probs
     rec_probs = sampled_pairwise_probs(recipe, cell, seed=_seed("sample", family_id, str(kappa)))
-    slope, intercept = R.e_o2_calibration(rec_probs, R.pairwise_probs(R.r_bayes_scores(cell), 1.0),
+    slope, intercept = R.e_o2_calibration(rec_probs, R.r_bayes_probs(cell),
                                           cell.true_order)
     lo, hi = ORACLE_CALIB_SLOPE_BAND
     checks = {
@@ -205,7 +205,7 @@ def _precision_sim(seed: int, n_studies: int = 70, seq: int = 400) -> dict:
     eff_pass = 0
     for s in range(n_studies):
         cell = generate_meta_cell(fam, KAPPA_MID, "orthogonal", seq, seed=seed + 24000 + s)
-        b = R.briers_vs_r0(R.r_bayes_scores(cell), cell)
+        b = R.briers_from_probs(R.r_bayes_probs(cell), cell)
         lo = R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + s)[1]
         eff_pass += int(lo >= ORACLE_EO1_SKILL_GATE)
     type_I_up = clopper_pearson_upper(null_fire, n_studies)
@@ -223,7 +223,7 @@ def _readiness(seed: int) -> bool:
     (R_bayes − R0 does not clear the margin). A train-family null failure blocks readiness."""
     for fam in (*TRAIN_FAMILIES, *HELDOUT_FAMILIES):
         cell = generate_meta_cell(fam, 0.0, "orthogonal", 1200, seed=seed + _seed("ready", fam) % 9973)
-        b = R.briers_vs_r0(R.r_bayes_scores(cell), cell)
+        b = R.briers_from_probs(R.r_bayes_probs(cell), cell)
         lo = R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + 1)[1]
         if lo >= ORACLE_R_BAYES_MARGIN:            # a null cell that looks positive => not ready
             return False
