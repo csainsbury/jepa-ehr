@@ -20,9 +20,21 @@ from clinical_jepa.eval.oracle_meta_gen import (
 from clinical_jepa.eval.oracle_meta_ledger import HypothesisLedger, build_ledger
 from clinical_jepa.eval.rung2_contract import (
     ORACLE_CALIB_INTERCEPT_TOL, ORACLE_CALIB_SLOPE_BAND, ORACLE_EO1_SKILL_GATE, ORACLE_FPR_UPPER_CI_MAX,
-    ORACLE_NUIS_ORTHO_FAIL_MAX, ORACLE_NUISANCE_MARGIN, ORACLE_POWER_FLOOR, ORACLE_R_BAYES_MARGIN,
-    ORACLE_U6_BANDWIDTH_MARGIN, ORDER_SUPPORT_FLOOR,
+    ORACLE_MONO_SPEARMAN, ORACLE_N_NULL_SEEDS, ORACLE_N_POS_SEEDS, ORACLE_NUIS_ORTHO_FAIL_MAX,
+    ORACLE_NUISANCE_MARGIN, ORACLE_POWER_FLOOR, ORACLE_PRECISION_COVERAGE, ORACLE_PRECISION_N_STUDIES,
+    ORACLE_R_BAYES_MARGIN, ORACLE_U6_BANDWIDTH_MARGIN, ORDER_SUPPORT_FLOOR,
 )
+
+# frozen monotonicity grid (U3) + disjoint positive MDE grid (#5); hashed via the ledger identity.
+MONO_KAPPAS = tuple(sorted({*KAPPA_HELDOUT_ENDPOINTS, KAPPA_MID}))
+MDE_KAPPAS = (0.05, 0.10, 0.20, 0.35, 0.60)
+
+
+def _spearman(x: np.ndarray, y: np.ndarray) -> float:
+    xr = np.argsort(np.argsort(x)).astype(float); yr = np.argsort(np.argsort(y)).astype(float)
+    xr -= xr.mean(); yr -= yr.mean()
+    d = np.sqrt((xr ** 2).sum() * (yr ** 2).sum())
+    return float((xr @ yr) / d) if d > 0 else 0.0
 from clinical_jepa.eval.oracle_metrics import clopper_pearson_lower, clopper_pearson_upper
 
 def _seed(*p: str) -> int:
@@ -76,8 +88,10 @@ class FamilyUnlock:
 class UnlockEvaluation:
     families: tuple[FamilyUnlock, ...]
     precision: dict[str, Any]
+    power_mde: dict[str, Any]          # reference power curve + MDE (#5)
     ledger_cardinality: int
     ledger_alpha: float
+    ledger_hash: str                   # content hash of the frozen hypothesis ledger (#6)
     train_family_readiness: bool
     identities: dict[str, Any]
     n_evaluable_cells: int
@@ -113,7 +127,9 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
     b_rec = _recipe_briers(recipe, cell)
     b_nuis = R.briers_vs_r0(R.r_nuis_scores(cell), cell)
     b_me = R.briers_vs_r0(R.mean_embed_quantized_scores(cell, bits), cell)
-    b_rc = R.briers_vs_r0(R.random_codebook_scores(cell, bits, _seed("rc", family_id, str(kappa))), cell)
+    rc_scores = R.random_codebook_scores(cell, bits, _seed("rc", family_id, str(kappa)))
+    b_rc = R.briers_vs_r0(rc_scores, cell)                              # positive-restricted
+    b_rc_all = R.briers_vs_r0(rc_scores, cell, positives_only=False)    # incl nulls, for the U6 null-pass
     b0, npair = b_rec[1], b_rec[2]
 
     def contrast(comp_briers, tag):
@@ -124,19 +140,26 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
     nuis_lo = contrast(b_nuis, "nu")
     me_lo = contrast(b_me, "me")
     rc_lo = contrast(b_rc, "rc")
-    # U4 orthogonal R_nuis has no skill (upper-CI failure) + correlated-leak diagnostic
-    nuis_orth_up = R.paired_skill_contrast(b_nuis[1], b_nuis[0], b_nuis[1], b_nuis[2],
-                                           base_seed=_seed("nuup", family_id), alpha=a)  # skill upper via 1-alpha
-    nuis_orth_skill = 1.0 - b_nuis[0].sum() / max(1e-9, b_nuis[1].sum())
+
+    def skill_upper(b, npair_use, tag):                     # UPPER CI of (predictor skill over R0)
+        return -R.paired_skill_contrast(b[1], b[0], b[1], npair_use,
+                                        base_seed=_seed(tag, family_id, str(kappa)), alpha=a)[1]
+
+    # U4: orthogonal R_nuis skill UPPER-CI must be below the fail bound (not the point estimate) +
+    # the correlated-leak diagnostic (R_nuis DOES capture leak in the leak cell).
+    nuis_orth_upper = skill_upper(b_nuis, b_nuis[2], "nuup")
     bl_nuis = R.briers_vs_r0(R.r_nuis_scores(leak), leak)
     nuis_leak_skill = 1.0 - bl_nuis[0].sum() / max(1e-9, bl_nuis[1].sum())
-    # U6 random-codebook control must pass null / fail positive
-    rc_pos_skill = 1.0 - b_rc[0].sum() / max(1e-9, b_rc[1].sum())
-    # E-O2 calibration vs context-Bayes (recipe probs from the same sampled decode path)
+    nuis_orth_skill = 1.0 - b_nuis[0].sum() / max(1e-9, b_nuis[1].sum())
+    # U6: the random-codebook control must PASS NULL (its skill on the NULL sequences ~ 0, upper-CI
+    # below the gate) AND FAIL POSITIVE (its skill on positives upper-CI below the gate).
+    rc_null_np = np.where(cell.is_null, b_rc_all[2], 0)
+    rc_null_upper = skill_upper(b_rc_all, rc_null_np, "rcnull")
+    rc_pos_upper = skill_upper(b_rc, b_rc[2], "rcpos")
+    # E-O2 calibration vs the EXACT context-Bayes π* (same sampled decode path)
     from clinical_jepa.eval.oracle_meta_recipe import sampled_pairwise_probs
     rec_probs = sampled_pairwise_probs(recipe, cell, seed=_seed("sample", family_id, str(kappa)))
-    slope, intercept = R.e_o2_calibration(rec_probs, R.r_bayes_probs(cell),
-                                          cell.true_order)
+    slope, intercept = R.e_o2_calibration(rec_probs, R.r_bayes_probs(cell), cell.true_order)
     lo, hi = ORACLE_CALIB_SLOPE_BAND
     checks = {
         "recipe_minus_R0": (r0_lo, r0_lo >= ORACLE_EO1_SKILL_GATE),
@@ -144,78 +167,111 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
         "recipe_minus_meanembed": (me_lo, me_lo >= ORACLE_U6_BANDWIDTH_MARGIN),
         "recipe_minus_randomcodebook": (rc_lo, rc_lo >= ORACLE_U6_BANDWIDTH_MARGIN),
         "Rbayes_minus_R0": (rb_r0[1], rb_r0[1] >= ORACLE_R_BAYES_MARGIN),
-        "u4_Rnuis_orth_upper_ci": (nuis_orth_skill, nuis_orth_skill < ORACLE_NUIS_ORTHO_FAIL_MAX),
+        "u4_Rnuis_orth_upper_ci": (nuis_orth_upper, nuis_orth_upper < ORACLE_NUIS_ORTHO_FAIL_MAX),
         "u4_leak_diagnostic": (nuis_leak_skill - nuis_orth_skill,
                                nuis_leak_skill > nuis_orth_skill + ORACLE_NUISANCE_MARGIN),
-        "u6_randomcodebook_null_pass": (rc_pos_skill, rc_pos_skill < ORACLE_EO1_SKILL_GATE),
+        "u6_randomcodebook_null_pass": (rc_null_upper, rc_null_upper < ORACLE_EO1_SKILL_GATE),
+        "u6_randomcodebook_positive_fail": (rc_pos_upper, rc_pos_upper < ORACLE_EO1_SKILL_GATE),
         "e_o2_calibration": ((slope, intercept),
                              lo <= slope <= hi and abs(intercept) <= ORACLE_CALIB_INTERCEPT_TOL),
     }
     return CellUnlock(family_id, kappa, role, "SUPPORTED", checks, multiset_cluster_counts(cell))
 
 
-def _recipe_null_fpr(recipe, family_id: str, seed: int, n_seeds: int = 60, seq: int = 400) -> tuple:
-    """U2: independent-seed recipe-null FPR at κ=0 (recipe fires if its skill lower-CI > 0). Upper-CI gate."""
+def _recipe_null_fpr(recipe, family_id: str, seed: int, n_seeds: int = ORACLE_N_NULL_SEEDS,
+                     seq: int = 400) -> tuple:
+    """U2: recipe-null FPR at κ=0 over ORACLE_N_NULL_SEEDS INDEPENDENT seeds (recipe fires if skill
+    lower-CI > 0); gate the one-sided 95% UPPER bound."""
     fires = 0
     for s in range(n_seeds):
         cell = generate_meta_cell(family_id, 0.0, "orthogonal", seq, seed=seed + 3000 + s)
         b = _recipe_briers(recipe, cell)
-        lo = R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + s)[1]
-        fires += int(lo > 0.0)
+        fires += int(R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + s)[1] > 0.0)
     upper = clopper_pearson_upper(fires, n_seeds)
     return upper, upper <= ORACLE_FPR_UPPER_CI_MAX
 
 
-def _kmid_power(recipe, family_id: str, seed: int, n_seeds: int = 50, seq: int = 1200) -> tuple:
-    """U1 power at κmid over INDEPENDENT seeds; exact one-sided lower bound."""
+def _kmid_power(recipe, family_id: str, seed: int, n_seeds: int = ORACLE_N_POS_SEEDS,
+                seq: int = 1200) -> tuple:
+    """U1 power at κmid over ORACLE_N_POS_SEEDS INDEPENDENT seeds; exact one-sided lower bound."""
     passes = 0
     for s in range(n_seeds):
-        cell = generate_meta_cell(family_id, KAPPA_MID, "orthogonal", seq, seed=seed + 6000 + s,
-                                  support_floor=0)
+        cell = generate_meta_cell(family_id, KAPPA_MID, "orthogonal", seq, seed=seed + 6000 + s)
         b = _recipe_briers(recipe, cell)
-        lo = R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + s)[1]
-        passes += int(lo >= ORACLE_EO1_SKILL_GATE)
+        passes += int(R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + s)[1] >= ORACLE_EO1_SKILL_GATE)
     lower = clopper_pearson_lower(passes, n_seeds)
     return lower, lower >= ORACLE_POWER_FLOOR
 
 
-def _monotone(recipe, family_id: str, seed: int) -> tuple:
-    """U3: recipe skill increases from the low to the high held-out endpoint (paired lower-CI > 0)."""
-    lo_k, hi_k = min(KAPPA_HELDOUT_ENDPOINTS), max(KAPPA_HELDOUT_ENDPOINTS)
-    c_lo = generate_meta_cell(family_id, lo_k, "orthogonal", 2000, seed=seed + 71)
-    c_hi = generate_meta_cell(family_id, hi_k, "orthogonal", 2000, seed=seed + 72)
-    b_lo, b_hi = _recipe_briers(recipe, c_lo), _recipe_briers(recipe, c_hi)
-    s_lo = 1.0 - b_lo[0].sum() / max(1e-9, b_lo[1].sum())
-    s_hi = 1.0 - b_hi[0].sum() / max(1e-9, b_hi[1].sum())
-    return s_hi - s_lo, (s_hi - s_lo) > 0.0
+def _monotone(recipe, family_id: str, seed: int, n_boot: int = 1000) -> tuple:
+    """U3: SPEARMAN rank correlation between κ and recipe skill over the frozen monotonicity grid, with a
+    sequence-clustered bootstrap LOWER CI >= ORACLE_MONO_SPEARMAN (not a two-point point difference)."""
+    per_k = []
+    for k in MONO_KAPPAS:
+        c = generate_meta_cell(family_id, k, "orthogonal", 2000, seed=seed + int(round(k * 1000)) + 71)
+        b = _recipe_briers(recipe, c)
+        keep = b[2] > 0
+        per_k.append((b[0][keep], b[1][keep]))
+    ks = np.array(MONO_KAPPAS, float)
+    rng = np.random.default_rng(seed + 7)
+    sp = np.empty(n_boot)
+    for t in range(n_boot):
+        skills = []
+        for br, b0 in per_k:
+            idx = rng.integers(0, br.shape[0], size=br.shape[0])
+            skills.append(1.0 - br[idx].sum() / max(1e-9, b0[idx].sum()))
+        sp[t] = _spearman(ks, np.array(skills))
+    lower = float(np.quantile(sp, 0.05))
+    return lower, lower >= ORACLE_MONO_SPEARMAN
 
 
-def _precision_sim(seed: int, n_studies: int = 70, seq: int = 400) -> dict:
-    """EVALUATOR precision (independent of any recipe): a known-NULL predictor (R0 on κ=0) must not fire
-    and its CI must cover 0 (coverage ≥ 0.95, type-I upper-CI ≤ α); a known-EFFECT predictor (R_bayes on
-    κmid) must fire (power lower-CI ≥ floor). Refuse if the binomial resolution is inadequate."""
+def _precision_sim(seed: int, n_studies: int = ORACLE_PRECISION_N_STUDIES, seq: int = 400) -> dict:
+    """EVALUATOR precision (recipe-independent): the KNOWN-NULL method is the EXACT R0 (true skill 0);
+    the KNOWN-EFFECT method is the EXACT π* (true skill θ* estimated on a large sample). Per study a
+    TWO-SIDED CI is formed; coverage = fraction covering the known truth; type-I = fraction the null CI
+    lower bound exceeds 0; power = fraction the effect CI lower bound clears the gate. Refuse if the MC
+    resolution is inadequate."""
     fam = TRAIN_FAMILIES[0]
-    null_fire, cover = 0, 0
+    # θ*: large-sample true skill of π* over R0 at κmid.
+    big = generate_meta_cell(fam, KAPPA_MID, "orthogonal", 12000, seed=seed + 999)
+    bb = R.briers_from_probs(R.r_bayes_probs(big), big)
+    keep = bb[2] > 0                                                    # POSITIVES only (consistent w/ studies)
+    theta_star = 1.0 - bb[0][keep].sum() / max(1e-9, bb[1][keep].sum())
+    null_fire = null_cover = eff_pass = eff_cover = 0
     for s in range(n_studies):
-        cell = generate_meta_cell(fam, 0.0, "orthogonal", seq, seed=seed + 21000 + s)
-        b = R.briers_vs_r0(np.zeros((seq, cell.item_classes.shape[1])), cell)   # known-NULL (constant) predictor
-        lo = R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + s)[1]
-        null_fire += int(lo > 0.0)
-        cover += int(lo <= 0.0)
-    eff_pass = 0
-    for s in range(n_studies):
-        cell = generate_meta_cell(fam, KAPPA_MID, "orthogonal", seq, seed=seed + 24000 + s)
-        b = R.briers_from_probs(R.r_bayes_probs(cell), cell)
-        lo = R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + s)[1]
-        eff_pass += int(lo >= ORACLE_EO1_SKILL_GATE)
+        cN = generate_meta_cell(fam, 0.0, "orthogonal", seq, seed=seed + 21000 + s)
+        r0 = R.r0_pairwise(cN.family_id, cN.kappa, cN.item_classes)     # known-NULL method = exact R0
+        bN = R.briers_from_probs(r0, cN)
+        _, loN, upN, _ = R.pooled_eo1_skill(bN[0], bN[1], np.where(~cN.is_null, bN[2], 0), base_seed=seed + s)
+        null_fire += int(loN > 0.0); null_cover += int(loN <= 0.0 <= upN)
+        cE = generate_meta_cell(fam, KAPPA_MID, "orthogonal", seq, seed=seed + 24000 + s)
+        bE = R.briers_from_probs(R.r_bayes_probs(cE), cE)              # known-EFFECT method = exact π*
+        _, loE, upE, _ = R.pooled_eo1_skill(bE[0], bE[1], np.where(~cE.is_null, bE[2], 0), base_seed=seed + s)
+        eff_pass += int(loE >= ORACLE_EO1_SKILL_GATE); eff_cover += int(loE <= theta_star <= upE)
     type_I_up = clopper_pearson_upper(null_fire, n_studies)
     power_lo = clopper_pearson_lower(eff_pass, n_studies)
-    coverage = cover / n_studies
+    coverage = min(null_cover, eff_cover) / n_studies                  # worst-case two-sided coverage
     mc_ok = type_I_up - null_fire / n_studies <= max(0.05, 1.0 / n_studies)
-    from clinical_jepa.eval.rung2_contract import ORACLE_PRECISION_COVERAGE
-    passes = mc_ok and type_I_up <= 0.05 and power_lo >= ORACLE_POWER_FLOOR and coverage >= ORACLE_PRECISION_COVERAGE
+    passes = (mc_ok and type_I_up <= 0.05 and power_lo >= ORACLE_POWER_FLOOR
+              and coverage >= ORACLE_PRECISION_COVERAGE)
     return {"type_I_upper": type_I_up, "power_lower": power_lo, "coverage": coverage,
-            "mc_adequate": mc_ok, "passes": passes}
+            "theta_star": theta_star, "mc_adequate": mc_ok, "passes": passes}
+
+
+def _reference_power_curve_mde(seed: int, n_seeds: int = 40, seq: int = 800) -> dict:
+    """Reference (π*) power curve over the frozen disjoint MDE grid + the MDE (smallest grid κ whose
+    π* power lower-bound clears the floor). Evaluator characterization, recipe-independent (#5)."""
+    fam = TRAIN_FAMILIES[0]
+    curve = {}
+    for k in MDE_KAPPAS:
+        p = 0
+        for s in range(n_seeds):
+            c = generate_meta_cell(fam, k, "orthogonal", seq, seed=seed + int(round(k * 1000)) * 97 + s)
+            b = R.briers_from_probs(R.r_bayes_probs(c), c)
+            p += int(R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + s)[1] >= ORACLE_EO1_SKILL_GATE)
+        curve[k] = clopper_pearson_lower(p, n_seeds)
+    mde = next((k for k in sorted(MDE_KAPPAS) if curve[k] >= ORACLE_POWER_FLOOR), None)
+    return {"power_curve": curve, "mde": mde}
 
 
 def _readiness(seed: int) -> bool:
@@ -245,16 +301,26 @@ def compute_unlock(recipe, *, seed: int = 0, identities: dict | None = None) -> 
         families.append(FamilyUnlock(
             fam, _monotone(recipe, fam, seed=seed + 500), _recipe_null_fpr(recipe, fam, seed=seed + 900),
             _kmid_power(recipe, fam, seed=seed + 1300), cells))
+    from clinical_jepa.eval.oracle_meta_ledger import ledger_hash
     return UnlockEvaluation(
         families=tuple(families), precision=_precision_sim(seed=seed + 2000),
+        power_mde=_reference_power_curve_mde(seed=seed + 5000),
         ledger_cardinality=ledger.cardinality(), ledger_alpha=ledger.ci_alpha(),
-        train_family_readiness=_readiness(seed=seed + 40),
+        ledger_hash=ledger_hash(), train_family_readiness=_readiness(seed=seed + 40),
         identities=dict(identities or {}), n_evaluable_cells=n_eval,
         n_hidden_null=n_hidden, n_support_starved=n_starved)
 
 
 CERTIFIED_CANDIDATE = "synthetic_recovery_CERTIFIED_CANDIDATE"
 REFUTED = "REFUTED"
+
+REQUIRED_IDENTITY_KEYS = frozenset({
+    "recipe_hash", "artifact_hash", "mechanism_hash", "evaluator_identity", "sampler_fingerprint",
+    "bit_accounting", "split_assignment_hash", "seed_ids", "access_trace"})
+EXPECTED_CELL_CHECKS = frozenset({
+    "recipe_minus_R0", "recipe_minus_Rnuis_orth", "recipe_minus_meanembed", "recipe_minus_randomcodebook",
+    "Rbayes_minus_R0", "u4_Rnuis_orth_upper_ci", "u4_leak_diagnostic", "u6_randomcodebook_null_pass",
+    "u6_randomcodebook_positive_fail", "e_o2_calibration"})
 
 
 @dataclass(frozen=True)
@@ -267,14 +333,38 @@ class CandidateVerdict:
 
 
 def certify_from_unlock(unlock: UnlockEvaluation) -> CandidateVerdict:
-    """PURE FUNCTION of the UnlockEvaluation. CANDIDATE only — never issues a manifest or populates policy."""
+    """PURE FUNCTION of the UnlockEvaluation. ENFORCES the ledger + identity schema + check/family
+    inventory before any pass (a fabricated UnlockEvaluation cannot certify — Pi #6). CANDIDATE only."""
+    from clinical_jepa.eval.oracle_meta_ledger import build_ledger, ledger_hash
+    led = build_ledger()
+    n = unlock.n_evaluable_cells
+    # (1) frozen ledger identity/cardinality/alpha
+    if (unlock.ledger_hash != ledger_hash() or unlock.ledger_cardinality != led.cardinality()
+            or abs(unlock.ledger_alpha - led.ci_alpha()) > 1e-12):
+        return CandidateVerdict(REFUTED, "ledger_identity_mismatch", n)
+    # (2) required identity schema present + non-empty
+    ids = unlock.identities
+    if not REQUIRED_IDENTITY_KEYS <= set(ids) or any(not ids.get(k) for k in REQUIRED_IDENTITY_KEYS):
+        return CandidateVerdict(REFUTED, "missing_identity_fields", n)
+    # (3) exact held-out family inventory + per-cell check inventory (no unexpected/missing)
+    if {f.family_id for f in unlock.families} != set(HELDOUT_FAMILIES) or \
+            len(unlock.families) != len(HELDOUT_FAMILIES):
+        return CandidateVerdict(REFUTED, "family_inventory_mismatch", n)
+    for f in unlock.families:
+        if {c.kappa for c in f.cells} != set(KAPPA_HELDOUT_ENDPOINTS):
+            return CandidateVerdict(REFUTED, "cell_inventory_mismatch", n)
+        for c in f.cells:
+            if c.evaluable and set(c.checks) != EXPECTED_CELL_CHECKS:
+                return CandidateVerdict(REFUTED, "check_inventory_mismatch", n)
+    # (4) readiness + precision + evaluator MDE detectable + family conjunction
     if not unlock.train_family_readiness:
-        return CandidateVerdict(REFUTED, "train_family_readiness_failed", unlock.n_evaluable_cells)
+        return CandidateVerdict(REFUTED, "train_family_readiness_failed", n)
     if not unlock.precision.get("passes"):
-        return CandidateVerdict(REFUTED, "evaluator_precision_inadequate", unlock.n_evaluable_cells)
-    if unlock.n_evaluable_cells == 0:
+        return CandidateVerdict(REFUTED, "evaluator_precision_inadequate", n)
+    if unlock.power_mde.get("mde") is None:
+        return CandidateVerdict(REFUTED, "evaluator_has_no_detectable_MDE", n)
+    if n == 0:
         return CandidateVerdict(REFUTED, "no_evaluable_cells", 0)
     if not all(f.passed for f in unlock.families):
-        return CandidateVerdict(REFUTED, "held_out_family_conjunction_failed", unlock.n_evaluable_cells)
-    return CandidateVerdict(CERTIFIED_CANDIDATE, "all_evaluable_held_out_cells_and_family_checks_pass",
-                            unlock.n_evaluable_cells)
+        return CandidateVerdict(REFUTED, "held_out_family_conjunction_failed", n)
+    return CandidateVerdict(CERTIFIED_CANDIDATE, "all_evaluable_held_out_cells_and_family_checks_pass", n)

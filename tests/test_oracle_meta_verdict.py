@@ -74,15 +74,35 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(build_ledger().n_ci, led.n_ci)
 
 
+def _valid_identities():
+    from clinical_jepa.eval.oracle_meta_recipe import InvariantLearner, sampler_fingerprint
+    from clinical_jepa.eval.oracle_meta_gen import invariant_hash
+    r = InvariantLearner().fit_on_train(seed=0)
+    return r, {"recipe_hash": r.recipe_hash(), "artifact_hash": r.artifact().artifact_hash,
+               "mechanism_hash": invariant_hash(), "evaluator_identity": r.spec().evaluator_identity,
+               "sampler_fingerprint": sampler_fingerprint(r), "bit_accounting": r.spec().bit_accounting,
+               "split_assignment_hash": "sa", "seed_ids": ["k1"], "access_trace": {"families": ["T_latent_factor"]}}
+
+
 class PureFunctionTests(unittest.TestCase):
     def test_certify_from_unlock_is_deterministic_pure_function(self) -> None:
-        inv, _ = _Runs.get()
-        # re-deriving the verdict from the SAME unlock gives the same outcome (pure function of it).
-        recipe = InvariantLearner().fit_on_train(seed=0)
-        ue = U.compute_unlock(recipe, seed=0)
+        recipe, ids = _valid_identities()
+        ue = U.compute_unlock(recipe, seed=0, identities=ids)
         v1, v2 = U.certify_from_unlock(ue), U.certify_from_unlock(ue)
         self.assertEqual(v1.outcome, v2.outcome)
         self.assertEqual(v1.outcome, U.CERTIFIED_CANDIDATE)
+
+    def test_fabricated_unlock_is_refused(self) -> None:
+        import dataclasses
+        recipe, ids = _valid_identities()
+        ue = U.compute_unlock(recipe, seed=0, identities=ids)
+        self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, ledger_hash="FAKE")).reason,
+                         "ledger_identity_mismatch")
+        self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, identities={})).reason,
+                         "missing_identity_fields")
+        # a ledger-cardinality lie is refused too
+        self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, ledger_cardinality=999)).reason,
+                         "ledger_identity_mismatch")
 
 
 class SamplerAndBitTests(unittest.TestCase):

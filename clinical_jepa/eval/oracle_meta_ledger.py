@@ -23,7 +23,8 @@ CI_ENDPOINTS = (
     "Rbayes_minus_R0",              # hidden-null / reference-bound endpoint
 )
 # per-(family, κ) non-CI checks with their own frozen thresholds (listed for completeness + counting).
-PER_CELL_CHECKS = ("e_o2_calibration", "u6_randomcodebook_null_pass", "u4_Rnuis_orth_upper_ci")
+PER_CELL_CHECKS = ("e_o2_calibration", "u6_randomcodebook_null_pass", "u6_randomcodebook_positive_fail",
+                   "u4_Rnuis_orth_upper_ci", "u4_leak_diagnostic")
 # per-family checks (not per-κ).
 PER_FAMILY_CHECKS = ("u3_monotone", "u2_recipe_null_fpr", "u1_kmid_power")
 
@@ -48,6 +49,16 @@ class HypothesisLedger:
 
     def cardinality(self) -> int:
         return len(self.hypotheses)
+
+
+def ledger_hash() -> str:
+    """Content hash of the frozen hypothesis ledger — pinned in the UnlockEvaluation identities and
+    re-verified by the pure verdict (Pi #6: a fabricated ledger must not certify)."""
+    from clinical_jepa.eval.oracle_contracts import canonical_hash
+    led = build_ledger()
+    return canonical_hash({"n_ci": led.n_ci, "alpha": round(led.bonferroni_alpha, 9),
+                           "hyps": [(h.hid, h.family_id, h.kappa, h.kind, round(h.alpha, 9))
+                                    for h in led.hypotheses]})
 
 
 def build_ledger(families: tuple[str, ...] = HELDOUT_FAMILIES,
