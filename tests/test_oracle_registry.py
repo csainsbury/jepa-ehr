@@ -66,7 +66,7 @@ class RegistryLifecycleTests(unittest.TestCase):
         self.assertEqual(reg.recipe_state(rh), R.RECIPE_ASSIGNED)
         self.assertEqual(reg.seed_state("k1"), R.SEED_ASSIGNED)
         reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh),
-                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c")
+                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
         self.assertEqual(reg.recipe_state(rh), R.RECIPE_EVALUATED)
         self.assertEqual(reg.recipe_outcome(rh), R.OUTCOME_CERTIFIED)
         self.assertEqual(reg.seed_state("k1"), R.SEED_RETIRED)   # seeds spent
@@ -77,9 +77,22 @@ class RegistryLifecycleTests(unittest.TestCase):
         rh = reg.register(_spec())
         reg.assign(rh, _assign())
         reg.record_outcome(rh, R.OUTCOME_REFUTED, _artifact(rh),
-                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c")
+                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
         self.assertEqual(reg.seed_state("k1"), R.SEED_RETIRED)   # spent pass OR fail
         self.assertFalse(reg.authorization_ready(rh))            # refuted never authorizes
+
+    def test_unlock_payload_hash_is_persisted_and_required(self) -> None:
+        # Pi hardening #1: the outcome is only meaningful with the evidence hash it was computed from.
+        reg = R.OracleRegistry()
+        rh = reg.register(_spec())
+        reg.assign(rh, _assign())
+        with self.assertRaises(R.RegistryError):                 # empty payload hash refused
+            reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh), evaluator_identity="e",
+                               mechanism_hash="m", calibration_hash="c", unlock_payload_hash="")
+        reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh), evaluator_identity="e",
+                           mechanism_hash="m", calibration_hash="c", unlock_payload_hash="payload-abc")
+        self.assertEqual(reg.unlock_payload_hash(rh), "payload-abc")   # persisted in the RECORD
+        self.assertTrue(reg.authorization_ready(rh))
 
     def test_sealed_seed_reuse_refused(self) -> None:
         reg = R.OracleRegistry()
@@ -93,13 +106,13 @@ class RegistryLifecycleTests(unittest.TestCase):
         rh = reg.register(_spec())
         with self.assertRaises(R.RegistryError):                # evaluate before assign
             reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh),
-                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c")
+                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
         reg.assign(rh, _assign())
         with self.assertRaises(R.RegistryError):                # double assign
             reg.assign(rh, _assign(("k9",)))
         with self.assertRaises(R.RegistryError):                # illegal outcome value
             reg.record_outcome(rh, "MAYBE", _artifact(rh),
-                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c")
+                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
 
     def test_claimed_hash_mismatch_and_unknown_recipe_refused(self) -> None:
         reg = R.OracleRegistry()
@@ -114,7 +127,7 @@ class RegistryLifecycleTests(unittest.TestCase):
         reg.assign(rh, _assign())
         with self.assertRaises(R.RegistryError):
             reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact("someone-else"),
-                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c")
+                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
 
 
 if __name__ == "__main__":

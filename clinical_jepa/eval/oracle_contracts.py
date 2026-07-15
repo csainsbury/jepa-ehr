@@ -118,7 +118,9 @@ def family_metadata_view(data: Mapping[str, Any]) -> RestrictedView:
 class SamplerSpec:
     n_latent_samples: int = 1          # 1 == deterministic point-mass special case
     temperature: float = 1.0
-    seed_derivation: str = "sha256(recipe_hash|context_id|sample_idx)"
+    # context_id is over the FULL context payload, not context_features alone (Pi hardening #5) — the
+    # declaration states the derivation exactly, so a narrower context_id moves the sampler fingerprint.
+    seed_derivation: str = "sha256(recipe_hash|context_id|sample_idx); context_id=sha256(full_context_payload)"
     aggregation: str = "mean_pairwise_prob"
     common_random_numbers: bool = True
 

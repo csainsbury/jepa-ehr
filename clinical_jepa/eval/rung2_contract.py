@@ -182,6 +182,9 @@ ORACLE_SCHEMA_VERSION = "clinical-jepa-oracle-order-authorization-v3"
 ORACLE_EVALUATOR_IDENTITY = "oracle_meta_eval_v4"   # pinned evaluator schema id (Pi #3 identity check)
 ORACLE_R_BAYES_MARGIN = 0.05            # R_bayes must beat R0 by this lower-CI margin (else HIDDEN NULL)
 ORACLE_R_BAYES_MC_TOL = 0.01           # Monte-Carlo error tolerance for the R_bayes posterior estimate
+ORACLE_CTRL_REF_KAPPA = 0.30           # DEV reference κ the U6 control quantizers are frozen from — MUST
+                                       # be an allowed TRAIN-grid κ so no control is fitted on an OC-only
+                                       # cell (Pi hardening #4; κ_mid=0.35 is OC-only and is NOT allowed)
 ORACLE_R_BAYES_MC_SEEDS = 8            # independent MC seeds for R_bayes
 ORACLE_NUISANCE_MARGIN = 0.05          # recipe INCREMENTAL skill over R_nuis (lower-CI)
 ORACLE_NULL_ALPHA = 0.05               # per-property null FPR (upper-CI)

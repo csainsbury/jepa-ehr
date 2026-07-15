@@ -298,9 +298,21 @@ def sampler_fingerprint(recipe) -> str:
 
 
 def _context_id(cell) -> str:
-    """A stable per-context identifier for the registered sampler seed policy (content of the context)."""
-    cf = np.ascontiguousarray(cell.context_features, dtype=np.float64)
-    return hashlib.sha256(cf.tobytes()).hexdigest()[:16]
+    """A stable per-context identifier for the registered sampler seed policy, over the FULL context
+    payload — every channel the ContextView exposes, each bound to its name/shape — not just
+    ``context_features`` (Pi hardening #5). Two contexts differing only in item features or observed
+    covariates are distinct contexts and must not share a sampler seed stream."""
+    h = hashlib.sha256()
+    for key, val in sorted(cell.context_data().items()):
+        h.update(key.encode())
+        if val is None:
+            h.update(b"\x00None")
+        else:
+            arr = np.ascontiguousarray(val, dtype=np.float64)
+            h.update(f"\x00{arr.shape}".encode())
+            h.update(arr.tobytes())
+        h.update(b"\x01")
+    return h.hexdigest()[:16]
 
 
 def _sampler_rng(recipe_hash: str, context_id: str, sample_idx: int) -> np.random.Generator:

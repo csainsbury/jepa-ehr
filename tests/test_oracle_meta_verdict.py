@@ -80,14 +80,16 @@ def _valid_identities():
     from clinical_jepa.eval.oracle_meta_recipe import InvariantLearner, RegistryDataLoader, sampler_fingerprint
     from clinical_jepa.eval.oracle_meta_gen import invariant_hash
     assignment = V._split_assignment("0")
+    ea = V._evaluator_assignment("0")
     loader = RegistryDataLoader(assignment)
     r = InvariantLearner().fit(loader)
     ids = {"recipe_hash": r.recipe_hash(), "artifact_hash": r.artifact().artifact_hash,
            "mechanism_hash": invariant_hash(), "evaluator_identity": r.spec().evaluator_identity,
            "sampler_fingerprint": sampler_fingerprint(r), "bit_accounting": r.spec().bit_accounting,
            "split_assignment_hash": assignment.assignment_hash(), "seed_ids": list(assignment.seed_ids),
-           "access_trace": loader.access_trace()}
-    return r, ids, V._evaluator_assignment("0")
+           "access_trace": loader.access_trace(),
+           "evaluator_assignment_hash": ea.assignment_hash(), "eval_seed_ids": list(ea.seed_ids)}
+    return r, ids, ea
 
 
 class PureFunctionTests(unittest.TestCase):
@@ -133,6 +135,40 @@ class PureFunctionTests(unittest.TestCase):
         # a count that disagrees with the nested cell records is refused
         self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, n_evaluable_cells=ue.n_evaluable_cells + 1)).reason,
                          "count_reconciliation_mismatch")
+
+    def test_evaluator_assignment_and_recipe_identity_are_pinned(self) -> None:
+        # Pi hardening #2/#3: the evaluator seed assignment must be bound to its hash and to the eval
+        # trace, and trusted recipe/artifact hashes must be pinnable by the registry-driven caller.
+        import dataclasses
+        recipe, ids, ea = _valid_identities()
+        ue = U.compute_unlock(recipe, evaluator_assignment=ea, identities=ids)
+
+        def reason_with(**over):
+            return U.certify_from_unlock(dataclasses.replace(ue, identities={**ids, **over})).reason
+
+        # an assignment hash that does not match its own declared eval seed IDs
+        self.assertEqual(reason_with(evaluator_assignment_hash="0" * 64),
+                         "evaluator_assignment_hash_mismatch")
+        # swapping the eval seed IDs (hash now describes different seeds) is refused
+        self.assertEqual(reason_with(eval_seed_ids=["eval::rogue::0"]),
+                         "evaluator_assignment_hash_mismatch")
+        # eval RNG may never be derived from a spent TRAINING seed
+        self.assertEqual(reason_with(eval_seed_ids=list(ids["seed_ids"])),
+                         "eval_seed_ids_overlap_train_seed_ids")
+        # the eval trace must carry the SAME assignment hash the identity block pins
+        rogue = V._evaluator_assignment("rogue")
+        et = {**ue.eval_access_trace, "evaluator_assignment_hash": rogue.assignment_hash()}
+        self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, eval_access_trace=et)).reason,
+                         "eval_trace_assignment_hash_inconsistent")
+        # trusted pinning of the self-reported recipe/artifact hashes
+        self.assertEqual(U.certify_from_unlock(ue, expected_recipe_hash="not-the-recipe").reason,
+                         "recipe_hash_mismatch")
+        self.assertEqual(U.certify_from_unlock(ue, expected_artifact_hash="not-the-artifact").reason,
+                         "artifact_hash_mismatch")
+        # the genuine values still certify
+        self.assertEqual(U.certify_from_unlock(ue, expected_recipe_hash=ids["recipe_hash"],
+                                               expected_artifact_hash=ids["artifact_hash"]).outcome,
+                         U.CERTIFIED_CANDIDATE)
 
 
 class SamplerAndBitTests(unittest.TestCase):

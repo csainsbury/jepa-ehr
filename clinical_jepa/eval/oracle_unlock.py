@@ -15,11 +15,13 @@ import numpy as np
 
 from clinical_jepa.eval import oracle_meta_refs as R
 from clinical_jepa.eval.oracle_meta_gen import (
-    HELDOUT_FAMILIES, KAPPA_HELDOUT_ENDPOINTS, KAPPA_MID, TRAIN_FAMILIES, generate_meta_cell,
+    HELDOUT_FAMILIES, KAPPA_HELDOUT_ENDPOINTS, KAPPA_MID, KAPPA_TRAIN_GRID, TRAIN_FAMILIES,
+    generate_meta_cell,
 )
 from clinical_jepa.eval.oracle_meta_ledger import HypothesisLedger, build_ledger
 from clinical_jepa.eval.rung2_contract import (
-    ORACLE_CALIB_INTERCEPT_TOL, ORACLE_CALIB_SLOPE_BAND, ORACLE_EO1_SKILL_GATE, ORACLE_FPR_UPPER_CI_MAX,
+    ORACLE_CALIB_INTERCEPT_TOL, ORACLE_CALIB_SLOPE_BAND, ORACLE_CTRL_REF_KAPPA,
+    ORACLE_EO1_SKILL_GATE, ORACLE_FPR_UPPER_CI_MAX,
     ORACLE_MDE_KAPPAS, ORACLE_MONO_KAPPAS, ORACLE_MONO_SPEARMAN, ORACLE_N_NULL_SEEDS, ORACLE_N_POS_SEEDS,
     ORACLE_NUIS_ORTHO_FAIL_MAX, ORACLE_NUISANCE_MARGIN, ORACLE_POWER_FLOOR, ORACLE_PRECISION_COVERAGE,
     ORACLE_PRECISION_N_STUDIES, ORACLE_R_BAYES_MARGIN, ORACLE_U6_BANDWIDTH_MARGIN, ORDER_SUPPORT_FLOOR,
@@ -59,8 +61,13 @@ from functools import lru_cache
 def _frozen_control_quants(bits: int):
     """Freeze the U6 control quantizer endpoints from a fixed TRAIN/DEV reference cell (Pi #2), so the
     controls are FIXED order-blind maps applied unchanged to every held-out/null cell — no per-cell
-    bounds adaptation. Cached per bit budget."""
-    dev = generate_meta_cell(TRAIN_FAMILIES[0], KAPPA_MID, "orthogonal", 1200, seed=_seed("ctrl_ref"))
+    bounds adaptation. The reference κ is an ALLOWED TRAIN-grid κ (Pi hardening #4): fitting a control on
+    the OC-only κ_mid would put control fitting inside a cell reserved for operating-characteristic use.
+    Cached per bit budget."""
+    if ORACLE_CTRL_REF_KAPPA not in KAPPA_TRAIN_GRID:      # fail closed: never fit a control off-grid
+        raise RuntimeError("control-reference κ must be an allowed TRAIN-grid κ")
+    dev = generate_meta_cell(TRAIN_FAMILIES[0], ORACLE_CTRL_REF_KAPPA, "orthogonal", 1200,
+                             seed=_seed("ctrl_ref"))
     me_q = R.fit_frozen_quantizer(R.mean_embed_raw_scores(dev), bits)
     rc_q = R.fit_frozen_quantizer(R.random_codebook_raw_scores(dev, bits), bits)
     return me_q, rc_q
@@ -374,7 +381,8 @@ REFUTED = "REFUTED"
 
 REQUIRED_IDENTITY_KEYS = frozenset({
     "recipe_hash", "artifact_hash", "mechanism_hash", "evaluator_identity", "sampler_fingerprint",
-    "bit_accounting", "split_assignment_hash", "seed_ids", "access_trace"})
+    "bit_accounting", "split_assignment_hash", "seed_ids", "access_trace",
+    "evaluator_assignment_hash", "eval_seed_ids"})
 EXPECTED_CELL_CHECKS = frozenset({
     "recipe_minus_R0", "recipe_minus_Rnuis_orth", "recipe_minus_meanembed", "recipe_minus_randomcodebook",
     "Rbayes_minus_R0", "u4_Rnuis_orth_upper_ci", "u4_leak_diagnostic", "u6_randomcodebook_null_pass",
@@ -414,6 +422,21 @@ def _identity_mismatch(ids: dict) -> str | None:
     seed_ids = ids["seed_ids"]
     if not (isinstance(seed_ids, (list, tuple)) and seed_ids and len(set(seed_ids)) == len(seed_ids)):
         return "seed_ids_malformed"
+    # evaluator assignment: the eval seed IDs are their own registry-owned ledger — unique, and DISJOINT
+    # from the training seed IDs (an eval RNG must never be derived from a spent training seed).
+    ev_seeds = ids["eval_seed_ids"]
+    if not (isinstance(ev_seeds, (list, tuple)) and ev_seeds and len(set(ev_seeds)) == len(ev_seeds)):
+        return "eval_seed_ids_malformed"
+    if set(ev_seeds) & set(seed_ids):
+        return "eval_seed_ids_overlap_train_seed_ids"
+    # the declared assignment hash must be the hash of the CANONICAL held-out inventory under exactly the
+    # declared eval seed IDs (Pi hardening #2) — a hash inconsistent with its own seeds is refused.
+    from clinical_jepa.eval.oracle_contracts import EvaluatorAssignment
+    expected_ea = EvaluatorAssignment(held_out_families=tuple(HELDOUT_FAMILIES),
+                                      endpoints=tuple(KAPPA_HELDOUT_ENDPOINTS),
+                                      seed_ids=tuple(ev_seeds))
+    if ids["evaluator_assignment_hash"] != expected_ea.assignment_hash():
+        return "evaluator_assignment_hash_mismatch"
     # training access trace: train families only, no held-out / OC family, only train κ.
     tr = ids["access_trace"]
     fams, kaps = set(tr.get("families", [])), set(tr.get("kappas", []))
@@ -428,10 +451,14 @@ def _identity_mismatch(ids: dict) -> str | None:
 
 def _eval_trace_mismatch(unlock: UnlockEvaluation) -> str | None:
     """The eval access trace must equal EXACTLY the canonical held-out family × endpoint inventory —
-    the evaluator did not secretly score an unassigned family/κ (Pi #4)."""
+    the evaluator did not secretly score an unassigned family/κ (Pi #4) — and must carry the SAME
+    evaluator-assignment hash the identity block pins (Pi hardening #2), so the scored inventory and the
+    declared evaluator seed assignment cannot disagree."""
     et = unlock.eval_access_trace
     if not et:
         return "eval_access_trace_missing"
+    if et.get("evaluator_assignment_hash") != unlock.identities.get("evaluator_assignment_hash"):
+        return "eval_trace_assignment_hash_inconsistent"
     if set(et.get("held_out_families", [])) != set(HELDOUT_FAMILIES):
         return "eval_trace_family_inventory_mismatch"
     if set(et.get("endpoints", [])) != set(KAPPA_HELDOUT_ENDPOINTS):
@@ -457,14 +484,27 @@ def _power_mde_mismatch(power_mde: dict) -> str | None:
     return None
 
 
-def certify_from_unlock(unlock: UnlockEvaluation) -> CandidateVerdict:
+def certify_from_unlock(unlock: UnlockEvaluation, *, expected_recipe_hash: str | None = None,
+                        expected_artifact_hash: str | None = None) -> CandidateVerdict:
     """PURE FUNCTION of the UnlockEvaluation. ENFORCES the frozen ledger, the PINNED registry identities
     (exact values, not mere non-emptiness), the eval access trace, the reconciled counts/inventory, and
     the reference power/MDE — before any pass. A fabricated or mutated UnlockEvaluation cannot certify
-    (Pi #3/#6). CANDIDATE only; never issues a governed manifest or populates policy."""
+    (Pi #3/#6). CANDIDATE only; never issues a governed manifest or populates policy.
+
+    Recipe/artifact identity is the ONE thing this function cannot verify from the payload alone: both
+    hashes are self-reported by the same block they would authenticate. Pass ``expected_recipe_hash`` /
+    ``expected_artifact_hash`` from a TRUSTED source (the registry) to pin them. Called WITHOUT them this
+    is a NON-AUTHORITATIVE helper on recipe/artifact identity — every other check still binds. The
+    authoritative path is ``oracle_meta_verdict.certify_recipe``, which recomputes both from the fitted
+    recipe and passes them here (Pi hardening #3)."""
     from clinical_jepa.eval.oracle_meta_ledger import build_ledger, ledger_hash
     led = build_ledger()
     n = unlock.n_evaluable_cells
+    # (0) trusted recipe/artifact pinning, when supplied by the registry-driven caller
+    if expected_recipe_hash is not None and unlock.identities.get("recipe_hash") != expected_recipe_hash:
+        return CandidateVerdict(REFUTED, "recipe_hash_mismatch", n)
+    if expected_artifact_hash is not None and unlock.identities.get("artifact_hash") != expected_artifact_hash:
+        return CandidateVerdict(REFUTED, "artifact_hash_mismatch", n)
     # (1) frozen ledger identity/cardinality/alpha
     if (unlock.ledger_hash != ledger_hash() or unlock.ledger_cardinality != led.cardinality()
             or abs(unlock.ledger_alpha - led.ci_alpha()) > 1e-12):

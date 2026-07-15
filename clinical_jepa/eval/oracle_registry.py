@@ -49,6 +49,7 @@ class _RecipeRecord:
     evaluator_identity: str | None = None
     mechanism_hash: str | None = None
     calibration_hash: str | None = None
+    unlock_payload_hash: str | None = None
 
 
 class OracleRegistry:
@@ -72,6 +73,10 @@ class OracleRegistry:
     def recipe_outcome(self, recipe_hash: str) -> str | None:
         return self._require(recipe_hash).outcome
 
+    def unlock_payload_hash(self, recipe_hash: str) -> str | None:
+        """The content hash of the UnlockEvaluation the recorded outcome was computed from (Pi #1)."""
+        return self._require(recipe_hash).unlock_payload_hash
+
     def seed_state(self, seed_id: str) -> str:
         return self._seed_state.get(seed_id, SEED_UNASSIGNED)
 
@@ -92,7 +97,8 @@ class OracleRegistry:
 
     # ---- evaluation: recipe ASSIGNED->EVALUATED, immutable outcome, seeds ASSIGNED->RETIRED ----
     def record_outcome(self, recipe_hash: str, outcome: str, artifact: FittedRecipeArtifact, *,
-                       evaluator_identity: str, mechanism_hash: str, calibration_hash: str) -> None:
+                       evaluator_identity: str, mechanism_hash: str, calibration_hash: str,
+                       unlock_payload_hash: str) -> None:
         rec = self._require(recipe_hash)
         if rec.state != RECIPE_ASSIGNED:
             raise RegistryError(f"cannot evaluate recipe in state {rec.state}")
@@ -100,11 +106,17 @@ class OracleRegistry:
             raise RegistryError(f"illegal outcome {outcome!r}")
         if artifact.originating_recipe_hash != recipe_hash:
             raise RegistryError("artifact does not originate from this recipe")
+        # the outcome is only meaningful alongside the evidence it was computed from: PERSIST the content
+        # hash of the complete UnlockEvaluation in the record (Pi hardening #1), so a recorded outcome can
+        # always be re-tied to the exact payload that produced it.
+        if not unlock_payload_hash:
+            raise RegistryError("outcome must be recorded with the UnlockEvaluation payload hash")
         rec.outcome = outcome                      # immutable from here (state advances to EVALUATED)
         rec.artifact = artifact
         rec.evaluator_identity = evaluator_identity
         rec.mechanism_hash = mechanism_hash
         rec.calibration_hash = calibration_hash
+        rec.unlock_payload_hash = unlock_payload_hash
         rec.state = RECIPE_EVALUATED
         for s in (rec.assignment.seed_ids if rec.assignment else ()):   # spend seeds pass OR fail
             self._seed_state[s] = SEED_RETIRED
@@ -118,7 +130,7 @@ class OracleRegistry:
                                              for s in rec.assignment.seed_ids):
             return False
         return all(bool(x) for x in (rec.artifact, rec.evaluator_identity, rec.mechanism_hash,
-                                     rec.calibration_hash))
+                                     rec.calibration_hash, rec.unlock_payload_hash))
 
     def _require(self, recipe_hash: str) -> _RecipeRecord:
         rec = self._recipes.get(recipe_hash)

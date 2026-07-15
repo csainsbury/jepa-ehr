@@ -102,16 +102,23 @@ def certify_recipe(recipe_factory: Callable, *, seed: int = 0,
         "sampler_fingerprint": registered_fp, "bit_accounting": recipe.spec().bit_accounting,
         "split_assignment_hash": assignment.assignment_hash(), "seed_ids": list(assignment.seed_ids),
         "access_trace": tr,
+        # bind the registry-owned EVALUATION plan into the identity block (Pi hardening #2)
+        "evaluator_assignment_hash": evaluator_assignment.assignment_hash(),
+        "eval_seed_ids": list(evaluator_assignment.seed_ids),
     }
     try:
         unlock = compute_unlock(recipe, evaluator_assignment=evaluator_assignment, identities=identities)
     except CapabilityError:
         raise RuntimeError("capability violation during scoring — recipe reached for a non-context channel")
-    verdict = certify_from_unlock(unlock)
+    # pin recipe/artifact identity from the TRUSTED registry side — the pure helper cannot authenticate
+    # the self-reported hashes on its own (Pi hardening #3).
+    verdict = certify_from_unlock(unlock, expected_recipe_hash=rh,
+                                  expected_artifact_hash=artifact.artifact_hash)
     payload_hash = unlock.payload_hash()                         # bind the COMPLETE payload to the outcome
     outcome = REG.OUTCOME_CERTIFIED if verdict.outcome == CERTIFIED_CANDIDATE else REG.OUTCOME_REFUTED
     reg.record_outcome(rh, outcome, artifact, evaluator_identity=identities["evaluator_identity"],
-                       mechanism_hash=identities["mechanism_hash"], calibration_hash=NO_CALIBRATION)
+                       mechanism_hash=identities["mechanism_hash"], calibration_hash=NO_CALIBRATION,
+                       unlock_payload_hash=payload_hash)         # PERSISTED in the record (Pi #1)
     complete = outcome == REG.OUTCOME_CERTIFIED and all(reg.seed_state(s) == REG.SEED_RETIRED
                                                         for s in assignment.seed_ids)
     return VerdictRecord(verdict, rh, artifact.artifact_hash, outcome, complete,
