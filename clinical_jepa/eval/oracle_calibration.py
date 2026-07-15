@@ -32,16 +32,39 @@ _AGG_FIELDS = ("source", "n_sequences", "n_events", "n_clusters", "n_positive_ga
                "delta_t_zero_fraction", "length_ecdf", "positive_gap_ecdf", "count_ecdf",
                "mean_occupancy_fraction")
 
+# Frozen optimizer grids (single source of truth — referenced by fit_calibration AND the schema hash so
+# they cannot silently drift) and conventions the micro-gate needs pinned BEFORE the one-time real read.
+_TEMP_GRID = (0.5, 2.0, 61)        # token_freq_temperature linspace(lo, hi, n)
+_RATE_GRID = (0.5, 2.0, 16)        # timing_rate_scale grid
+_DISP_GRID = (0.5, 2.0, 16)        # gap_dispersion grid
+_TIE_BREAK = "first_argmin_strict_1e-12"
+_OBJECTIVE = "zero_gap_bias_clip|class_tv_then_gap_ks_conjunctive"
+_ECDF_CONVENTION = {"pairs": "(support_point, cdf)", "support": "ascending_unique_positive",
+                    "cdf": "nondecreasing_final_mass_1", "support_round_dp": 8,
+                    "bins": "right_continuous_step", "ks": "sup_norm_on_shared_support"}
+_TRANSFORM_VERSION = "calib_forward_v1"     # _forward_aggregate / _transform_gap_ecdf semantics version
+_DENOMINATOR_SEMANTICS = {"class_counts_sum_equals_n_events": True,
+                          "min_denominator_floor": ORACLE_ENV_MIN_DENOM,
+                          "zero_fill": "forbidden_refuse_NOT_EVALUABLE"}
+_GOVERNANCE_CLASS = "safe_public_aggregate_only_no_patient_rows"
+
 
 def calibration_schema_hash() -> str:
-    """Hash the EXACT calibration schema (Pi #10): aggregate fields, tunable knobs + bounds, the frozen
-    conjunctive-envelope constants, and the required source set. Distinct from the mechanism hash."""
+    """Hash the EXACT calibration schema (Pi #6/#10): aggregate fields, tunable knobs + bounds, the frozen
+    conjunctive-envelope constants, the required source set, AND the ECDF/bin conventions, the optimizer
+    grids + tie-breaking, the transform version, the denominator semantics, and the governance
+    classification — everything the micro-gate must freeze before the first aggregate-real read. Distinct
+    from the mechanism hash."""
     return canonical_hash({
         "agg_fields": _AGG_FIELDS, "tunable": {k: list(v) for k, v in CALIBRATION_SPEC["tunable_params"].items()},
         "envelope": {"dt0": ORACLE_ENV_DT0_ABS, "ks": ORACLE_ENV_KS, "tv": ORACLE_ENV_TV,
                      "occ": ORACLE_ENV_OCCUPANCY_ABS, "n_classes": ORACLE_ENV_N_CLASSES,
                      "min_denom": ORACLE_ENV_MIN_DENOM},
-        "required_sources": REQUIRED_SOURCES})
+        "required_sources": REQUIRED_SOURCES,
+        "ecdf_convention": _ECDF_CONVENTION, "transform_version": _TRANSFORM_VERSION,
+        "optimizer": {"temp_grid": _TEMP_GRID, "rate_grid": _RATE_GRID, "disp_grid": _DISP_GRID,
+                      "tie_break": _TIE_BREAK, "objective": _OBJECTIVE},
+        "denominator_semantics": _DENOMINATOR_SEMANTICS, "governance_class": _GOVERNANCE_CLASS})
 
 
 @dataclass(frozen=True)
@@ -225,15 +248,15 @@ def fit_calibration(target: AggregateStats, base: AggregateStats) -> Calibration
     knobs = {k: float(np.mean(CALIBRATION_SPEC["tunable_params"][k])) for k in TUNABLE_KNOBS}
     knobs["zero_gap_bias"] = float(np.clip(target.delta_t_zero_fraction, 0.0, 0.9))
     best_t, best_tv = 1.0, 1e9
-    for t in np.linspace(0.5, 2.0, 61):
+    for t in np.linspace(*_TEMP_GRID):
         cand = _forward_aggregate(base, {**knobs, "token_freq_temperature": float(t)})
         tv = _tv(cand.class_probs(), target.class_probs())
         if tv < best_tv - 1e-12:
             best_tv, best_t = tv, float(t)
     knobs["token_freq_temperature"] = best_t
     best_gap, best_rd = 1e9, (1.0, 1.0)                       # solve timing_rate_scale + gap_dispersion
-    for rate in np.linspace(0.5, 2.0, 16):
-        for disp in np.linspace(0.5, 2.0, 16):
+    for rate in np.linspace(*_RATE_GRID):
+        for disp in np.linspace(*_DISP_GRID):
             cand = _forward_aggregate(base, {**knobs, "timing_rate_scale": float(rate),
                                              "gap_dispersion": float(disp)})
             gks = _ks(cand.positive_gap_ecdf, target.positive_gap_ecdf)
@@ -278,8 +301,9 @@ def calibrate_sources(targets: dict[str, AggregateStats],
                       bases: dict[str, AggregateStats]) -> CollectionCalibrationResult:
     """Multi-source conjunctive calibration over the FROZEN required source set (Pi #10): the collection
     is accepted ONLY if the targets cover EXACTLY ``REQUIRED_SOURCES`` and EVERY source block falls
-    within its own envelope. Unexpected/missing sources fail coverage."""
-    coverage_ok = set(targets) == set(REQUIRED_SOURCES)
+    within its own envelope. Unexpected/missing sources fail coverage — in EITHER the target OR the base
+    key set (Pi #6: an extra/missing base source must not slip through)."""
+    coverage_ok = set(targets) == set(REQUIRED_SOURCES) and set(bases) == set(REQUIRED_SOURCES)
     per = {}
     for src, tgt in targets.items():
         base = bases.get(src)

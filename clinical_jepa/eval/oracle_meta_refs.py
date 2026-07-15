@@ -39,24 +39,69 @@ def r_nuis_scores(cell: MetaCell) -> np.ndarray:
     return cell.nuisance_u.copy()
 
 
-def _quantize(x: np.ndarray, bits: int) -> np.ndarray:
-    lo, hi = x.min(), x.max()
-    levels = max(2, 2 ** min(int(bits), 16))
-    return np.round((x - lo) / (hi - lo + 1e-9) * (levels - 1)) / (levels - 1)
+from dataclasses import dataclass
 
 
-def mean_embed_quantized_scores(cell: MetaCell, bits: int) -> np.ndarray:
-    """U6 control 1: order-blind mean-embed of the legitimate item content, quantized to matched bits."""
-    return _quantize(cell.item_features[:, :, :D_ITEM].mean(axis=2), bits)
+@dataclass(frozen=True)
+class FrozenQuantizer:
+    """A uniform ``bits``-level quantizer whose (lo, hi) endpoints are FROZEN from a TRAIN/DEV reference
+    and applied UNCHANGED to held-out/null cells and to every stochastic sample (Pi #2). The endpoints are
+    NOT re-derived per evaluation array, so no cell/sample-specific side information leaks into the code;
+    out-of-range values are clipped and the clip fraction is reported as an overflow diagnostic."""
+    lo: float
+    hi: float
+    bits: int
+
+    def apply(self, scores: np.ndarray) -> tuple[np.ndarray, float]:
+        x = np.asarray(scores, float)
+        span = self.hi - self.lo
+        if span < 1e-12:                                   # degenerate reference range → pass through
+            return x, 0.0
+        clip_frac = float(np.mean((x < self.lo) | (x > self.hi))) if x.size else 0.0
+        levels = max(2, 2 ** min(int(self.bits), 16))
+        q = np.round((np.clip(x, self.lo, self.hi) - self.lo) / span * (levels - 1))
+        return self.lo + q / (levels - 1) * span, clip_frac
+
+    def identity(self) -> dict:
+        """Full-byte endpoints (Pi #8) so a sub-rounding change to the frozen code moves the hash."""
+        return {"lo_bytes": np.float64(self.lo).tobytes().hex(),
+                "hi_bytes": np.float64(self.hi).tobytes().hex(), "bits": int(self.bits)}
 
 
-def random_codebook_scores(cell: MetaCell, bits: int, seed: int) -> np.ndarray:
-    """U6 control 2: a FROZEN random codebook at matched bits assigns each item a random score."""
-    rng = np.random.default_rng(seed)
+def fit_frozen_quantizer(reference_scores: np.ndarray, bits: int) -> FrozenQuantizer:
+    """Freeze the quantizer endpoints from a TRAIN/DEV reference score array (min/max)."""
+    x = np.asarray(reference_scores, float)
+    return FrozenQuantizer(float(x.min()), float(x.max()), int(bits))
+
+
+# U6 control 2 uses a SINGLE frozen codebook (fixed seed) so the control is one FIXED order-blind map
+# applied identically everywhere — not a fresh per-cell codebook (that would itself be cell-adaptive).
+RANDOM_CODEBOOK_SEED = 0x9E6B
+
+
+def mean_embed_raw_scores(cell: MetaCell) -> np.ndarray:
+    """U6 control 1 raw (un-quantized): order-blind mean-embed of the legitimate item content."""
+    return cell.item_features[:, :, :D_ITEM].mean(axis=2)
+
+
+def random_codebook_raw_scores(cell: MetaCell, bits: int) -> np.ndarray:
+    """U6 control 2 raw (un-quantized): a FROZEN random codebook assigns each item a fixed random score."""
+    rng = np.random.default_rng(RANDOM_CODEBOOK_SEED)
     legit = cell.item_features[:, :, :D_ITEM]
     codebook = rng.standard_normal((max(2, 2 ** min(int(bits), 12)), D_ITEM))
+    proj = rng.standard_normal(D_ITEM)
     idx = np.argmin(((legit[:, :, None, :] - codebook[None, None]) ** 2).sum(-1), axis=2)
-    return codebook[idx] @ rng.standard_normal(D_ITEM)
+    return codebook[idx] @ proj
+
+
+def mean_embed_quantized_scores(cell: MetaCell, quant: FrozenQuantizer) -> np.ndarray:
+    """U6 control 1 at the FROZEN matched-bit budget (endpoints frozen from a DEV reference)."""
+    return quant.apply(mean_embed_raw_scores(cell))[0]
+
+
+def random_codebook_scores(cell: MetaCell, quant: FrozenQuantizer) -> np.ndarray:
+    """U6 control 2 at the FROZEN matched-bit budget (single frozen codebook + frozen endpoints)."""
+    return quant.apply(random_codebook_raw_scores(cell, quant.bits))[0]
 
 
 def e_o2_calibration(recipe_probs: np.ndarray, ref_probs: np.ndarray, true_order: np.ndarray):

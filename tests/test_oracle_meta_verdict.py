@@ -75,27 +75,33 @@ class LedgerTests(unittest.TestCase):
 
 
 def _valid_identities():
-    from clinical_jepa.eval.oracle_meta_recipe import InvariantLearner, sampler_fingerprint
+    """A GENUINELY consistent identity block + evaluator assignment (mirrors certify_recipe), so the
+    pinned identity checks are exercised on real values, not placeholders (Pi #3)."""
+    from clinical_jepa.eval.oracle_meta_recipe import InvariantLearner, RegistryDataLoader, sampler_fingerprint
     from clinical_jepa.eval.oracle_meta_gen import invariant_hash
-    r = InvariantLearner().fit_on_train(seed=0)
-    return r, {"recipe_hash": r.recipe_hash(), "artifact_hash": r.artifact().artifact_hash,
-               "mechanism_hash": invariant_hash(), "evaluator_identity": r.spec().evaluator_identity,
-               "sampler_fingerprint": sampler_fingerprint(r), "bit_accounting": r.spec().bit_accounting,
-               "split_assignment_hash": "sa", "seed_ids": ["k1"], "access_trace": {"families": ["T_latent_factor"]}}
+    assignment = V._split_assignment("0")
+    loader = RegistryDataLoader(assignment)
+    r = InvariantLearner().fit(loader)
+    ids = {"recipe_hash": r.recipe_hash(), "artifact_hash": r.artifact().artifact_hash,
+           "mechanism_hash": invariant_hash(), "evaluator_identity": r.spec().evaluator_identity,
+           "sampler_fingerprint": sampler_fingerprint(r), "bit_accounting": r.spec().bit_accounting,
+           "split_assignment_hash": assignment.assignment_hash(), "seed_ids": list(assignment.seed_ids),
+           "access_trace": loader.access_trace()}
+    return r, ids, V._evaluator_assignment("0")
 
 
 class PureFunctionTests(unittest.TestCase):
     def test_certify_from_unlock_is_deterministic_pure_function(self) -> None:
-        recipe, ids = _valid_identities()
-        ue = U.compute_unlock(recipe, seed=0, identities=ids)
+        recipe, ids, ea = _valid_identities()
+        ue = U.compute_unlock(recipe, evaluator_assignment=ea, identities=ids)
         v1, v2 = U.certify_from_unlock(ue), U.certify_from_unlock(ue)
         self.assertEqual(v1.outcome, v2.outcome)
         self.assertEqual(v1.outcome, U.CERTIFIED_CANDIDATE)
 
     def test_fabricated_unlock_is_refused(self) -> None:
         import dataclasses
-        recipe, ids = _valid_identities()
-        ue = U.compute_unlock(recipe, seed=0, identities=ids)
+        recipe, ids, ea = _valid_identities()
+        ue = U.compute_unlock(recipe, evaluator_assignment=ea, identities=ids)
         self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, ledger_hash="FAKE")).reason,
                          "ledger_identity_mismatch")
         self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, identities={})).reason,
@@ -103,6 +109,30 @@ class PureFunctionTests(unittest.TestCase):
         # a ledger-cardinality lie is refused too
         self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, ledger_cardinality=999)).reason,
                          "ledger_identity_mismatch")
+
+    def test_mutated_identity_and_trace_are_refused(self) -> None:
+        # Pi #3: every identity/trace mutated to a PLAUSIBLE non-empty WRONG value must be refused.
+        import dataclasses
+        recipe, ids, ea = _valid_identities()
+        ue = U.compute_unlock(recipe, evaluator_assignment=ea, identities=ids)
+
+        def reason_with(**over):
+            return U.certify_from_unlock(dataclasses.replace(ue, identities={**ids, **over})).reason
+
+        self.assertEqual(reason_with(mechanism_hash="0" * 16), "mechanism_hash_mismatch")
+        self.assertEqual(reason_with(evaluator_identity="oracle_meta_eval_v999"), "evaluator_identity_mismatch")
+        self.assertEqual(reason_with(sampler_fingerprint="deadbeef"), "sampler_fingerprint_mismatch")
+        self.assertEqual(reason_with(bit_accounting={"target_bits": 8, "control_bits": 4}), "bit_accounting_mismatch")
+        # a training access trace that touches a held-out family is contamination
+        bad_tr = {**ids["access_trace"], "families": [*ids["access_trace"]["families"], "E_no_h_exogenous"]}
+        self.assertEqual(reason_with(access_trace=bad_tr), "train_access_trace_contaminated")
+        # a contaminated eval trace (secretly scored a non-held-out family) is refused
+        et = {**ue.eval_access_trace, "scored_cells": [["T_latent_factor", 0.60], *ue.eval_access_trace["scored_cells"][1:]]}
+        self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, eval_access_trace=et)).reason,
+                         "eval_trace_scored_cells_mismatch")
+        # a count that disagrees with the nested cell records is refused
+        self.assertEqual(U.certify_from_unlock(dataclasses.replace(ue, n_evaluable_cells=ue.n_evaluable_cells + 1)).reason,
+                         "count_reconciliation_mismatch")
 
 
 class SamplerAndBitTests(unittest.TestCase):
@@ -157,7 +187,7 @@ class HiddenNullAndPrecisionTests(unittest.TestCase):
         self.assertLess(rb, ORACLE_R_BAYES_MARGIN)                   # κ=0 is a genuine hidden null
 
         recipe = InvariantLearner().fit_on_train(seed=0)
-        ue = U.compute_unlock(recipe, seed=0)
+        ue = U.compute_unlock(recipe, evaluator_assignment=V._evaluator_assignment("0"))
         for f in ue.families:                                       # every low_oc cell has a valid status
             low = [c for c in f.cells if c.role == "low_oc"][0]
             self.assertIn(low.status, ("SUPPORTED", "HIDDEN_NULL", "SUPPORT_STARVED"))
@@ -179,7 +209,7 @@ class ContaminationAndDeterminismTests(unittest.TestCase):
         # the registry-owned loader is the ONLY data source; its trace is train-only and authoritative.
         from clinical_jepa.eval.oracle_meta_recipe import RegistryDataLoader
         from clinical_jepa.eval.oracle_meta_gen import KAPPA_TRAIN_GRID, HELDOUT_FAMILIES
-        loader = RegistryDataLoader(V._split_assignment("t"), seed=0)
+        loader = RegistryDataLoader(V._split_assignment("t"))
         list(loader.train_iter()); loader.dev_cell()
         tr = loader.access_trace()
         self.assertFalse(set(tr["families"]) & set(HELDOUT_FAMILIES))     # never a held-out family
@@ -198,7 +228,7 @@ class ContaminationAndDeterminismTests(unittest.TestCase):
         # compute_unlock does NOT refit; the fitted artifact identity is unchanged by evaluation.
         r = InvariantLearner().fit_on_train(seed=0)
         before = r.artifact().artifact_hash
-        U.compute_unlock(r, seed=0)
+        U.compute_unlock(r, evaluator_assignment=V._evaluator_assignment("0"))
         self.assertEqual(r.artifact().artifact_hash, before)
 
     def test_verdict_outcome_reproducible(self) -> None:

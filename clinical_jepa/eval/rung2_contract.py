@@ -179,6 +179,7 @@ def validate_direct_path_row(row: dict[str, Any]) -> bool:
 # The oracle is a recipe FALSIFIER, not a real-EHR certificate. These are concrete pre-registered
 # numbers (no "will be frozen"). Order units = order-skill (beyond-content-prior log-loss skill).
 ORACLE_SCHEMA_VERSION = "clinical-jepa-oracle-order-authorization-v3"
+ORACLE_EVALUATOR_IDENTITY = "oracle_meta_eval_v4"   # pinned evaluator schema id (Pi #3 identity check)
 ORACLE_R_BAYES_MARGIN = 0.05            # R_bayes must beat R0 by this lower-CI margin (else HIDDEN NULL)
 ORACLE_R_BAYES_MC_TOL = 0.01           # Monte-Carlo error tolerance for the R_bayes posterior estimate
 ORACLE_R_BAYES_MC_SEEDS = 8            # independent MC seeds for R_bayes
@@ -209,6 +210,12 @@ ORACLE_MULTIPLE_TESTING = "bonferroni_over_evaluable_cells"
 ORACLE_OFFGRID_KAPPA = (0.15, 0.6)     # the TWO frozen held-out endpoint probes (NOT a band, NOT in the
                                        # train grid). Preserved exactly per Pi's 2nd-pass residual correction.
 ORACLE_MDE_DEF = "smallest_kappa_with_power_ge_0.80"
+# Frozen OC grids (Pi #5): the monotonicity grid (U3, over the held-out family's own κ) and the reference
+# power/MDE grid. ORACLE_MDE_KAPPAS is GENUINELY DISJOINT from the train grid ∪ held-out endpoints ∪ κmid
+# (= {0.0,0.10,0.30,0.50,0.75} ∪ {0.15,0.60} ∪ {0.35}); it characterizes evaluator power, not a probe of
+# any scored cell. Both are hashed into the ledger identity so a silent grid change breaks certification.
+ORACLE_MONO_KAPPAS = (0.15, 0.35, 0.60)
+ORACLE_MDE_KAPPAS = (0.05, 0.08, 0.12, 0.20, 0.25, 0.40)
 ORACLE_HIDDEN_NULL_RULE = "R_bayes_within_margin_of_R0_excluded_from_positive"
 ORACLE_SHORTCUT_MAX_SKILL = 0.10       # an h-projection-only shortcut method must NOT exceed this
 # ---- decision margins (Pi consolidated #3 — practical effect, not merely statistical positivity) ----

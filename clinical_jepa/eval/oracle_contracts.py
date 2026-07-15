@@ -179,6 +179,20 @@ class SplitAssignment:
 
 
 @dataclass(frozen=True)
+class EvaluatorAssignment:
+    """Registry-owned EVALUATION plan (Pi #4): the held-out family × endpoint-κ inventory the evaluator
+    MUST score, plus the seed IDs every eval/OC RNG is derived from. ``compute_unlock`` does not choose
+    its own held-out inventory — it consumes this, and the verdict pins the inventory to the canonical
+    held-out families."""
+    held_out_families: tuple[str, ...]
+    endpoints: tuple[float, ...]
+    seed_ids: tuple[str, ...]
+
+    def assignment_hash(self) -> str:
+        return canonical_hash(self)
+
+
+@dataclass(frozen=True)
 class DecodedOrder:
     """Output of decode_order: CALIBRATED pairwise probabilities (P(item i precedes item j)), and
     optionally sampled permutations — not arbitrary scores (Pi 2nd-pass #1)."""

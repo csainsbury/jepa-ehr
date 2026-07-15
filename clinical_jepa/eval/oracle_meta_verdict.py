@@ -12,8 +12,10 @@ from dataclasses import dataclass
 from typing import Callable
 
 from clinical_jepa.eval import oracle_registry as REG
-from clinical_jepa.eval.oracle_contracts import SplitAssignment
-from clinical_jepa.eval.oracle_meta_gen import HELDOUT_FAMILIES, TRAIN_FAMILIES, invariant_hash
+from clinical_jepa.eval.oracle_contracts import EvaluatorAssignment, SplitAssignment
+from clinical_jepa.eval.oracle_meta_gen import (
+    HELDOUT_FAMILIES, KAPPA_HELDOUT_ENDPOINTS, TRAIN_FAMILIES, invariant_hash,
+)
 from clinical_jepa.eval.oracle_unlock import (
     CERTIFIED_CANDIDATE, REFUTED, CandidateVerdict, certify_from_unlock, compute_unlock,
 )
@@ -32,6 +34,7 @@ class VerdictRecord:
     registry_outcome: str            # CERTIFIED | REFUTED (registry state)
     synthetic_registry_complete: bool  # outcome CERTIFIED + seeds retired + identities (NOT gov auth)
     authorization_ready: bool        # requires a REAL approved calibration hash -> False in this stage
+    unlock_payload_hash: str = ""    # content hash of the complete UnlockEvaluation bound to the outcome (Pi #3)
 
 
 def _split_assignment(seed_tag: str) -> SplitAssignment:
@@ -40,6 +43,14 @@ def _split_assignment(seed_tag: str) -> SplitAssignment:
     return SplitAssignment(train=TRAIN_FAMILIES, dev=("dev::" + TRAIN_FAMILIES[0],),
                            sealed_cert=HELDOUT_FAMILIES, family_ids=(*TRAIN_FAMILIES, *HELDOUT_FAMILIES),
                            seed_ids=seeds)
+
+
+def _evaluator_assignment(seed_tag: str) -> EvaluatorAssignment:
+    """Registry-OWNED evaluation plan (Pi #4): the canonical held-out inventory the evaluator must score,
+    with its own UNIQUE seed IDs that every eval/OC RNG is derived from."""
+    seeds = tuple(f"eval::{seed_tag}::{i}" for i in range(4))
+    return EvaluatorAssignment(held_out_families=HELDOUT_FAMILIES, endpoints=KAPPA_HELDOUT_ENDPOINTS,
+                               seed_ids=seeds)
 
 
 def _validate_assignment(a: SplitAssignment) -> None:
@@ -68,9 +79,10 @@ def certify_recipe(recipe_factory: Callable, *, seed: int = 0,
         raise RuntimeError("sampler fingerprint mismatch — refusing to score with a non-registered sampler")
     assignment = _split_assignment(str(seed))
     _validate_assignment(assignment)                             # dup seeds / disjointness (Pi #9)
+    evaluator_assignment = _evaluator_assignment(str(seed))      # registry-owned EVAL plan (Pi #4)
     rh = reg.register(recipe.spec())                             # identity recomputed by the registry
     reg.assign(rh, assignment)                                  # registry-owned split + seed ledger
-    loader = RegistryDataLoader(assignment, seed=seed)          # the ONLY training data source (Pi #1)
+    loader = RegistryDataLoader(assignment)                     # the ONLY training data source (Pi #1/#4)
     try:
         recipe.fit(loader)                                     # fit ONCE via the loader's capability views
     except CapabilityError:
@@ -80,6 +92,10 @@ def certify_recipe(recipe_factory: Callable, *, seed: int = 0,
     if set(tr["families"]) & set(HELDOUT_FAMILIES) or not set(tr["kappas"]) <= set(KAPPA_TRAIN_GRID):
         raise RuntimeError("loader access trace touched a held-out family / non-train κ")
     artifact = recipe.artifact()
+    # the pure verdict recomputes recipe/artifact identity itself; verify it matches what the recipe
+    # actually produced BEFORE handing it the identity block (no forged recipe/artifact hash, Pi #3).
+    if rh != recipe.spec().recipe_hash() or artifact.artifact_hash != recipe.artifact().artifact_hash:
+        raise RuntimeError("recipe/artifact identity inconsistent with the fitted recipe")
     identities = {
         "recipe_hash": rh, "artifact_hash": artifact.artifact_hash,
         "mechanism_hash": invariant_hash(), "evaluator_identity": recipe.spec().evaluator_identity,
@@ -88,13 +104,15 @@ def certify_recipe(recipe_factory: Callable, *, seed: int = 0,
         "access_trace": tr,
     }
     try:
-        unlock = compute_unlock(recipe, seed=seed, identities=identities)
+        unlock = compute_unlock(recipe, evaluator_assignment=evaluator_assignment, identities=identities)
     except CapabilityError:
         raise RuntimeError("capability violation during scoring — recipe reached for a non-context channel")
     verdict = certify_from_unlock(unlock)
+    payload_hash = unlock.payload_hash()                         # bind the COMPLETE payload to the outcome
     outcome = REG.OUTCOME_CERTIFIED if verdict.outcome == CERTIFIED_CANDIDATE else REG.OUTCOME_REFUTED
     reg.record_outcome(rh, outcome, artifact, evaluator_identity=identities["evaluator_identity"],
                        mechanism_hash=identities["mechanism_hash"], calibration_hash=NO_CALIBRATION)
     complete = outcome == REG.OUTCOME_CERTIFIED and all(reg.seed_state(s) == REG.SEED_RETIRED
                                                         for s in assignment.seed_ids)
-    return VerdictRecord(verdict, rh, artifact.artifact_hash, outcome, complete, reg.authorization_ready(rh))
+    return VerdictRecord(verdict, rh, artifact.artifact_hash, outcome, complete,
+                         reg.authorization_ready(rh), payload_hash)

@@ -10,9 +10,28 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from clinical_jepa.eval.oracle_meta_gen import HELDOUT_FAMILIES, KAPPA_HELDOUT_ENDPOINTS
-from clinical_jepa.eval.rung2_contract import ORACLE_NULL_ALPHA
+from clinical_jepa.eval.rung2_contract import (
+    ORACLE_FPR_UPPER_CI_MAX, ORACLE_MDE_KAPPAS, ORACLE_MONO_KAPPAS, ORACLE_MONO_SPEARMAN, ORACLE_N_BOOT,
+    ORACLE_N_NULL_SEEDS, ORACLE_N_POS_SEEDS, ORACLE_NULL_ALPHA, ORACLE_NULL_FIRE_ALPHA,
+    ORACLE_NULL_STUDY_SEQS, ORACLE_POWER_FLOOR,
+)
 
 FAMILY_ALPHA = ORACLE_NULL_ALPHA        # 0.05 family-wise error budget
+
+# The sampling-based OC decisions (U2 null FPR, U3 monotonicity, U1/MDE power) are NOT Bonferroni CI
+# endpoints — they carry their own frozen grids / study counts / bootstrap counts / α-families. Pi #5:
+# these were previously stored as α=0.0 and left the ledger hash blind to the sampling design. Bind them.
+OC_CONFIG = {
+    "mono_kappas": [round(float(k), 9) for k in ORACLE_MONO_KAPPAS],
+    "mde_kappas": [round(float(k), 9) for k in ORACLE_MDE_KAPPAS],
+    "n_null_studies": ORACLE_N_NULL_SEEDS, "n_pos_seeds": ORACLE_N_POS_SEEDS,
+    "null_study_seqs": ORACLE_NULL_STUDY_SEQS, "n_boot": ORACLE_N_BOOT,
+    "alpha_families": {
+        "u2_null_fire": round(float(ORACLE_NULL_FIRE_ALPHA), 9),
+        "u2_fpr_upper_ci_max": round(float(ORACLE_FPR_UPPER_CI_MAX), 9),
+        "u3_mono_spearman_lo": round(float(ORACLE_MONO_SPEARMAN), 9),
+        "u1_power_floor": round(float(ORACLE_POWER_FLOOR), 9)},
+}
 
 # CI-based endpoints evaluated per (family, endpoint κ) — these carry the Bonferroni correction.
 CI_ENDPOINTS = (
@@ -58,7 +77,8 @@ def ledger_hash() -> str:
     led = build_ledger()
     return canonical_hash({"n_ci": led.n_ci, "alpha": round(led.bonferroni_alpha, 9),
                            "hyps": [(h.hid, h.family_id, h.kappa, h.kind, round(h.alpha, 9))
-                                    for h in led.hypotheses]})
+                                    for h in led.hypotheses],
+                           "oc_config": OC_CONFIG})       # Pi #5: bind the sampling grids/counts/α-families
 
 
 def build_ledger(families: tuple[str, ...] = HELDOUT_FAMILIES,

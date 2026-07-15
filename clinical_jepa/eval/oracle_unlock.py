@@ -20,14 +20,15 @@ from clinical_jepa.eval.oracle_meta_gen import (
 from clinical_jepa.eval.oracle_meta_ledger import HypothesisLedger, build_ledger
 from clinical_jepa.eval.rung2_contract import (
     ORACLE_CALIB_INTERCEPT_TOL, ORACLE_CALIB_SLOPE_BAND, ORACLE_EO1_SKILL_GATE, ORACLE_FPR_UPPER_CI_MAX,
-    ORACLE_MONO_SPEARMAN, ORACLE_N_NULL_SEEDS, ORACLE_N_POS_SEEDS, ORACLE_NUIS_ORTHO_FAIL_MAX,
-    ORACLE_NUISANCE_MARGIN, ORACLE_POWER_FLOOR, ORACLE_PRECISION_COVERAGE, ORACLE_PRECISION_N_STUDIES,
-    ORACLE_R_BAYES_MARGIN, ORACLE_U6_BANDWIDTH_MARGIN, ORDER_SUPPORT_FLOOR,
+    ORACLE_MDE_KAPPAS, ORACLE_MONO_KAPPAS, ORACLE_MONO_SPEARMAN, ORACLE_N_NULL_SEEDS, ORACLE_N_POS_SEEDS,
+    ORACLE_NUIS_ORTHO_FAIL_MAX, ORACLE_NUISANCE_MARGIN, ORACLE_POWER_FLOOR, ORACLE_PRECISION_COVERAGE,
+    ORACLE_PRECISION_N_STUDIES, ORACLE_R_BAYES_MARGIN, ORACLE_U6_BANDWIDTH_MARGIN, ORDER_SUPPORT_FLOOR,
 )
 
-# frozen monotonicity grid (U3) + disjoint positive MDE grid (#5); hashed via the ledger identity.
-MONO_KAPPAS = tuple(sorted({*KAPPA_HELDOUT_ENDPOINTS, KAPPA_MID}))
-MDE_KAPPAS = (0.05, 0.10, 0.20, 0.35, 0.60)
+# frozen monotonicity grid (U3, held-out family's own κ) + genuinely-disjoint reference MDE grid (#5);
+# both are defined in the contract and hashed into the ledger identity.
+MONO_KAPPAS = ORACLE_MONO_KAPPAS
+MDE_KAPPAS = ORACLE_MDE_KAPPAS
 
 
 def _spearman(x: np.ndarray, y: np.ndarray) -> float:
@@ -41,9 +42,28 @@ def _seed(*p: str) -> int:
     return int.from_bytes(hashlib.sha256("|".join(p).encode()).digest()[:4], "big")
 
 
+def _rnd_tuple(t) -> list:
+    """Round a (value, passed) result tuple for stable payload hashing (value → 9dp, flag → bool)."""
+    return [round(float(t[0]), 9), bool(t[1])]
+
+
 def _control_bits(recipe) -> int:
     """The matched bit budget the U6 controls use — taken from the REGISTERED recipe, not hard-coded."""
     return int(recipe.spec().bit_accounting.get("control_bits", 8))
+
+
+from functools import lru_cache
+
+
+@lru_cache(maxsize=8)
+def _frozen_control_quants(bits: int):
+    """Freeze the U6 control quantizer endpoints from a fixed TRAIN/DEV reference cell (Pi #2), so the
+    controls are FIXED order-blind maps applied unchanged to every held-out/null cell — no per-cell
+    bounds adaptation. Cached per bit budget."""
+    dev = generate_meta_cell(TRAIN_FAMILIES[0], KAPPA_MID, "orthogonal", 1200, seed=_seed("ctrl_ref"))
+    me_q = R.fit_frozen_quantizer(R.mean_embed_raw_scores(dev), bits)
+    rc_q = R.fit_frozen_quantizer(R.random_codebook_raw_scores(dev, bits), bits)
+    return me_q, rc_q
 
 
 KAPPA_CERTIFY = max(KAPPA_HELDOUT_ENDPOINTS)      # the strong endpoint that must PASS the practical gates
@@ -97,13 +117,38 @@ class UnlockEvaluation:
     n_evaluable_cells: int
     n_hidden_null: int
     n_support_starved: int
+    eval_access_trace: dict[str, Any] = field(default_factory=dict)   # held-out cells scored (Pi #4)
+
+    def payload_hash(self) -> str:
+        """Content hash of the COMPLETE evaluation payload (Pi #3) — bound to the registry outcome so a
+        mutated field cannot be laundered through the pure verdict."""
+        from clinical_jepa.eval.oracle_contracts import canonical_hash
+
+        def _rnd(x):                                     # a check value[0] may be a scalar or a tuple
+            if isinstance(x, (tuple, list)):
+                return [round(float(e), 9) for e in x]
+            return round(float(x), 9)
+
+        return canonical_hash({
+            "families": [(f.family_id, _rnd_tuple(f.u3_monotone), _rnd_tuple(f.u2_null_fpr),
+                          _rnd_tuple(f.u1_kmid_power),
+                          [(c.family_id, c.kappa, c.role, c.status,
+                            {k: [_rnd(v[0]), bool(v[1])] for k, v in c.checks.items()})
+                           for c in f.cells]) for f in self.families],
+            "precision": {k: (round(v, 9) if isinstance(v, float) else v) for k, v in self.precision.items()},
+            "power_mde": {"mde": self.power_mde.get("mde"),
+                          "curve": {str(k): round(float(v), 9) for k, v in self.power_mde.get("power_curve", {}).items()}},
+            "ledger": [self.ledger_cardinality, round(self.ledger_alpha, 12), self.ledger_hash],
+            "readiness": self.train_family_readiness, "identities": self.identities,
+            "counts": [self.n_evaluable_cells, self.n_hidden_null, self.n_support_starved],
+            "eval_access_trace": self.eval_access_trace})
 
 
 # ---- per-predictor briers on a cell ----
 def _recipe_briers(recipe, cell):
     # decode via the recipe's REGISTERED stochastic sampler (exercises sampling end-to-end).
     from clinical_jepa.eval.oracle_meta_recipe import sampled_pairwise_probs
-    probs = sampled_pairwise_probs(recipe, cell, seed=_seed("sample", cell.family_id, str(cell.kappa)))
+    probs = sampled_pairwise_probs(recipe, cell)
     return R.briers_from_probs(probs, cell)
 
 
@@ -122,12 +167,14 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
                                     base_seed=_seed("rb", family_id, str(kappa)), alpha=a)
     if rb_r0[1] < ORACLE_R_BAYES_MARGIN:                     # hidden null: excluded before scoring
         return CellUnlock(family_id, kappa, role, "HIDDEN_NULL", {}, multiset_cluster_counts(cell))
-    # recipe + comparators (U6 controls use the recipe's REGISTERED matched control bits)
+    # recipe + comparators (U6 controls use the recipe's REGISTERED matched control bits, quantized with
+    # bounds FROZEN from a TRAIN/DEV reference — not adapted to this held-out cell, Pi #2).
     bits = _control_bits(recipe)
+    me_q, rc_q = _frozen_control_quants(bits)
     b_rec = _recipe_briers(recipe, cell)
     b_nuis = R.briers_vs_r0(R.r_nuis_scores(cell), cell)
-    b_me = R.briers_vs_r0(R.mean_embed_quantized_scores(cell, bits), cell)
-    rc_scores = R.random_codebook_scores(cell, bits, _seed("rc", family_id, str(kappa)))
+    b_me = R.briers_vs_r0(R.mean_embed_quantized_scores(cell, me_q), cell)
+    rc_scores = R.random_codebook_scores(cell, rc_q)
     b_rc = R.briers_vs_r0(rc_scores, cell)                              # positive-restricted
     b_rc_all = R.briers_vs_r0(rc_scores, cell, positives_only=False)    # incl nulls, for the U6 null-pass
     b0, npair = b_rec[1], b_rec[2]
@@ -158,7 +205,7 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
     rc_pos_upper = skill_upper(b_rc, b_rc[2], "rcpos")
     # E-O2 calibration vs the EXACT context-Bayes π* (same sampled decode path)
     from clinical_jepa.eval.oracle_meta_recipe import sampled_pairwise_probs
-    rec_probs = sampled_pairwise_probs(recipe, cell, seed=_seed("sample", family_id, str(kappa)))
+    rec_probs = sampled_pairwise_probs(recipe, cell)
     slope, intercept = R.e_o2_calibration(rec_probs, R.r_bayes_probs(cell), cell.true_order)
     lo, hi = ORACLE_CALIB_SLOPE_BAND
     checks = {
@@ -258,9 +305,10 @@ def _precision_sim(seed: int, n_studies: int = ORACLE_PRECISION_N_STUDIES, seq: 
             "theta_star": theta_star, "mc_adequate": mc_ok, "passes": passes}
 
 
-def _reference_power_curve_mde(seed: int, n_seeds: int = 40, seq: int = 800) -> dict:
-    """Reference (π*) power curve over the frozen disjoint MDE grid + the MDE (smallest grid κ whose
-    π* power lower-bound clears the floor). Evaluator characterization, recipe-independent (#5)."""
+def _reference_power_curve_mde(seed: int, n_seeds: int = ORACLE_N_POS_SEEDS, seq: int = 800) -> dict:
+    """Reference (π*) power curve over the frozen DISJOINT MDE grid + the MDE (smallest grid κ whose π*
+    power lower-bound clears the floor). Evaluator characterization, recipe-independent (#5). Uses the
+    full ORACLE_N_POS_SEEDS positive seeds, matching every other positive power point in the contract."""
     fam = TRAIN_FAMILIES[0]
     curve = {}
     for k in MDE_KAPPAS:
@@ -286,29 +334,39 @@ def _readiness(seed: int) -> bool:
     return True
 
 
-def compute_unlock(recipe, *, seed: int = 0, identities: dict | None = None) -> UnlockEvaluation:
-    """Build the full typed UnlockEvaluation for a fit-once recipe across the held-out families×κ cells."""
+def compute_unlock(recipe, *, evaluator_assignment, identities: dict | None = None) -> UnlockEvaluation:
+    """Build the full typed UnlockEvaluation for a fit-once recipe across the REGISTRY-ASSIGNED held-out
+    families × endpoint κ (Pi #4). The evaluator does NOT pick its own inventory — it consumes the
+    evaluator assignment, derives every eval/OC RNG seed from its seed IDs, and records the held-out
+    cells it scored as an external eval access trace (reconciled by the verdict)."""
+    from clinical_jepa.eval.oracle_meta_recipe import registry_seed
+    from clinical_jepa.eval.oracle_meta_ledger import ledger_hash
+    ea = evaluator_assignment
+    base = registry_seed(ea.seed_ids, "eval")
     ledger = build_ledger()
-    families = []
+    families, scored = [], []
     n_eval = n_hidden = n_starved = 0
-    for fam in HELDOUT_FAMILIES:
-        cells = tuple(_cell_unlock(recipe, fam, kap, ledger, seed=seed + _seed(fam, str(kap)) % 9973)
-                      for kap in KAPPA_HELDOUT_ENDPOINTS)
+    for fam in ea.held_out_families:
+        cells = tuple(_cell_unlock(recipe, fam, kap, ledger, seed=registry_seed(ea.seed_ids, "cell", fam, kap))
+                      for kap in ea.endpoints)
         for c in cells:
             n_eval += c.evaluable
             n_hidden += c.status == "HIDDEN_NULL"
             n_starved += c.status == "SUPPORT_STARVED"
+            scored.append([fam, float(c.kappa)])
         families.append(FamilyUnlock(
-            fam, _monotone(recipe, fam, seed=seed + 500), _recipe_null_fpr(recipe, fam, seed=seed + 900),
-            _kmid_power(recipe, fam, seed=seed + 1300), cells))
-    from clinical_jepa.eval.oracle_meta_ledger import ledger_hash
+            fam, _monotone(recipe, fam, seed=base + 500), _recipe_null_fpr(recipe, fam, seed=base + 900),
+            _kmid_power(recipe, fam, seed=base + 1300), cells))
+    eval_trace = {"scored_cells": sorted(scored), "held_out_families": list(ea.held_out_families),
+                  "endpoints": [float(k) for k in ea.endpoints],
+                  "evaluator_assignment_hash": ea.assignment_hash()}
     return UnlockEvaluation(
-        families=tuple(families), precision=_precision_sim(seed=seed + 2000),
-        power_mde=_reference_power_curve_mde(seed=seed + 5000),
+        families=tuple(families), precision=_precision_sim(seed=base + 2000),
+        power_mde=_reference_power_curve_mde(seed=base + 5000),
         ledger_cardinality=ledger.cardinality(), ledger_alpha=ledger.ci_alpha(),
-        ledger_hash=ledger_hash(), train_family_readiness=_readiness(seed=seed + 40),
+        ledger_hash=ledger_hash(), train_family_readiness=_readiness(seed=base + 40),
         identities=dict(identities or {}), n_evaluable_cells=n_eval,
-        n_hidden_null=n_hidden, n_support_starved=n_starved)
+        n_hidden_null=n_hidden, n_support_starved=n_starved, eval_access_trace=eval_trace)
 
 
 CERTIFIED_CANDIDATE = "synthetic_recovery_CERTIFIED_CANDIDATE"
@@ -332,9 +390,78 @@ class CandidateVerdict:
     can_populate_policy: bool = False
 
 
+def _identity_mismatch(ids: dict) -> str | None:
+    """Pin every registry identity to its FROZEN expected value (Pi #3): non-emptiness is not enough —
+    a plausible WRONG hash / contaminated trace must be refused, not laundered through the pure verdict."""
+    from clinical_jepa.eval.oracle_meta_gen import invariant_hash
+    from clinical_jepa.eval.oracle_meta_recipe import (
+        RECIPE_CONTROL_BITS, RECIPE_TARGET_BITS, expected_sampler_fingerprint,
+    )
+    from clinical_jepa.eval.oracle_meta_gen import KAPPA_TRAIN_GRID
+    from clinical_jepa.eval.rung2_contract import ORACLE_EVALUATOR_IDENTITY
+    if not REQUIRED_IDENTITY_KEYS <= set(ids) or any(not ids.get(k) for k in REQUIRED_IDENTITY_KEYS):
+        return "missing_identity_fields"
+    if ids["mechanism_hash"] != invariant_hash():
+        return "mechanism_hash_mismatch"
+    if ids["evaluator_identity"] != ORACLE_EVALUATOR_IDENTITY:
+        return "evaluator_identity_mismatch"
+    if ids["sampler_fingerprint"] != expected_sampler_fingerprint():
+        return "sampler_fingerprint_mismatch"
+    ba = ids["bit_accounting"]
+    if not (isinstance(ba, dict) and ba.get("target_bits") == RECIPE_TARGET_BITS
+            and ba.get("control_bits") == RECIPE_CONTROL_BITS):
+        return "bit_accounting_mismatch"
+    seed_ids = ids["seed_ids"]
+    if not (isinstance(seed_ids, (list, tuple)) and seed_ids and len(set(seed_ids)) == len(seed_ids)):
+        return "seed_ids_malformed"
+    # training access trace: train families only, no held-out / OC family, only train κ.
+    tr = ids["access_trace"]
+    fams, kaps = set(tr.get("families", [])), set(tr.get("kappas", []))
+    if not fams or not fams <= set(TRAIN_FAMILIES) or fams & set(HELDOUT_FAMILIES):
+        return "train_access_trace_contaminated"
+    if not kaps <= set(KAPPA_TRAIN_GRID):
+        return "train_access_trace_offgrid_kappa"
+    if tr.get("split_assignment_hash") != ids["split_assignment_hash"]:
+        return "split_assignment_hash_inconsistent"
+    return None
+
+
+def _eval_trace_mismatch(unlock: UnlockEvaluation) -> str | None:
+    """The eval access trace must equal EXACTLY the canonical held-out family × endpoint inventory —
+    the evaluator did not secretly score an unassigned family/κ (Pi #4)."""
+    et = unlock.eval_access_trace
+    if not et:
+        return "eval_access_trace_missing"
+    if set(et.get("held_out_families", [])) != set(HELDOUT_FAMILIES):
+        return "eval_trace_family_inventory_mismatch"
+    if set(et.get("endpoints", [])) != set(KAPPA_HELDOUT_ENDPOINTS):
+        return "eval_trace_endpoint_inventory_mismatch"
+    want = {(f, float(k)) for f in HELDOUT_FAMILIES for k in KAPPA_HELDOUT_ENDPOINTS}
+    got = {(f, float(k)) for f, k in et.get("scored_cells", [])}
+    if got != want:
+        return "eval_trace_scored_cells_mismatch"
+    return None
+
+
+def _power_mde_mismatch(power_mde: dict) -> str | None:
+    """Validate the reference power/MDE payload against the frozen grid + the MDE definition (Pi #3)."""
+    curve = power_mde.get("power_curve", {})
+    if set(curve) != set(MDE_KAPPAS):
+        return "power_curve_grid_mismatch"
+    passing = sorted(k for k in MDE_KAPPAS if curve[k] >= ORACLE_POWER_FLOOR)
+    expected_mde = passing[0] if passing else None
+    if power_mde.get("mde") != expected_mde:
+        return "mde_not_smallest_passing_point"
+    if expected_mde is None:
+        return "evaluator_has_no_detectable_MDE"
+    return None
+
+
 def certify_from_unlock(unlock: UnlockEvaluation) -> CandidateVerdict:
-    """PURE FUNCTION of the UnlockEvaluation. ENFORCES the ledger + identity schema + check/family
-    inventory before any pass (a fabricated UnlockEvaluation cannot certify — Pi #6). CANDIDATE only."""
+    """PURE FUNCTION of the UnlockEvaluation. ENFORCES the frozen ledger, the PINNED registry identities
+    (exact values, not mere non-emptiness), the eval access trace, the reconciled counts/inventory, and
+    the reference power/MDE — before any pass. A fabricated or mutated UnlockEvaluation cannot certify
+    (Pi #3/#6). CANDIDATE only; never issues a governed manifest or populates policy."""
     from clinical_jepa.eval.oracle_meta_ledger import build_ledger, ledger_hash
     led = build_ledger()
     n = unlock.n_evaluable_cells
@@ -342,27 +469,39 @@ def certify_from_unlock(unlock: UnlockEvaluation) -> CandidateVerdict:
     if (unlock.ledger_hash != ledger_hash() or unlock.ledger_cardinality != led.cardinality()
             or abs(unlock.ledger_alpha - led.ci_alpha()) > 1e-12):
         return CandidateVerdict(REFUTED, "ledger_identity_mismatch", n)
-    # (2) required identity schema present + non-empty
-    ids = unlock.identities
-    if not REQUIRED_IDENTITY_KEYS <= set(ids) or any(not ids.get(k) for k in REQUIRED_IDENTITY_KEYS):
-        return CandidateVerdict(REFUTED, "missing_identity_fields", n)
+    # (2) PINNED registry identities (exact expected values) + eval trace
+    idm = _identity_mismatch(unlock.identities)
+    if idm is not None:
+        return CandidateVerdict(REFUTED, idm, n)
+    etm = _eval_trace_mismatch(unlock)
+    if etm is not None:
+        return CandidateVerdict(REFUTED, etm, n)
     # (3) exact held-out family inventory + per-cell check inventory (no unexpected/missing)
     if {f.family_id for f in unlock.families} != set(HELDOUT_FAMILIES) or \
             len(unlock.families) != len(HELDOUT_FAMILIES):
         return CandidateVerdict(REFUTED, "family_inventory_mismatch", n)
+    r_eval = r_hidden = r_starved = 0
     for f in unlock.families:
         if {c.kappa for c in f.cells} != set(KAPPA_HELDOUT_ENDPOINTS):
             return CandidateVerdict(REFUTED, "cell_inventory_mismatch", n)
         for c in f.cells:
+            r_eval += c.evaluable
+            r_hidden += c.status == "HIDDEN_NULL"
+            r_starved += c.status == "SUPPORT_STARVED"
             if c.evaluable and set(c.checks) != EXPECTED_CELL_CHECKS:
                 return CandidateVerdict(REFUTED, "check_inventory_mismatch", n)
-    # (4) readiness + precision + evaluator MDE detectable + family conjunction
+    # (3b) reconcile the advertised counts against the ACTUAL nested cell records (Pi #3)
+    if (r_eval, r_hidden, r_starved) != (unlock.n_evaluable_cells, unlock.n_hidden_null,
+                                         unlock.n_support_starved):
+        return CandidateVerdict(REFUTED, "count_reconciliation_mismatch", n)
+    # (4) reference power/MDE + readiness + precision + family conjunction
+    pm = _power_mde_mismatch(unlock.power_mde)
+    if pm is not None:
+        return CandidateVerdict(REFUTED, pm, n)
     if not unlock.train_family_readiness:
         return CandidateVerdict(REFUTED, "train_family_readiness_failed", n)
     if not unlock.precision.get("passes"):
         return CandidateVerdict(REFUTED, "evaluator_precision_inadequate", n)
-    if unlock.power_mde.get("mde") is None:
-        return CandidateVerdict(REFUTED, "evaluator_has_no_detectable_MDE", n)
     if n == 0:
         return CandidateVerdict(REFUTED, "no_evaluable_cells", 0)
     if not all(f.passed for f in unlock.families):

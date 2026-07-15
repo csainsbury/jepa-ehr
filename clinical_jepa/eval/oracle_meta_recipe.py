@@ -26,6 +26,7 @@ def _stable_seed(*parts: str) -> int:
 from clinical_jepa.eval.oracle_meta_gen import (
     D_ITEM, KAPPA_TRAIN_GRID, MetaCell, TRAIN_FAMILIES, generate_meta_cell,
 )
+from clinical_jepa.eval.rung2_contract import ORACLE_EVALUATOR_IDENTITY
 from clinical_jepa.eval import oracle_meta_refs as R
 
 # TRAIN κ grid actually usable for supervised fitting (positive coupling only; κ=0 carries no signal).
@@ -76,35 +77,54 @@ class RegistryDataLoader:
     access trace. Contamination refusal reads this trace, NOT recipe-reported metadata; a recipe that
     fits only from this loader cannot read a held-out family / κ."""
 
-    def __init__(self, assignment, *, seed: int, n: int = 1200) -> None:
+    def __init__(self, assignment, *, n: int = 1200) -> None:
+        if not assignment.seed_ids:
+            raise ValueError("registry assignment carries no seed_ids — cannot derive training RNG")
         self.assignment = assignment
-        self._seed = seed
         self._n = n
         self._accessed: list[tuple[str, float]] = []
 
+    def _seed_for(self, *parts) -> int:
+        """Every train/dev RNG seed is DERIVED from the registry-owned seed IDs (Pi #4): changing a seed
+        ID changes the generated data, so seed IDs are consumed, not decorative labels."""
+        return registry_seed(self.assignment.seed_ids, *parts)
+
     def train_iter(self):
-        for i, fam in enumerate(self.assignment.train):
-            for j, kap in enumerate(FIT_KAPPAS):
+        for fam in self.assignment.train:
+            for kap in FIT_KAPPAS:
                 self._accessed.append((fam, float(kap)))
-                c = generate_meta_cell(fam, kap, "orthogonal", self._n, seed=self._seed + 100 * i + 7 * j,
-                                       null_weight=0.0)                   # clean positive training order
+                c = generate_meta_cell(fam, kap, "orthogonal", self._n,
+                                       seed=self._seed_for("train", fam, kap), null_weight=0.0)
                 yield c.context_view(), c.future_view()
 
     def dev_cell(self) -> MetaCell:
         fam, kap = self.assignment.train[0], FIT_KAPPAS[-1]
+        dev_id = self.assignment.dev[0] if self.assignment.dev else "dev0"   # dev IDs are CONSUMED (Pi #4)
         self._accessed.append((fam, float(kap)))
-        return generate_meta_cell(fam, kap, "orthogonal", 1500, seed=self._seed + 313131, null_weight=0.0)
+        return generate_meta_cell(fam, kap, "orthogonal", 1500,
+                                  seed=self._seed_for("dev", dev_id, fam, kap), null_weight=0.0)
+
+    def fit_rng(self) -> np.random.Generator:
+        return np.random.default_rng(self._seed_for("fit_rng"))
 
     def access_trace(self) -> dict:
         return {"families": sorted({f for f, _ in self._accessed}),
-                "kappas": sorted({k for _, k in self._accessed})}
+                "kappas": sorted({k for _, k in self._accessed}),
+                "split_assignment_hash": self.assignment.assignment_hash(),
+                "seed_ids": list(self.assignment.seed_ids)}
+
+
+def registry_seed(seed_ids, *parts) -> int:
+    """Derive a concrete uint32 RNG seed from the registry-owned seed IDs + a role/cell identity (Pi #4)."""
+    key = "|".join([str(s) for s in seed_ids] + [str(p) for p in parts])
+    return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big") % (2 ** 32)
 
 
 def default_loader(*, seed: int, n: int = 1200) -> RegistryDataLoader:
     from clinical_jepa.eval.oracle_contracts import SplitAssignment
-    a = SplitAssignment(train=TRAIN_FAMILIES, dev=("dev",), sealed_cert=(), family_ids=TRAIN_FAMILIES,
-                        seed_ids=(f"s{seed}",))
-    return RegistryDataLoader(a, seed=seed, n=n)
+    a = SplitAssignment(train=TRAIN_FAMILIES, dev=(f"dev::{seed}",), sealed_cert=(),
+                        family_ids=TRAIN_FAMILIES, seed_ids=(f"s{seed}",))
+    return RegistryDataLoader(a, n=n)
 
 
 class _Ranker:
@@ -116,6 +136,7 @@ class _Ranker:
 
     def __init__(self, l2: float = 1.0) -> None:
         self._w = None; self._l2 = l2; self._L = None; self._T = 1.0
+        self._quant = None                                               # frozen quantizer (fit from TRAIN/DEV)
         self.fit_provenance: dict = {}
 
     # ---- capability-enforced feature extraction: reads ONLY allowlisted context channels ----
@@ -126,7 +147,7 @@ class _Ranker:
         return _item_features(ctx, item) if self._ctx_interaction else item
 
     def fit(self, loader: RegistryDataLoader, *, max_pairs: int = 40000):
-        rng = np.random.default_rng(_stable_seed("fit", str(loader._seed)))
+        rng = loader.fit_rng()                                            # RNG derived from registry seed IDs
         views = list(loader.train_iter())
         per = max(1, max_pairs // max(1, len(views)))
         Xs, Ys = [], []
@@ -137,6 +158,9 @@ class _Ranker:
             Xs.append(X); Ys.append(Y); self._L = ranks.shape[1]
         self._w = _logistic_fit(np.concatenate(Xs, 0), np.concatenate(Ys, 0), l2=self._l2)
         self._T = self._calibrate_temperature(loader.dev_cell())
+        # freeze the quantizer endpoints from the TRAIN latents ONLY (Pi #2): applied unchanged to held-out.
+        ref = np.concatenate([self.predict_from_view(cv).ravel() for cv, _ in views])
+        self._quant = R.fit_frozen_quantizer(ref, RECIPE_TARGET_BITS)
         self.fit_provenance = loader.access_trace()                      # EXTERNAL trace (not self-reported)
         return self
 
@@ -166,7 +190,7 @@ class _Ranker:
         return self.spec().recipe_hash()
 
     def artifact(self):
-        return _fitted_artifact(self.recipe_hash(), self._w, self._T)
+        return _fitted_artifact(self.recipe_hash(), self._w, self._T, self._quant)
 
 
 class InvariantLearner(_Ranker):
@@ -215,35 +239,38 @@ def _recipe_spec(architecture: str, lam: float):
     from clinical_jepa.eval.oracle_meta_gen import invariant_hash
     return RecipeSpec(
         architecture=architecture, target_encoder="gaussian_rank_quantile",
-        codebook_cfg={"kind": "none"}, losses={"ridge_mse": 1.0}, optimizer="closed_form_ridge",
+        codebook_cfg={"kind": "frozen_uniform", "bits": RECIPE_TARGET_BITS, "endpoints": "fit_from_train_dev"},
+        losses={"ridge_mse": 1.0}, optimizer="closed_form_ridge",
         schedule="none", bit_accounting={"target_bits": RECIPE_TARGET_BITS, "control_bits": RECIPE_CONTROL_BITS},
         decode_policy="pairwise_sigmoid_temperature",
         sampler_spec=SamplerSpec(n_latent_samples=4, temperature=0.3, aggregation="mean_pairwise_prob",
                                  common_random_numbers=True),
         decoder_sampler_spec=DecoderSamplerSpec(n_decode_samples=1),
         split_ids={"train_grid": list(FIT_KAPPAS)}, seed_policy="sha256",
-        evaluator_identity="oracle_meta_eval_v4",
+        evaluator_identity=ORACLE_EVALUATOR_IDENTITY,
         code_identity=f"{architecture}|lam={lam}|mech={invariant_hash()[:16]}")
 
 
-def _fitted_artifact(recipe_hash: str, w, T: float):
-    """Full-byte fitted-parameter identity (Pi #8): exact dtype/shape/contiguous bytes, not rounded."""
+def expected_sampler_fingerprint() -> str:
+    """The canonical registered-sampler fingerprint (identical for every recipe) — the value the pure
+    verdict pins ``identities['sampler_fingerprint']`` against (Pi #3)."""
+    return sampler_fingerprint(_SamplerFP())
+
+
+class _SamplerFP:
+    def spec(self):
+        return _recipe_spec("invariant_pairwise_ranker", 1.0)
+
+
+def _fitted_artifact(recipe_hash: str, w, T: float, quant=None):
+    """Full-byte fitted-parameter identity (Pi #8): exact dtype/shape/contiguous bytes, not rounded.
+    Binds the FROZEN quantizer endpoints too (Pi #2 — the code is part of the fitted identity)."""
     from clinical_jepa.eval.oracle_contracts import FittedRecipeArtifact, canonical_hash
     wa = np.ascontiguousarray(w, dtype=np.float64)
     art = canonical_hash({"w_bytes": wa.tobytes().hex(), "dtype": str(wa.dtype), "shape": list(wa.shape),
-                          "T_bytes": np.float64(T).tobytes().hex()})
+                          "T_bytes": np.float64(T).tobytes().hex(),
+                          "quantizer": quant.identity() if quant is not None else None})
     return FittedRecipeArtifact(recipe_hash, art, {"T": float(T)})
-
-
-def _quantize_latent(scores: np.ndarray, bits: int) -> np.ndarray:
-    """Quantize the per-item latent to a FROZEN ``bits``-level uniform code before decoding (Pi #7): the
-    candidate's information budget is actually bit-limited, matched to the U6 controls' bit budget."""
-    lo, hi = float(scores.min()), float(scores.max())
-    if hi - lo < 1e-12:
-        return scores
-    levels = max(2, 2 ** int(bits))
-    q = np.round((scores - lo) / (hi - lo) * (levels - 1))
-    return lo + q / (levels - 1) * (hi - lo)
 
 
 def sequence_bits(bit_accounting: dict, n_items: int) -> int:
@@ -253,11 +280,11 @@ def sequence_bits(bit_accounting: dict, n_items: int) -> int:
 
 
 def validate_bit_budget(recipe, n_items: int) -> None:
-    """Fail-closed bit-accounting: control_bits must not EXCEED target_bits under the shared formula
-    (the controls cannot be given a larger information budget than the candidate)."""
+    """Fail-closed bit-accounting (Pi #2): matched controls must use EXACTLY the candidate's target bits
+    — not merely ``<=`` — so the U6 comparison is a genuinely matched-bandwidth test."""
     ba = recipe.spec().bit_accounting
-    if int(ba.get("control_bits", 8)) > int(ba.get("target_bits", 8)):
-        raise RuntimeError("bit-budget mismatch: control bits exceed the candidate's target bits")
+    if int(ba.get("control_bits", 8)) != int(ba.get("target_bits", 8)):
+        raise RuntimeError("bit-budget mismatch: matched controls must use EXACTLY the candidate's bits")
     if sequence_bits(ba, n_items) <= 0:
         raise RuntimeError("non-positive sequence bit budget")
 
@@ -270,22 +297,51 @@ def sampler_fingerprint(recipe) -> str:
                            "crn": s.common_random_numbers, "seed_derivation": s.seed_derivation})
 
 
-def sampled_pairwise_probs(recipe, cell, *, seed: int) -> np.ndarray:
+def _context_id(cell) -> str:
+    """A stable per-context identifier for the registered sampler seed policy (content of the context)."""
+    cf = np.ascontiguousarray(cell.context_features, dtype=np.float64)
+    return hashlib.sha256(cf.tobytes()).hexdigest()[:16]
+
+
+def _sampler_rng(recipe_hash: str, context_id: str, sample_idx: int) -> np.random.Generator:
+    """The REGISTERED seed-derivation policy: sha256(recipe_hash|context_id|sample_idx) → RNG (Pi #2)."""
+    h = hashlib.sha256(f"{recipe_hash}|{context_id}|{sample_idx}".encode()).digest()
+    return np.random.default_rng(int.from_bytes(h[:8], "big"))
+
+
+def sampled_pairwise_probs(recipe, cell, *, seed: int | None = None) -> np.ndarray:
     """Decode via the recipe's REGISTERED stochastic sampler: draw ``n_latent_samples`` predicted-latent
-    perturbations (common-random-number seed derivation), decode each, and aggregate the pairwise
-    probabilities. Deterministic given ``seed`` (reproducibility is asserted end-to-end)."""
+    perturbations under the DECLARED sha256(recipe_hash|context_id|sample_idx) seed policy, quantize each
+    with the recipe's FROZEN quantizer, decode, and aggregate the pairwise probabilities. Deterministic
+    from the recipe + context identity (``seed`` is ignored — the policy is intrinsic, Pi #2)."""
     sampler = recipe.spec().sampler_spec
-    bits = int(recipe.spec().bit_accounting.get("target_bits", 8))
-    scores = _quantize_latent(recipe.predict_from_view(cell.context_view()), bits)  # ContextView + bit-limited
+    quant = recipe._quant
+    if quant is None:
+        raise RuntimeError("recipe has no frozen quantizer — fit() must run before scoring")
+    base = recipe.predict_from_view(cell.context_view())              # ContextView latent
+    scores, _ = quant.apply(base)                                     # FROZEN, non-adaptive quantization
     if sampler.n_latent_samples <= 1:
         return R.pairwise_probs(scores, recipe._T)
-    rng = np.random.default_rng(seed)
+    rhash, cid = recipe.recipe_hash(), _context_id(cell)
     acc = None
-    for _ in range(int(sampler.n_latent_samples)):
-        noisy = _quantize_latent(scores + sampler.temperature * rng.standard_normal(scores.shape), bits)
+    for k in range(int(sampler.n_latent_samples)):
+        rng = _sampler_rng(rhash, cid, k)                            # registered per-sample seed derivation
+        noisy, _ = quant.apply(base + sampler.temperature * rng.standard_normal(base.shape))
         p = R.pairwise_probs(noisy, recipe._T)
         acc = p if acc is None else acc + p
     return acc / sampler.n_latent_samples
+
+
+def sampled_clip_diagnostic(recipe, cell) -> float:
+    """Max frozen-quantizer clip fraction over the base + sampled latents (overflow diagnostic, Pi #2)."""
+    base = recipe.predict_from_view(cell.context_view())
+    fracs = [recipe._quant.apply(base)[1]]
+    rhash, cid = recipe.recipe_hash(), _context_id(cell)
+    s = recipe.spec().sampler_spec
+    for k in range(int(s.n_latent_samples)):
+        rng = _sampler_rng(rhash, cid, k)
+        fracs.append(recipe._quant.apply(base + s.temperature * rng.standard_normal(base.shape))[1])
+    return float(max(fracs))
 
 
 @dataclass(frozen=True)
