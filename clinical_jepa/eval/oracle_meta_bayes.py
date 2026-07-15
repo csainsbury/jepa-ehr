@@ -125,30 +125,69 @@ def _markov_mixture(classes, kappa, weights):
     return np.einsum("nijk,nk->nij", phi_k, weights)
 
 
-def _student_mc(classes, kappa, context=None, n_mc=4000, seed=0):
-    """Frozen MC for the Student-t family. R0 samples the prior; π* importance-reweights the Gaussian
-    posterior by the Student-t/Gaussian prior-density ratio."""
+def _student_prior_logpdf(drv):
+    """log density of the iid Student-t(df) driver PRIOR, summed over coordinates (…, D) → (…)."""
+    from scipy.special import gammaln
+    df = STUDENT_T_DF
+    c = gammaln((df + 1.0) / 2.0) - gammaln(df / 2.0) - 0.5 * np.log(df * np.pi)
+    return (c - (df + 1.0) / 2.0 * np.log1p(drv ** 2 / df)).sum(-1)
+
+
+def _gauss_std_logpdf(drv):
+    """log density of the standard-normal driver prior N(0, I), summed over coordinates."""
+    return (-0.5 * drv ** 2 - 0.5 * np.log(2.0 * np.pi)).sum(-1)
+
+
+# π* MC budget for the ONLY non-analytic posterior (Student-t held-out); frozen for the reference.
+STUDENT_PISTAR_NMC = 3072
+STUDENT_PISTAR_SEED = 0x5717
+
+
+def _pistar_no_h(cell, kappa):
+    """E_no_h_exogenous exposes the driver EXACTLY as ``observed_covariates``; the Bayes-optimal
+    reference conditions on it, so the posterior is a POINT MASS at the observed z (Σ_post = 0)."""
     g, cm = _pair_tables()
-    cp = cm[classes[:, :, None], classes[:, None, :]]
-    gp = g[classes[:, :, None], classes[:, None, :]]
+    z = np.asarray(cell.observed_covariates, dtype=float)             # (N, D_H) — the exact driver
+    cls = cell.item_classes
+    cp = cm[cls[:, :, None], cls[:, None, :]]
+    gp = g[cls[:, :, None], cls[:, None, :]]
+    gmu = np.einsum("nijd,nd->nij", gp, z)
+    return _gauss_pairprob(cp, gp, kappa, gmu, np.zeros_like(cp))     # ggg = 0 → point mass at z
+
+
+def _pistar_student(cell, kappa, n_mc=STUDENT_PISTAR_NMC, seed=STUDENT_PISTAR_SEED, return_ess=False):
+    """Exact per-sequence Student-t posterior π*. The Gaussian-posterior proposal q(drv) ∝
+    N(ctx; W·drv, σ²)·N(drv;0,I) is the target's likelihood times the WRONG (Gaussian) prior, so the
+    self-normalized importance weight collapses to the prior-density ratio t_prior/N(0,I) — no likelihood
+    evaluation, tight proposal, high ESS. Vectorized per-sequence in memory-bounded chunks."""
+    g, cm = _pair_tables()
+    ctx = cell.context_features
+    N = ctx.shape[0]
+    L = cell.item_classes.shape[1]
+    mu = ctx @ INVARIANT.A.T                                          # (N, D) posterior mean
+    Sig = _posterior_cov(); D = Sig.shape[0]
+    Lc = np.linalg.cholesky(Sig + 1e-12 * np.eye(D))
     rng = np.random.default_rng(seed)
-    D = gp.shape[-1]
-    if context is None:
-        drv = rng.standard_t(STUDENT_T_DF, size=(n_mc, D))            # prior samples
-        w = np.ones(n_mc) / n_mc
-    else:
-        mu = context @ INVARIANT.A.T                                 # (N, D) — but MC per cell is heavy;
-        # use the POOLED posterior around the cell-mean context (frozen-MC reference, cell-level).
-        Sig = _posterior_cov()
-        L = np.linalg.cholesky(Sig + 1e-9 * np.eye(D))
-        base = mu.mean(0)
-        drv = base + rng.standard_normal((n_mc, D)) @ L.T            # Gaussian-posterior proposal
-        from scipy.stats import t as student_t, multivariate_normal as mvn
-        logw = student_t.logpdf(drv, STUDENT_T_DF).sum(1) - mvn.logpdf(drv, base, Sig)
-        logw -= logw.max(); w = np.exp(logw); w = w / w.sum()
-    gd = np.einsum("nijd,md->nijm", gp, drv)                          # (N, L, L, n_mc)
-    phi = _phi((-cp[..., None] - kappa * gd) / (np.sqrt(2.0) * ORDER_NOISE))
-    return np.einsum("nijm,m->nij", phi, w)
+    base = rng.standard_normal((n_mc, D)) @ Lc.T                      # shared zero-mean proposal block
+    cls = cell.item_classes
+    out = np.empty((N, L, L))
+    ess = np.empty(N)
+    denom = np.sqrt(2.0) * ORDER_NOISE
+    chunk = max(1, 4_000_000 // (L * L * n_mc))
+    for s in range(0, N, chunk):
+        e = slice(s, min(N, s + chunk))
+        drv = mu[e][:, None, :] + base[None, :, :]                   # (c, n_mc, D)
+        logw = _student_prior_logpdf(drv) - _gauss_std_logpdf(drv)   # (c, n_mc)
+        logw -= logw.max(1, keepdims=True)
+        w = np.exp(logw); w /= w.sum(1, keepdims=True)
+        ess[e] = 1.0 / (w ** 2).sum(1)
+        cp = cm[cls[e][:, :, None], cls[e][:, None, :]]              # (c, L, L)
+        gp = g[cls[e][:, :, None], cls[e][:, None, :]]              # (c, L, L, D)
+        Y = np.einsum("cijd,cmd->cijm", gp, drv)                     # (c, L, L, n_mc)
+        out[e] = np.einsum("cijm,cm->cij", _phi((-cp[..., None] - kappa * Y) / denom), w)
+    if return_ess:
+        return out, ess
+    return out
 
 
 def r0_pairwise(family_id: str, kappa: float, class_ids: np.ndarray) -> np.ndarray:
@@ -161,20 +200,56 @@ def pi_star_pairwise(cell, kappa: float) -> np.ndarray:
     """Exact context-Bayes P(a≺b | context, content) for the positive regime, per family."""
     kappa = float(kappa)
     fam = cell.family_id
+    if fam == "E_no_h_exogenous":
+        return _pistar_no_h(cell, kappa)                              # condition on the observed driver
     if fam in _GAUSS_FAMILIES:
-        return _pistar_gaussian(cell, kappa)
+        return _pistar_gaussian(cell, kappa)                         # latent-Gaussian posterior (analytic)
     if fam == "T_hmm_markov":
         return _markov_mixture(cell.item_classes, kappa, _markov_weights_posterior(cell.context_features))
     if fam == "E_offgrid_heavytail":
-        # the posterior is LIKELIHOOD-dominated (context = W·driver + small Gaussian noise), so it is
-        # ≈ Gaussian regardless of the Student-t prior; validated per-sequence against brute MC below.
-        return _pistar_gaussian(cell, kappa)
+        return _pistar_student(cell, kappa)                          # true per-sequence Student-t posterior
     raise KeyError(fam)
 
 
+def _student_pistar_validate(cell, kappa, n_mc=24000, seed=11):
+    """INDEPENDENT high-precision Student-t π* by a GENUINELY DIFFERENT scheme: a heavy-tailed
+    multivariate-t proposal centred at μ, with the FULL unnormalized posterior weight (explicit
+    likelihood N(ctx;W·drv,σ²) × Student-t prior ÷ mv-t proposal density). Shares no arithmetic with
+    ``_pistar_student`` (which cancels the likelihood analytically), so agreement is non-circular."""
+    g, cm = _pair_tables()
+    ctx = cell.context_features
+    mu = ctx @ INVARIANT.A.T
+    W = INVARIANT.W_ctx; sig2 = CTX_NOISE ** 2
+    Sig = _posterior_cov(); D = Sig.shape[0]
+    Lc = np.linalg.cholesky(Sig + 1e-12 * np.eye(D)) * 1.3            # inflated to cover the tails
+    rng = np.random.default_rng(seed)
+    df_p = 3.0
+    cls = cell.item_classes
+    out = np.empty((ctx.shape[0], cls.shape[1], cls.shape[1]))
+    denom = np.sqrt(2.0) * ORDER_NOISE
+    for i in range(ctx.shape[0]):
+        z = rng.standard_normal((n_mc, D))
+        chi = rng.chisquare(df_p, n_mc) / df_p
+        t = z / np.sqrt(chi)[:, None]                                 # standard multivariate-t(df_p)
+        drv = mu[i] + t @ Lc.T                                        # proposal draws (heavy-tailed)
+        resid = ctx[i][None, :] - drv @ W.T
+        loglik = -0.5 * (resid ** 2).sum(1) / sig2                    # explicit Gaussian likelihood
+        logtarget = loglik + _student_prior_logpdf(drv)              # unnormalized posterior
+        u = np.linalg.solve(Lc, (drv - mu[i]).T).T                    # whiten for the mv-t density
+        logq = -(df_p + D) / 2.0 * np.log1p((u ** 2).sum(1) / df_p)  # ∝ mv-t proposal log-density
+        logw = logtarget - logq
+        logw -= logw.max(); w = np.exp(logw); w /= w.sum()
+        cp = cm[cls[i][:, None], cls[i][None, :]]; gp = g[cls[i][:, None], cls[i][None, :]]
+        Y = np.einsum("ijd,md->ijm", gp, drv)
+        out[i] = np.einsum("ijm,m->ij", _phi((-cp[..., None] - kappa * Y) / denom), w)
+    return out
+
+
 def reference_mc_error(family_id: str, kappa: float, which: str = "r0", seed: int = 7) -> float:
-    """Validate the analytic/MC reference against an INDEPENDENT high-precision brute MC (R0 over the
-    prior; π* over the PER-SEQUENCE posterior, importance-reweighted by the true family prior)."""
+    """Validate the analytic/MC reference against an INDEPENDENT high-precision method. R0 is checked
+    over the family PRIOR; π* over the PER-SEQUENCE posterior — each family against a genuinely different
+    integrator (no-h point mass vs noise-only MC; Gaussian vs brute MC; Markov vs categorical MC;
+    Student-t vs the mv-t importance validator above)."""
     from clinical_jepa.eval.oracle_meta_gen import _driver, generate_meta_cell
     g, cm = _pair_tables()
     rng = np.random.default_rng(seed + 1)
@@ -188,25 +263,38 @@ def reference_mc_error(family_id: str, kappa: float, which: str = "r0", seed: in
         noise = rng.standard_normal(20000) * (np.sqrt(2.0) * ORDER_NOISE)
         hit = (cp[..., None] + kappa * gd + noise[None, None, None, :] < 0).mean(-1)
         return float(np.abs(ref - hit).max())
-    # π*: per-sequence posterior brute MC on a small subset, sampling EACH family's actual posterior.
-    cell = generate_meta_cell(family_id, kappa, "orthogonal", 40, seed=seed)
+    # π*: per-sequence posterior brute MC, sampling EACH family's ACTUAL posterior. Few sequences × a
+    # large sample so the validator's own MC noise floor (max over all pairs) stays well under 0.01.
+    cell = generate_meta_cell(family_id, kappa, "orthogonal", 24, seed=seed)
     ref = pi_star_pairwise(cell, kappa)
+    if family_id == "E_offgrid_heavytail":
+        return float(np.abs(ref - _student_pistar_validate(cell, kappa)).max())
     Sig = _posterior_cov(); D = Sig.shape[0]
     Lc = np.linalg.cholesky(Sig + 1e-9 * np.eye(D))
-    nmc = 12000
+    nmc = 80000
     markov_w = _markov_weights_posterior(cell.context_features) if family_id == "T_hmm_markov" else None
     errs = []
     for i in range(cell.context_features.shape[0]):
-        mu = INVARIANT.A @ cell.context_features[i]
-        if family_id == "T_hmm_markov":                                   # discrete categorical posterior
+        cls = cell.item_classes[i]
+        if family_id == "E_no_h_exogenous":                               # posterior = point mass at observed z
+            drv = np.broadcast_to(cell.observed_covariates[i], (nmc, D))
+        elif family_id == "T_hmm_markov":                                 # discrete categorical posterior
             states = rng.choice(K_STATES, size=nmc, p=markov_w[i])
             drv = np.eye(K_STATES)[states]
-        else:                                                             # Gaussian (likelihood-dominated) posterior
-            drv = mu + rng.standard_normal((nmc, D)) @ Lc.T
-        cls = cell.item_classes[i]
+        else:                                                             # Gaussian (latent) posterior
+            drv = (INVARIANT.A @ cell.context_features[i]) + rng.standard_normal((nmc, D)) @ Lc.T
         cp = cm[cls[:, None], cls[None, :]]; gp = g[cls[:, None], cls[None, :]]
         gd = np.einsum("ijd,md->ijm", gp, drv)
         noise = rng.standard_normal(nmc) * (np.sqrt(2.0) * ORDER_NOISE)
         hit = (cp[..., None] + kappa * gd + noise[None, None, :] < 0).mean(-1)
         errs.append(np.abs(ref[i] - hit).max())
     return float(np.max(errs))
+
+
+def student_pistar_ess(family_id: str = "E_offgrid_heavytail", kappa: float = 0.60, n: int = 200,
+                       seed: int = 3) -> float:
+    """Mean per-sequence importance ESS for the Student-t π* (reported at signal-freeze time)."""
+    from clinical_jepa.eval.oracle_meta_gen import generate_meta_cell
+    cell = generate_meta_cell(family_id, float(kappa), "orthogonal", int(n), seed=seed)
+    _, ess = _pistar_student(cell, float(kappa), return_ess=True)
+    return float(np.mean(ess))

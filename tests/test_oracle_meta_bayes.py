@@ -15,7 +15,7 @@ from clinical_jepa.eval import oracle_meta_refs as RF
 from clinical_jepa.eval.oracle_meta_gen import (
     HELDOUT_FAMILIES, KAPPA_MID, TRAIN_FAMILIES, generate_meta_cell,
 )
-from clinical_jepa.eval.rung2_contract import ORACLE_R_BAYES_MARGIN
+from clinical_jepa.eval.rung2_contract import ORACLE_R_BAYES_MARGIN, ORACLE_R_BAYES_MC_TOL
 
 ALL_FAMILIES = (*TRAIN_FAMILIES, *HELDOUT_FAMILIES)
 
@@ -23,11 +23,27 @@ ALL_FAMILIES = (*TRAIN_FAMILIES, *HELDOUT_FAMILIES)
 class R0AndPiStarValidationTests(unittest.TestCase):
     def test_r0_matches_independent_high_precision_mc(self) -> None:
         for fam in ALL_FAMILIES:                       # Gaussian analytic / Markov mixture / Student-t MC
-            self.assertLess(B.reference_mc_error(fam, 0.60, which="r0"), 0.02, fam)
+            self.assertLessEqual(B.reference_mc_error(fam, 0.60, which="r0"), ORACLE_R_BAYES_MC_TOL, fam)
 
     def test_pistar_matches_independent_per_sequence_mc(self) -> None:
-        for fam in ALL_FAMILIES:                       # per-family posterior integration
-            self.assertLess(B.reference_mc_error(fam, 0.60, which="pistar"), 0.03, fam)
+        # Pi #1: every family's π* — including no-h (conditioned on the observed driver) and Student-t
+        # (true per-sequence posterior) — validated against a GENUINELY DIFFERENT integrator ≤ the frozen
+        # ORACLE_R_BAYES_MC_TOL (0.01), NOT the relaxed 0.03.
+        for fam in ALL_FAMILIES:
+            self.assertLessEqual(B.reference_mc_error(fam, 0.60, which="pistar"), ORACLE_R_BAYES_MC_TOL, fam)
+
+    def test_student_pistar_importance_is_well_conditioned(self) -> None:
+        # the Student-t posterior importance sampler must keep a high ESS (tight proposal), else the
+        # ≤0.01 agreement above would be luck.
+        self.assertGreater(B.student_pistar_ess(), 0.5 * B.STUDENT_PISTAR_NMC)
+
+    def test_no_h_pistar_conditions_on_observed_driver(self) -> None:
+        # Pi #1: ignoring observed_covariates (the exact driver) is a decisive estimand error; the
+        # point-mass reference must differ sharply from the latent-inference Gaussian form at κ>0.
+        c = generate_meta_cell("E_no_h_exogenous", 0.60, "orthogonal", 200, seed=5)
+        exact = B.pi_star_pairwise(c, 0.60)                     # conditions on observed z
+        latent = B._pistar_gaussian(c, 0.60)                    # WRONG: infers driver from noisy context
+        self.assertGreater(np.abs(exact - latent).max(), 0.10)
 
     def test_reference_tables_are_valid_probabilities(self) -> None:
         c = generate_meta_cell("T_hmm_markov", 0.60, "orthogonal", 100, seed=3)
