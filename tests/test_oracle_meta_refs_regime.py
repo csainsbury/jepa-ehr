@@ -39,6 +39,9 @@ class RegimeApiFailClosedTests(unittest.TestCase):
         probs = R.pairwise_probs(R.random_codebook_scores(cell, _rc_q(cell)))
         with self.assertRaises(ValueError):
             R.briers_from_probs(probs, cell, regime=R.REGIME_MIXTURE)    # no p_null -> refuse
+        for bad in (-0.01, 1.01, float("nan"), float("inf")):     # fail closed on out-of-range p_null
+            with self.assertRaises(ValueError):
+                R.briers_from_probs(probs, cell, regime=R.REGIME_MIXTURE, p_null=bad)
         # with an explicit weight the mixture scores the UNION of positive and null rows (no regime mask)
         b_pos = R.briers_from_probs(probs, cell, regime=R.REGIME_POSITIVE)
         b_null = R.briers_from_probs(probs, cell, regime=R.REGIME_NULL)

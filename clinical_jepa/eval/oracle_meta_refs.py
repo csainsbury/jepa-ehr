@@ -233,6 +233,8 @@ def _regime_reference(cell, regime: str, p_null: float | None):
         # and EVERY row is scored. p_null is a declared design constant, not sniffed from the labels.
         if p_null is None:
             raise ValueError("regime='unlabelled_mixture' requires an explicit p_null mixing weight")
+        if not (np.isfinite(p_null) and 0.0 <= float(p_null) <= 1.0):     # fail closed (Pi C=5 nonblocking)
+            raise ValueError(f"p_null must be finite and within [0, 1], got {p_null!r}")
         r0p = r0_pairwise(cell.family_id, cell.kappa, cell.item_classes)
         r00 = r0_pairwise(cell.family_id, 0.0, cell.item_classes)
         return float(p_null) * r00 + (1.0 - float(p_null)) * r0p, np.ones(len(cell.is_null), dtype=bool)
