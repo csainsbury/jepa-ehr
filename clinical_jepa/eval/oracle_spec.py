@@ -201,7 +201,9 @@ def get_family(family_id: str) -> StructuralFamily:
 # ----------------------------------------------------------------------------------------------
 CALIBRATION_SPEC: dict[str, Any] = {
     "spec_version": SPEC_VERSION,
-    "governance_class": "aggregate_only_safe_distilled",   # never per-patient; aggregate marginals only
+    "governance_class": "explicitly_cleared_safe_aggregate_only_no_patient_rows",  # ONE exact
+    # hashed statement, reconciled with oracle_calibration._GOVERNANCE_CLASS (Pi: the two disagreed).
+    # Chris's explicit route-specific clearance; never per-patient; aggregate marginals only.
     "aggregate_fields": (
         "sequence_length_quantiles(0.1,0.5,0.9)",
         "events_per_sequence_quantiles(0.1,0.5,0.9)",

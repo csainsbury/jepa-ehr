@@ -34,7 +34,12 @@ D_H = 6
 D_CTX = 12
 D_ITEM = 5                # 0..D_ITEM-1 legitimate item content; item dim D_ITEM is a shortcut channel
 L_ITEMS = 8
-N_CLASSES = 6
+N_CLASSES = 5             # the FIVE natural clinical content families of the corrected-v1 tokenised
+                          # substrate (demographic/diagnosis/lab/medication/state). Pi ruled option C:
+                          # map the substrate's natural families 1:1 rather than manufacture a sixth
+                          # class to preserve the old C=6 mechanism hash (structural [BOS]/DATASET
+                          # prefix tokens are excluded from every clinical class — they are the
+                          # source-shortcut the rung −1 leakage mask suppresses).
 CTX_NOISE = 0.2
 ORDER_NOISE = 0.35
 COUPLING_SCALE = 1.6
@@ -56,12 +61,21 @@ TRAIN_FAMILIES = ("T_latent_factor", "T_hmm_markov", "T_realized_history")
 HELDOUT_FAMILIES = ("E_no_h_exogenous", "E_offgrid_heavytail")
 NO_H_FAMILIES = ("E_no_h_exogenous",)
 
+# FROZEN five-class multiset bank (C=5 redesign, Pi option C). Rebuilt over classes 0..4 rather than
+# index-collapsed from the old C=6 bank, and deliberately matched to the C=6 bank on the properties the
+# evaluator actually measures, so the C change moves the mechanism identity without silently moving the
+# operating characteristics:
+#   * L_ITEMS=8 items per multiset, 5 bank entries        (unchanged)
+#   * distinct-class counts per entry 5/3/5/4/3 of C=5    (was 6/4/6/4/4 of C=6)
+#     -> mean occupancy fraction 0.8, IDENTICAL to the C=6 bank's 0.8
+#   * every class represented; near-uniform class totals over the bank (7..9 of 40; C=6 bank was 6..7)
+#   * repeat structure preserved (singletons, pairs, triples) so ties/multiplicity still exercise
 _MULTISET_BANK: tuple[tuple[int, ...], ...] = (
-    (0, 0, 1, 2, 3, 3, 4, 5),
-    (1, 1, 1, 2, 2, 4, 5, 5),
-    (0, 1, 2, 3, 4, 5, 0, 2),
-    (2, 2, 3, 3, 3, 4, 4, 5),
-    (0, 0, 0, 1, 4, 4, 5, 5),
+    (0, 0, 1, 2, 3, 3, 4, 4),
+    (1, 1, 1, 2, 2, 2, 4, 4),
+    (0, 1, 2, 3, 4, 0, 2, 3),
+    (2, 2, 3, 3, 3, 4, 4, 0),
+    (0, 0, 0, 1, 3, 3, 1, 1),
 )
 
 

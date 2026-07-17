@@ -221,12 +221,11 @@ class LabelPeekingRecipe(InvariantLearner):
         return super().predict_from_view(context_view)
 
 
-def _pooled_skill(recipe, cell: MetaCell, positives_only=True):
+def _pooled_skill(recipe, cell: MetaCell, *, regime: str = R.REGIME_POSITIVE):
+    # recipe order-skill is a POSITIVE-regime estimand (vs R0(κ_cell) on positive rows); the reference
+    # law is chosen by the explicit regime, not an ambiguous boolean (Pi C=5 R0-defect audit).
     probs = R.pairwise_probs(recipe.predict_scores(cell), recipe._T)
-    r0 = R.r0_pairwise(cell.family_id, cell.kappa, cell.item_classes)
-    b_rec, b_r0, npair = R.per_sequence_briers(probs, cell.true_order, r0)
-    mask = (~cell.is_null) if positives_only else np.ones(cell.is_null.shape, bool)
-    npair = np.where(mask, npair, 0)
+    b_rec, b_r0, npair = R.briers_from_probs(probs, cell, regime=regime)
     return R.pooled_eo1_skill(b_rec, b_r0, npair, base_seed=_stable_seed("pooled", cell.family_id))
 
 
@@ -312,7 +311,7 @@ def _context_id(cell) -> str:
             h.update(f"\x00{arr.shape}".encode())
             h.update(arr.tobytes())
         h.update(b"\x01")
-    return h.hexdigest()[:16]
+    return h.hexdigest()          # FULL sha256 — never truncated before sealed certification (Pi)
 
 
 def _sampler_rng(recipe_hash: str, context_id: str, sample_idx: int) -> np.random.Generator:

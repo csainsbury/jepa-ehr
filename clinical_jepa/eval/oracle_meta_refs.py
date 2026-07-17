@@ -104,14 +104,18 @@ def random_codebook_scores(cell: MetaCell, quant: FrozenQuantizer) -> np.ndarray
     return quant.apply(random_codebook_raw_scores(cell, quant.bits))[0]
 
 
-def e_o2_calibration(recipe_probs: np.ndarray, ref_probs: np.ndarray, true_order: np.ndarray):
+def e_o2_calibration(recipe_probs: np.ndarray, ref_probs: np.ndarray, true_order: np.ndarray,
+                     *, row_mask: np.ndarray | None = None):
     """E-O2: calibration of the recipe's predicted pairwise probabilities against the context-Bayes
     reference probabilities. Fit p_recipe ≈ slope·p_ref + intercept on eligible pairs (logit space).
-    Returns (slope, intercept)."""
+    ``row_mask`` restricts the fit to a declared regime's rows (Pi: E-O2 positive recovery scores POSITIVE
+    rows against π*(κ_cell); the null-row π* reference is a different estimand). Returns (slope, intercept)."""
     n, L, _ = recipe_probs.shape
     iu, ju = np.triu_indices(L, k=1)
     xs, ys = [], []
     for s in range(n):
+        if row_mask is not None and not row_mask[s]:
+            continue
         to = true_order[s]
         elig = np.abs(to[iu] - to[ju]) > EO1_TIE_ATOL
         if elig.any():
@@ -203,18 +207,52 @@ def paired_skill_contrast(b_target: np.ndarray, b_comparator: np.ndarray, b_r0: 
     return point, float(np.quantile(boot, alpha))       # one-sided lower bound at alpha
 
 
-def briers_vs_r0(scores: np.ndarray, cell, *, temperature: float = 1.0, positives_only: bool = True) -> tuple:
-    """(brier_per_seq, brier_r0_per_seq, npair) for a predictor's scores on a cell."""
-    return briers_from_probs(pairwise_probs(scores, temperature), cell, positives_only=positives_only)
+# ----------------------------------------------------------------------------------------------
+# Regime-aware scoring references (Pi C=5 R0-defect ruling). A meta-cell interleaves POSITIVE rows
+# (s = class_mean + κ·coupling + noise) and NULL rows (s = class_mean + noise, NO coupling). The Bayes
+# content prior therefore differs BY REGIME. Computing one R0(cell.κ) and masking rows afterwards is
+# WRONG for null rows — masking cannot repair a reference calculated under the wrong generative law.
+# The evaluator (never the recipe) declares the regime; ``is_null`` is evaluator-side truth.
+# ----------------------------------------------------------------------------------------------
+REGIME_POSITIVE = "positive"                 # known-positive rows: reference R0(κ_cell), score ~is_null
+REGIME_NULL = "null"                         # known-null rows:     reference R0(0),     score  is_null
+REGIME_MIXTURE = "unlabelled_mixture"        # UNLABELLED pooled:   p_null·R0(0)+(1-p_null)·R0(κ), all rows
+_REGIMES = (REGIME_POSITIVE, REGIME_NULL, REGIME_MIXTURE)
 
 
-def briers_from_probs(probs: np.ndarray, cell, *, positives_only: bool = True) -> tuple:
-    """As ``briers_vs_r0`` but from already-decoded pairwise probabilities (e.g. a SAMPLED decode)."""
-    r0 = r0_pairwise(cell.family_id, cell.kappa, cell.item_classes)
+def _regime_reference(cell, regime: str, p_null: float | None):
+    """(r0_probs (N,L,L), row_keep (N,) bool) for the DECLARED scoring regime. Fails closed on an
+    undeclared/unknown regime — a mixed cell must never be scored without stating its estimand (Pi)."""
+    if regime == REGIME_POSITIVE:
+        return r0_pairwise(cell.family_id, cell.kappa, cell.item_classes), ~cell.is_null
+    if regime == REGIME_NULL:
+        # null rows carry NO coupling, so their content prior is R0(κ=0), not R0(κ_cell).
+        return r0_pairwise(cell.family_id, 0.0, cell.item_classes), cell.is_null.copy()
+    if regime == REGIME_MIXTURE:
+        # explicitly UNLABELLED: no per-row regime conditioning; the reference is the marginal mixture
+        # and EVERY row is scored. p_null is a declared design constant, not sniffed from the labels.
+        if p_null is None:
+            raise ValueError("regime='unlabelled_mixture' requires an explicit p_null mixing weight")
+        r0p = r0_pairwise(cell.family_id, cell.kappa, cell.item_classes)
+        r00 = r0_pairwise(cell.family_id, 0.0, cell.item_classes)
+        return float(p_null) * r00 + (1.0 - float(p_null)) * r0p, np.ones(len(cell.is_null), dtype=bool)
+    raise ValueError(f"undeclared/unknown scoring regime {regime!r}; declare one of {_REGIMES}")
+
+
+def briers_vs_r0(scores: np.ndarray, cell, *, regime: str, temperature: float = 1.0,
+                 p_null: float | None = None) -> tuple:
+    """(brier_per_seq, brier_r0_per_seq, npair) for a predictor's scores on a cell, under an EXPLICIT
+    scoring ``regime`` (required — no default, so an unlabelled call fails closed, Pi)."""
+    return briers_from_probs(pairwise_probs(scores, temperature), cell, regime=regime, p_null=p_null)
+
+
+def briers_from_probs(probs: np.ndarray, cell, *, regime: str, p_null: float | None = None) -> tuple:
+    """As ``briers_vs_r0`` but from already-decoded pairwise probabilities (e.g. a SAMPLED decode). The
+    reference law is chosen by ``regime`` (positive→R0(κ), null→R0(0), unlabelled_mixture→marginal mix)
+    and the eligible-pair count is masked to that regime's rows."""
+    r0, keep = _regime_reference(cell, regime, p_null)
     b_rec, b_r0, npair = per_sequence_briers(probs, cell.true_order, r0)
-    if positives_only:
-        npair = np.where(~cell.is_null, npair, 0)
-    return b_rec, b_r0, npair
+    return b_rec, b_r0, np.where(keep, npair, 0)
 
 
 def per_sequence_eo1(probs: np.ndarray, true_order: np.ndarray, class_ids: np.ndarray, *,

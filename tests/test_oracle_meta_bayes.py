@@ -62,7 +62,7 @@ class ReferenceOnlySignalTests(unittest.TestCase):
 
         def ceiling(k):
             c = generate_meta_cell(fam, k, "orthogonal", 2000, seed=11)
-            b = RF.briers_from_probs(RF.r_bayes_probs(c), c)
+            b = RF.briers_from_probs(RF.r_bayes_probs(c), c, regime=RF.REGIME_POSITIVE)
             return RF.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=1)[1]
 
         self.assertLess(ceiling(0.0), ORACLE_R_BAYES_MARGIN)       # κ=0 hidden-null anchor

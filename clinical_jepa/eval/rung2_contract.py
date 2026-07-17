@@ -179,7 +179,8 @@ def validate_direct_path_row(row: dict[str, Any]) -> bool:
 # The oracle is a recipe FALSIFIER, not a real-EHR certificate. These are concrete pre-registered
 # numbers (no "will be frozen"). Order units = order-skill (beyond-content-prior log-loss skill).
 ORACLE_SCHEMA_VERSION = "clinical-jepa-oracle-order-authorization-v3"
-ORACLE_EVALUATOR_IDENTITY = "oracle_meta_eval_v4"   # pinned evaluator schema id (Pi #3 identity check)
+ORACLE_EVALUATOR_IDENTITY = "oracle_meta_eval_v5"   # pinned evaluator schema id (Pi #3 identity check);
+                                                    # v5 = regime-aware references (Pi C=5 R0-defect ruling)
 ORACLE_R_BAYES_MARGIN = 0.05            # R_bayes must beat R0 by this lower-CI margin (else HIDDEN NULL)
 ORACLE_R_BAYES_MC_TOL = 0.01           # Monte-Carlo error tolerance for the R_bayes posterior estimate
 ORACLE_CTRL_REF_KAPPA = 0.30           # DEV reference κ the U6 control quantizers are frozen from — MUST
@@ -202,8 +203,17 @@ ORACLE_CALIB_INTERCEPT_TOL = 0.05
 ORACLE_ENV_DT0_ABS = 0.02              # |Δt=0 fraction difference|
 ORACLE_ENV_TV = 0.05                   # six-class token/event distribution total variation
 ORACLE_ENV_KS = 0.05                   # length / positive-gap / per-seq-count distribution KS
-ORACLE_ENV_OCCUPANCY_ABS = 0.03        # mean class-occupancy fraction (distinct classes / C, C=6)
-ORACLE_ENV_N_CLASSES = 6
+ORACLE_ENV_OCCUPANCY_ABS = 0.03        # mean class-occupancy fraction (distinct classes / C, C=5)
+# The FIVE natural clinical content families of the corrected-v1 tokenised substrate, in token-ID order
+# (Pi option-C ruling). Structural families are EXCLUDED from every clinical class / count / timing
+# denominator: special [0,4) and dataset_context [1048,1050) — i.e. the masked [BOS] + DATASET:X source
+# prefix. n_events = sum(class_counts) AFTER that exclusion; occupancy = distinct represented / 5.
+ORACLE_ENV_N_CLASSES = 5
+ORACLE_ENV_CLASS_FAMILIES = (        # calibration class -> vocab family -> token-ID range [start, end)
+    ("demographic", 4, 51), ("diagnosis", 51, 91), ("lab", 91, 951),
+    ("medication", 951, 1032), ("state", 1032, 1048),
+)
+ORACLE_ENV_STRUCTURAL_RANGES = (("special", 0, 4), ("dataset_context", 1048, 1050))
 ORACLE_ENV_MIN_DENOM = 500             # minimum denominator floor; below => NOT_EVALUABLE (never zero-fill)
 ORACLE_N_NULL_SEEDS = 200
 ORACLE_N_POS_SEEDS = 100

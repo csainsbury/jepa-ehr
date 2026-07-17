@@ -18,8 +18,8 @@ from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_spec import CALIBRATION_SPEC
 from clinical_jepa.eval.oracle_meta_gen import invariant_hash
 from clinical_jepa.eval.rung2_contract import (
-    ORACLE_ENV_DT0_ABS, ORACLE_ENV_KS, ORACLE_ENV_MIN_DENOM, ORACLE_ENV_N_CLASSES,
-    ORACLE_ENV_OCCUPANCY_ABS, ORACLE_ENV_TV,
+    ORACLE_ENV_CLASS_FAMILIES, ORACLE_ENV_DT0_ABS, ORACLE_ENV_KS, ORACLE_ENV_MIN_DENOM,
+    ORACLE_ENV_N_CLASSES, ORACLE_ENV_OCCUPANCY_ABS, ORACLE_ENV_STRUCTURAL_RANGES, ORACLE_ENV_TV,
 )
 
 # the ONLY knobs calibration may move (Pi: predeclared scale/nuisance knobs; hard bounds from the spec)
@@ -46,7 +46,26 @@ _TRANSFORM_VERSION = "calib_forward_v1"     # _forward_aggregate / _transform_ga
 _DENOMINATOR_SEMANTICS = {"class_counts_sum_equals_n_events": True,
                           "min_denominator_floor": ORACLE_ENV_MIN_DENOM,
                           "zero_fill": "forbidden_refuse_NOT_EVALUABLE"}
-_GOVERNANCE_CLASS = "safe_public_aggregate_only_no_patient_rows"
+# ONE exact hashed governance statement (Pi). This is Chris's EXPLICIT, ROUTE-SPECIFIC clearance — the
+# "unless explicitly cleared" exception — NOT a general claim that aggregates are automatically safe.
+# Scope: TRAIN-only SCID/MIMIC tokenised aggregate extraction; the frozen AggregateStats fields;
+# deterministic fitted knobs + a sanitized aggregate summary. Emits NO patient/sequence IDs, rows,
+# examples, maps, HDF5, token bundles, embeddings, or checkpoints, and NEVER touches TEST. The extraction
+# still RUNS LOCALLY against governed bundles: a safe OUTPUT does not make the input bundle or the
+# execution environment public. ECDF support points are EXACT OBSERVED VALUES (gaps/lengths), not bucket
+# centres, and ORACLE_ENV_MIN_DENOM is a denominator floor, not a minimum support-cell count — disclosed
+# and cleared on this route only. Do NOT generalize to future derived distributions without renewed review.
+_GOVERNANCE_CLASS = "explicitly_cleared_safe_aggregate_only_no_patient_rows"
+_GOVERNANCE_CLEARANCE = {
+    "kind": "explicit_route_specific_clearance", "cleared_by": "chris", "date": "2026-07-15",
+    "scope": ("train_only_scid_mimic_tokenised_aggregate_extraction", "frozen_AggregateStats_fields",
+              "deterministic_fitted_knobs", "sanitized_aggregate_summary"),
+    "excludes": ("patient_or_sequence_ids", "rows_or_examples", "maps", "hdf5_or_token_bundles",
+                 "embeddings", "checkpoints", "TEST_access"),
+    "ecdf_support": "exact_observed_values_not_bucket_centres",
+    "min_denom_semantics": "denominator_floor_not_support_cell_floor",
+    "generalizable": False,
+}
 
 
 def calibration_schema_hash() -> str:
@@ -64,7 +83,9 @@ def calibration_schema_hash() -> str:
         "ecdf_convention": _ECDF_CONVENTION, "transform_version": _TRANSFORM_VERSION,
         "optimizer": {"temp_grid": _TEMP_GRID, "rate_grid": _RATE_GRID, "disp_grid": _DISP_GRID,
                       "tie_break": _TIE_BREAK, "objective": _OBJECTIVE},
-        "denominator_semantics": _DENOMINATOR_SEMANTICS, "governance_class": _GOVERNANCE_CLASS})
+        "denominator_semantics": _DENOMINATOR_SEMANTICS, "governance_class": _GOVERNANCE_CLASS,
+        "governance_clearance": _GOVERNANCE_CLEARANCE,
+        "class_families": ORACLE_ENV_CLASS_FAMILIES, "structural_ranges": ORACLE_ENV_STRUCTURAL_RANGES})
 
 
 @dataclass(frozen=True)

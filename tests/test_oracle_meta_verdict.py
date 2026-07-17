@@ -217,7 +217,7 @@ class HiddenNullAndPrecisionTests(unittest.TestCase):
         from clinical_jepa.eval import oracle_meta_refs as RF
         from clinical_jepa.eval.oracle_meta_gen import generate_meta_cell
         null = generate_meta_cell("E_no_h_exogenous", 0.0, "orthogonal", 2000, seed=5)
-        b = RF.briers_from_probs(RF.r_bayes_probs(null), null)
+        b = RF.briers_from_probs(RF.r_bayes_probs(null), null, regime=RF.REGIME_POSITIVE)
         rb = RF.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=1)[1]
         from clinical_jepa.eval.rung2_contract import ORACLE_R_BAYES_MARGIN
         self.assertLess(rb, ORACLE_R_BAYES_MARGIN)                   # κ=0 is a genuine hidden null

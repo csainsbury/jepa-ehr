@@ -13,6 +13,7 @@ This is an in-memory, safe-public ledger. It opens NO real sealed split and popu
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -36,6 +37,23 @@ SEED_RETIRED = "RETIRED"
 
 class RegistryError(RuntimeError):
     """Raised on an illegal transition, an unknown recipe, or a sealed-seed reuse attempt."""
+
+
+_HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
+
+
+def _is_canonical_digest(s: object) -> bool:
+    """A canonical lowercase 64-hex sha256 digest. Non-empty is NOT a digest (Pi: an arbitrary string
+    such as "not-a-sha256" must never satisfy readiness)."""
+    return isinstance(s, str) and bool(_HEX64.match(s))
+
+
+# The set of calibration identities the registry will accept as APPROVED. It ships EMPTY and fail-closed:
+# with no approved calibration, authorization_ready() is False for every recipe, which is the intended
+# state for this stage (no real calibration exists). Populating it is a governed act requiring its own
+# gate — never a side effect of recording an outcome (Pi: readiness must validate an approved calibration
+# identity from trusted policy, not accept any non-empty string).
+APPROVED_CALIBRATION_HASHES: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -108,9 +126,11 @@ class OracleRegistry:
             raise RegistryError("artifact does not originate from this recipe")
         # the outcome is only meaningful alongside the evidence it was computed from: PERSIST the content
         # hash of the complete UnlockEvaluation in the record (Pi hardening #1), so a recorded outcome can
-        # always be re-tied to the exact payload that produced it.
-        if not unlock_payload_hash:
-            raise RegistryError("outcome must be recorded with the UnlockEvaluation payload hash")
+        # always be re-tied to the exact payload that produced it. Truthiness is NOT enough — Pi
+        # reproduced authorization_ready=True with unlock_payload_hash="not-a-sha256"; require a
+        # canonical digest so an arbitrary non-empty string cannot stand in for evidence.
+        if not _is_canonical_digest(unlock_payload_hash):
+            raise RegistryError("unlock_payload_hash must be a canonical lowercase 64-hex sha256 digest")
         rec.outcome = outcome                      # immutable from here (state advances to EVALUATED)
         rec.artifact = artifact
         rec.evaluator_identity = evaluator_identity
@@ -129,8 +149,14 @@ class OracleRegistry:
         if rec.assignment is None or not all(self.seed_state(s) == SEED_RETIRED
                                              for s in rec.assignment.seed_ids):
             return False
-        return all(bool(x) for x in (rec.artifact, rec.evaluator_identity, rec.mechanism_hash,
-                                     rec.calibration_hash, rec.unlock_payload_hash))
+        # identities must be PRESENT, the evidence hash must be a canonical digest, and the calibration
+        # identity must be one the trusted policy APPROVES. APPROVED_CALIBRATION_HASHES ships empty, so
+        # this is False for every recipe at this stage — by design, not by omission (Pi).
+        if not all(bool(x) for x in (rec.artifact, rec.evaluator_identity, rec.mechanism_hash)):
+            return False
+        if not _is_canonical_digest(rec.unlock_payload_hash):
+            return False
+        return rec.calibration_hash in APPROVED_CALIBRATION_HASHES
 
     def _require(self, recipe_hash: str) -> _RecipeRecord:
         rec = self._recipes.get(recipe_hash)

@@ -156,7 +156,9 @@ def _recipe_briers(recipe, cell):
     # decode via the recipe's REGISTERED stochastic sampler (exercises sampling end-to-end).
     from clinical_jepa.eval.oracle_meta_recipe import sampled_pairwise_probs
     probs = sampled_pairwise_probs(recipe, cell)
-    return R.briers_from_probs(probs, cell)
+    # POSITIVE regime: recipe order-skill is measured on positive rows vs R0(κ_cell). Every recipe check
+    # (U1/U2/U3, recipe−R0/−nuis/−controls) flows through here, so they share one declared estimand.
+    return R.briers_from_probs(probs, cell, regime=R.REGIME_POSITIVE)
 
 
 def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger, seed: int) -> CellUnlock:
@@ -168,8 +170,9 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
         return CellUnlock(family_id, kappa, role, "SUPPORT_STARVED", {})
     leak = generate_meta_cell(family_id, kappa, "correlated_leak", 4000, seed=seed + 12)
     a = ledger.ci_alpha()
-    # reference bracket (computed BEFORE recipe inspection for the hidden-null decision)
-    br_bayes = R.briers_from_probs(R.r_bayes_probs(cell), cell)
+    # reference bracket (computed BEFORE recipe inspection for the hidden-null decision) — POSITIVE
+    # regime: does the Bayes-optimal context predictor beat content-only R0(κ) on positive rows?
+    br_bayes = R.briers_from_probs(R.r_bayes_probs(cell), cell, regime=R.REGIME_POSITIVE)
     rb_r0 = R.paired_skill_contrast(br_bayes[0], br_bayes[1], br_bayes[1], br_bayes[2],
                                     base_seed=_seed("rb", family_id, str(kappa)), alpha=a)
     if rb_r0[1] < ORACLE_R_BAYES_MARGIN:                     # hidden null: excluded before scoring
@@ -178,12 +181,14 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
     # bounds FROZEN from a TRAIN/DEV reference — not adapted to this held-out cell, Pi #2).
     bits = _control_bits(recipe)
     me_q, rc_q = _frozen_control_quants(bits)
-    b_rec = _recipe_briers(recipe, cell)
-    b_nuis = R.briers_vs_r0(R.r_nuis_scores(cell), cell)
-    b_me = R.briers_vs_r0(R.mean_embed_quantized_scores(cell, me_q), cell)
+    b_rec = _recipe_briers(recipe, cell)                                       # POSITIVE (see helper)
+    b_nuis = R.briers_vs_r0(R.r_nuis_scores(cell), cell, regime=R.REGIME_POSITIVE)
+    b_me = R.briers_vs_r0(R.mean_embed_quantized_scores(cell, me_q), cell, regime=R.REGIME_POSITIVE)
     rc_scores = R.random_codebook_scores(cell, rc_q)
-    b_rc = R.briers_vs_r0(rc_scores, cell)                              # positive-restricted
-    b_rc_all = R.briers_vs_r0(rc_scores, cell, positives_only=False)    # incl nulls, for the U6 null-pass
+    b_rc = R.briers_vs_r0(rc_scores, cell, regime=R.REGIME_POSITIVE)            # control on POSITIVE rows
+    # U6 null-pass: an order-blind control must have ~0 skill on NULL rows vs their OWN reference R0(0)
+    # (Pi C=5 fix — NOT R0(κ) masked to nulls, which was the load-bearing defect).
+    b_rc_null = R.briers_vs_r0(rc_scores, cell, regime=R.REGIME_NULL)
     b0, npair = b_rec[1], b_rec[2]
 
     def contrast(comp_briers, tag):
@@ -202,18 +207,20 @@ def _cell_unlock(recipe, family_id: str, kappa: float, ledger: HypothesisLedger,
     # U4: orthogonal R_nuis skill UPPER-CI must be below the fail bound (not the point estimate) +
     # the correlated-leak diagnostic (R_nuis DOES capture leak in the leak cell).
     nuis_orth_upper = skill_upper(b_nuis, b_nuis[2], "nuup")
-    bl_nuis = R.briers_vs_r0(R.r_nuis_scores(leak), leak)
+    bl_nuis = R.briers_vs_r0(R.r_nuis_scores(leak), leak, regime=R.REGIME_POSITIVE)
     nuis_leak_skill = 1.0 - bl_nuis[0].sum() / max(1e-9, bl_nuis[1].sum())
     nuis_orth_skill = 1.0 - b_nuis[0].sum() / max(1e-9, b_nuis[1].sum())
-    # U6: the random-codebook control must PASS NULL (its skill on the NULL sequences ~ 0, upper-CI
-    # below the gate) AND FAIL POSITIVE (its skill on positives upper-CI below the gate).
-    rc_null_np = np.where(cell.is_null, b_rc_all[2], 0)
-    rc_null_upper = skill_upper(b_rc_all, rc_null_np, "rcnull")
+    # U6: the random-codebook control must PASS NULL (its skill on the NULL rows ~ 0 vs their OWN R0(0),
+    # upper-CI below the gate) AND FAIL POSITIVE (its skill on positives upper-CI below the gate). The
+    # null check now scores null rows against R0(0) — b_rc_null is already null-masked (Pi C=5 fix).
+    rc_null_upper = skill_upper(b_rc_null, b_rc_null[2], "rcnull")
     rc_pos_upper = skill_upper(b_rc, b_rc[2], "rcpos")
-    # E-O2 calibration vs the EXACT context-Bayes π* (same sampled decode path)
+    # E-O2 positive-recovery calibration vs the EXACT context-Bayes π*(κ_cell) — POSITIVE rows only, since
+    # the null-row π* is a different estimand (Pi: score positive rows against π*(context, κ_cell)).
     from clinical_jepa.eval.oracle_meta_recipe import sampled_pairwise_probs
     rec_probs = sampled_pairwise_probs(recipe, cell)
-    slope, intercept = R.e_o2_calibration(rec_probs, R.r_bayes_probs(cell), cell.true_order)
+    slope, intercept = R.e_o2_calibration(rec_probs, R.r_bayes_probs(cell), cell.true_order,
+                                          row_mask=~cell.is_null)
     lo, hi = ORACLE_CALIB_SLOPE_BAND
     checks = {
         "recipe_minus_R0": (r0_lo, r0_lo >= ORACLE_EO1_SKILL_GATE),
@@ -288,18 +295,18 @@ def _precision_sim(seed: int, n_studies: int = ORACLE_PRECISION_N_STUDIES, seq: 
     fam = TRAIN_FAMILIES[0]
     # θ*: large-sample true skill of π* over R0 at κmid.
     big = generate_meta_cell(fam, KAPPA_MID, "orthogonal", 12000, seed=seed + 999)
-    bb = R.briers_from_probs(R.r_bayes_probs(big), big)
+    bb = R.briers_from_probs(R.r_bayes_probs(big), big, regime=R.REGIME_POSITIVE)
     keep = bb[2] > 0                                                    # POSITIVES only (consistent w/ studies)
     theta_star = 1.0 - bb[0][keep].sum() / max(1e-9, bb[1][keep].sum())
     null_fire = null_cover = eff_pass = eff_cover = 0
     for s in range(n_studies):
         cN = generate_meta_cell(fam, 0.0, "orthogonal", seq, seed=seed + 21000 + s)
-        r0 = R.r0_pairwise(cN.family_id, cN.kappa, cN.item_classes)     # known-NULL method = exact R0
-        bN = R.briers_from_probs(r0, cN)
+        r0 = R.r0_pairwise(cN.family_id, cN.kappa, cN.item_classes)     # known-NULL method = exact R0 (κ=0)
+        bN = R.briers_from_probs(r0, cN, regime=R.REGIME_POSITIVE)      # positive rows of a κ=0 cell
         _, loN, upN, _ = R.pooled_eo1_skill(bN[0], bN[1], np.where(~cN.is_null, bN[2], 0), base_seed=seed + s)
         null_fire += int(loN > 0.0); null_cover += int(loN <= 0.0 <= upN)
         cE = generate_meta_cell(fam, KAPPA_MID, "orthogonal", seq, seed=seed + 24000 + s)
-        bE = R.briers_from_probs(R.r_bayes_probs(cE), cE)              # known-EFFECT method = exact π*
+        bE = R.briers_from_probs(R.r_bayes_probs(cE), cE, regime=R.REGIME_POSITIVE)   # known-EFFECT = π*
         _, loE, upE, _ = R.pooled_eo1_skill(bE[0], bE[1], np.where(~cE.is_null, bE[2], 0), base_seed=seed + s)
         eff_pass += int(loE >= ORACLE_EO1_SKILL_GATE); eff_cover += int(loE <= theta_star <= upE)
     type_I_up = clopper_pearson_upper(null_fire, n_studies)
@@ -322,7 +329,7 @@ def _reference_power_curve_mde(seed: int, n_seeds: int = ORACLE_N_POS_SEEDS, seq
         p = 0
         for s in range(n_seeds):
             c = generate_meta_cell(fam, k, "orthogonal", seq, seed=seed + int(round(k * 1000)) * 97 + s)
-            b = R.briers_from_probs(R.r_bayes_probs(c), c)
+            b = R.briers_from_probs(R.r_bayes_probs(c), c, regime=R.REGIME_POSITIVE)
             p += int(R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + s)[1] >= ORACLE_EO1_SKILL_GATE)
         curve[k] = clopper_pearson_lower(p, n_seeds)
     mde = next((k for k in sorted(MDE_KAPPAS) if curve[k] >= ORACLE_POWER_FLOOR), None)
@@ -334,7 +341,7 @@ def _readiness(seed: int) -> bool:
     (R_bayes − R0 does not clear the margin). A train-family null failure blocks readiness."""
     for fam in (*TRAIN_FAMILIES, *HELDOUT_FAMILIES):
         cell = generate_meta_cell(fam, 0.0, "orthogonal", 1200, seed=seed + _seed("ready", fam) % 9973)
-        b = R.briers_from_probs(R.r_bayes_probs(cell), cell)
+        b = R.briers_from_probs(R.r_bayes_probs(cell), cell, regime=R.REGIME_POSITIVE)
         lo = R.paired_skill_contrast(b[0], b[1], b[1], b[2], base_seed=seed + 1)[1]
         if lo >= ORACLE_R_BAYES_MARGIN:            # a null cell that looks positive => not ready
             return False

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+import unittest.mock
 
 from clinical_jepa.eval import oracle_contracts as OC
 from clinical_jepa.eval import oracle_registry as R
@@ -66,18 +67,23 @@ class RegistryLifecycleTests(unittest.TestCase):
         self.assertEqual(reg.recipe_state(rh), R.RECIPE_ASSIGNED)
         self.assertEqual(reg.seed_state("k1"), R.SEED_ASSIGNED)
         reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh),
-                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
+                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         self.assertEqual(reg.recipe_state(rh), R.RECIPE_EVALUATED)
         self.assertEqual(reg.recipe_outcome(rh), R.OUTCOME_CERTIFIED)
         self.assertEqual(reg.seed_state("k1"), R.SEED_RETIRED)   # seeds spent
-        self.assertTrue(reg.authorization_ready(rh))
+        # FAIL-CLOSED: no APPROVED calibration identity exists at this stage, so a CERTIFIED outcome with
+        # every identity present is still NOT authorization-ready. Readiness needs trusted policy, not a
+        # non-empty string (Pi reproduced authorization_ready=True on arbitrary strings).
+        self.assertFalse(reg.authorization_ready(rh))
+        with unittest.mock.patch.object(R, "APPROVED_CALIBRATION_HASHES", frozenset({"c"})):
+            self.assertTrue(reg.authorization_ready(rh))         # ...ready only once policy approves it
 
     def test_refuted_retires_seeds_but_is_not_authorization_ready(self) -> None:
         reg = R.OracleRegistry()
         rh = reg.register(_spec())
         reg.assign(rh, _assign())
         reg.record_outcome(rh, R.OUTCOME_REFUTED, _artifact(rh),
-                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
+                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         self.assertEqual(reg.seed_state("k1"), R.SEED_RETIRED)   # spent pass OR fail
         self.assertFalse(reg.authorization_ready(rh))            # refuted never authorizes
 
@@ -86,13 +92,31 @@ class RegistryLifecycleTests(unittest.TestCase):
         reg = R.OracleRegistry()
         rh = reg.register(_spec())
         reg.assign(rh, _assign())
-        with self.assertRaises(R.RegistryError):                 # empty payload hash refused
-            reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh), evaluator_identity="e",
-                               mechanism_hash="m", calibration_hash="c", unlock_payload_hash="")
+        for bad in ("", "ph", "not-a-sha256", "A" * 64, "g" * 64, "a" * 63, None):
+            with self.assertRaises(R.RegistryError):   # truthy-but-not-a-digest must NOT satisfy it
+                reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh), evaluator_identity="e",
+                                   mechanism_hash="m", calibration_hash="c", unlock_payload_hash=bad)
+        digest = "b" * 64
         reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh), evaluator_identity="e",
-                           mechanism_hash="m", calibration_hash="c", unlock_payload_hash="payload-abc")
-        self.assertEqual(reg.unlock_payload_hash(rh), "payload-abc")   # persisted in the RECORD
-        self.assertTrue(reg.authorization_ready(rh))
+                           mechanism_hash="m", calibration_hash="c", unlock_payload_hash=digest)
+        self.assertEqual(reg.unlock_payload_hash(rh), digest)          # persisted in the RECORD
+
+    def test_readiness_requires_a_canonical_digest_and_approved_calibration(self) -> None:
+        # Pi's reproduced fail-open: unlock_payload_hash="not-a-sha256" + arbitrary non-empty
+        # calibration identity yielded authorization_ready=True. Both holes are now closed.
+        reg = R.OracleRegistry()
+        rh = reg.register(_spec())
+        reg.assign(rh, _assign())
+        reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh), evaluator_identity="e",
+                           mechanism_hash="m", calibration_hash="c", unlock_payload_hash="c" * 64)
+        self.assertFalse(reg.authorization_ready(rh))                  # calibration "c" is not approved
+        with unittest.mock.patch.object(R, "APPROVED_CALIBRATION_HASHES", frozenset({"c"})):
+            self.assertTrue(reg.authorization_ready(rh))
+            # a non-digest evidence hash can never have been recorded, but readiness re-checks anyway
+            reg._require(rh).unlock_payload_hash = "not-a-sha256"
+            self.assertFalse(reg.authorization_ready(rh))
+        # the approved set ships EMPTY and fail-closed — that is the intended state for this stage
+        self.assertEqual(R.APPROVED_CALIBRATION_HASHES, frozenset())
 
     def test_sealed_seed_reuse_refused(self) -> None:
         reg = R.OracleRegistry()
@@ -106,13 +130,13 @@ class RegistryLifecycleTests(unittest.TestCase):
         rh = reg.register(_spec())
         with self.assertRaises(R.RegistryError):                # evaluate before assign
             reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact(rh),
-                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
+                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         reg.assign(rh, _assign())
         with self.assertRaises(R.RegistryError):                # double assign
             reg.assign(rh, _assign(("k9",)))
         with self.assertRaises(R.RegistryError):                # illegal outcome value
             reg.record_outcome(rh, "MAYBE", _artifact(rh),
-                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
+                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
     def test_claimed_hash_mismatch_and_unknown_recipe_refused(self) -> None:
         reg = R.OracleRegistry()
@@ -127,7 +151,7 @@ class RegistryLifecycleTests(unittest.TestCase):
         reg.assign(rh, _assign())
         with self.assertRaises(R.RegistryError):
             reg.record_outcome(rh, R.OUTCOME_CERTIFIED, _artifact("someone-else"),
-                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
+                               evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 
 if __name__ == "__main__":

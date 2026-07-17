@@ -89,8 +89,10 @@ class RegistryIntegrationTests(unittest.TestCase):
         tr, dv = _cells(n=100)
         art = r.fit(RC.split_views(tr), RC.split_views(dv))
         reg.record_outcome(rh, REG.OUTCOME_CERTIFIED, art,
-                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="ph")
-        self.assertTrue(reg.authorization_ready(rh))
+                           evaluator_identity="e", mechanism_hash="m", calibration_hash="c", unlock_payload_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        # fail-closed: readiness needs an APPROVED calibration identity from trusted policy, and that set
+        # ships empty at this stage — a recorded CERTIFIED outcome alone never authorizes (Pi).
+        self.assertFalse(reg.authorization_ready(rh))
 
 
 if __name__ == "__main__":

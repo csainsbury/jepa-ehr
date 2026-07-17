@@ -74,11 +74,21 @@ def ledger_hash() -> str:
     """Content hash of the frozen hypothesis ledger — pinned in the UnlockEvaluation identities and
     re-verified by the pure verdict (Pi #6: a fabricated ledger must not certify)."""
     from clinical_jepa.eval.oracle_contracts import canonical_hash
+    from clinical_jepa.eval.oracle_meta_refs import _REGIMES
     led = build_ledger()
     return canonical_hash({"n_ci": led.n_ci, "alpha": round(led.bonferroni_alpha, 9),
                            "hyps": [(h.hid, h.family_id, h.kappa, h.kind, round(h.alpha, 9))
                                     for h in led.hypotheses],
-                           "oc_config": OC_CONFIG})       # Pi #5: bind the sampling grids/counts/α-families
+                           "oc_config": OC_CONFIG,        # Pi #5: bind the sampling grids/counts/α-families
+                           # Pi C=5 R0-defect: bind the regime-aware reference contract, so the corrected
+                           # U6 null semantics (null rows vs R0(0)) move the ledger/reference identity.
+                           "reference_regime_contract": {
+                               "regimes": list(_REGIMES),
+                               "positive": "R0(kappa_cell) on ~is_null rows",
+                               "null": "R0(0) on is_null rows",
+                               "unlabelled_mixture": "p_null*R0(0)+(1-p_null)*R0(kappa_cell), all rows, explicit p_null",
+                               "u6_null_pass": "random-codebook skill vs R0(0) on null rows",
+                               "e_o2": "positive rows vs pi_star(kappa_cell)"}})
 
 
 def build_ledger(families: tuple[str, ...] = HELDOUT_FAMILIES,

@@ -89,7 +89,11 @@ class HashTests(unittest.TestCase):
 
     def test_calibration_failure_is_fail_closed(self) -> None:
         self.assertIn("REFUSE", S.CALIBRATION_SPEC["failure_behavior"])
-        self.assertEqual(S.CALIBRATION_SPEC["governance_class"], "aggregate_only_safe_distilled")
+        self.assertEqual(S.CALIBRATION_SPEC["governance_class"],
+                         "explicitly_cleared_safe_aggregate_only_no_patient_rows")
+        # the two governance strings must be ONE reconciled statement (Pi: they disagreed)
+        from clinical_jepa.eval import oracle_calibration as CAL
+        self.assertEqual(S.CALIBRATION_SPEC["governance_class"], CAL._GOVERNANCE_CLASS)
 
     def test_spec_summary_is_safe_public(self) -> None:
         s = S.spec_summary()

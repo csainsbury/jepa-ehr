@@ -33,7 +33,8 @@ from clinical_jepa.eval.oracle_spec import NUISANCE_LEAK_RHO, get_family
 from clinical_jepa.eval.rung2_contract import ORDER_SUPPORT_FLOOR
 
 # frozen structural constants (hashed into every cell's mechanism_params_hash)
-N_CLASSES = 6                 # six-class token/event bank (matches the calibration occupancy C=6)
+N_CLASSES = 5                 # five-class token/event bank (matches the calibration occupancy C=5 —
+                              # the substrate's natural clinical content families)
 L_ITEMS = 8                   # future items whose order is certified
 D_CTX = 10
 D_ITEM = 4

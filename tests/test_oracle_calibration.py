@@ -12,7 +12,7 @@ def _ecdf(points):
     return tuple((float(s), float(c)) for s, c in points)
 
 
-def _agg(source="SCID", dt0=0.35, counts=(1000, 1000, 1000, 1000, 1000, 1000), occ=0.9,
+def _agg(source="SCID", dt0=0.35, counts=(1000, 1000, 1000, 1000, 1000), occ=0.9,
          n_seq=2000, n_clu=3000):
     return AggregateStats(source=source, n_sequences=n_seq, n_events=sum(counts), n_clusters=n_clu,
                           n_positive_gaps=2500, class_counts=tuple(counts), delta_t_zero_fraction=dt0,
@@ -61,7 +61,7 @@ class FitTests(unittest.TestCase):
         import numpy as np
         # a temperature-reachable target: base tempered by ~1.4 (calibration adjusts peakedness + Δt=0);
         # occupancy + ECDFs are structural and already match (same _agg defaults).
-        base_counts = np.array([150, 120, 100, 90, 80, 60], float)
+        base_counts = np.array([150, 120, 100, 90, 80], float)
         p = (base_counts / base_counts.sum()) ** (1.0 / 1.4)
         tgt_counts = tuple(int(round(x)) for x in p / p.sum() * 600)
         target = _agg(dt0=0.42, counts=tgt_counts)
@@ -93,7 +93,7 @@ class FitTests(unittest.TestCase):
 class StrengthenedValidationTests(unittest.TestCase):
     def test_class_counts_must_reconcile_with_n_events(self) -> None:
         bad = AggregateStats(source="SCID", n_sequences=2000, n_events=9999, n_clusters=3000,
-                             n_positive_gaps=2500, class_counts=(1000,) * 6, delta_t_zero_fraction=0.3,
+                             n_positive_gaps=2500, class_counts=(1000,) * 5, delta_t_zero_fraction=0.3,
                              length_ecdf=_ecdf([(1, 0.5), (2, 1.0)]),
                              positive_gap_ecdf=_ecdf([(0.1, 0.5), (1.0, 1.0)]),
                              count_ecdf=_ecdf([(1, 0.5), (2, 1.0)]), mean_occupancy_fraction=0.9)
@@ -108,7 +108,7 @@ class StrengthenedValidationTests(unittest.TestCase):
         self.assertFalse(CAL._ecdf_valid(non_increasing_supp))
 
     def test_event_and_gap_denominator_floors(self) -> None:
-        low = _agg(counts=(80, 80, 80, 80, 80, 80))                   # n_events 480 < ORACLE_ENV_MIN_DENOM
+        low = _agg(counts=(99, 99, 99, 99, 99))                       # n_events 495 < ORACLE_ENV_MIN_DENOM
         self.assertEqual(CAL.validate_aggregate_input(low)[1], CAL.NOT_EVALUABLE)
 
     def test_source_mismatch_refused(self) -> None:
