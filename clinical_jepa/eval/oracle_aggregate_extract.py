@@ -79,10 +79,10 @@ def provenance_procedure_hash() -> str:
     """Frozen identity of the EXTRACTED-CONTENT provenance procedure (Pi REVISE#4 #1) — NOT a whole-HDF5
     file digest. Declares the digest version, required sources, the pre-read UNVERIFIED status, and the
     mandatory result gate. Bound as a policy anchor."""
-    return canonical_hash({"procedure": PROVENANCE_PROCEDURE, "sources": sorted(REQUIRED_SOURCES),
+    return canonical_hash({"procedure": PROVENANCE_PROCEDURE, "sources": list(REQUIRED_SOURCES),
                            "pre_read_status": "UNVERIFIED", "result_gate": "required",
                            "extraction_schema_hash": extraction_schema_hash(),
-                           "digest": "domain|source|schema; per-ordinal len+dtype markers; final count"})
+                           "digest": "domain|source|schema; per-ordinal len+little-endian<i8/<f8; final count"})
 
 
 class _ContentDigest:
@@ -96,9 +96,10 @@ class _ContentDigest:
         self._n = 0
 
     def add(self, tok: np.ndarray, cd: np.ndarray) -> None:
-        t = np.ascontiguousarray(tok, dtype=np.int64); c = np.ascontiguousarray(cd, dtype=np.float64)
-        self._h.update(f"|SEQ{self._n}|tok:{t.shape[0]}:i8|".encode()); self._h.update(t.tobytes())
-        self._h.update(f"|time:{c.shape[0]}:f8|".encode()); self._h.update(c.tobytes())
+        # EXPLICIT little-endian + C order so the digest is machine-independent (Pi REVISE#5 #4).
+        t = np.ascontiguousarray(tok, dtype="<i8"); c = np.ascontiguousarray(cd, dtype="<f8")
+        self._h.update(f"|SEQ{self._n}|tok:{t.shape[0]}:<i8|".encode()); self._h.update(t.tobytes())
+        self._h.update(f"|time:{c.shape[0]}:<f8|".encode()); self._h.update(c.tobytes())
         self._n += 1
 
     def hexdigest(self) -> str:
@@ -160,6 +161,19 @@ def _ecdf(values: np.ndarray) -> tuple[tuple[float, float], ...]:
     return tuple((float(s), float(c)) for s, c in zip(supp, cdf))
 
 
+def _ecdf_from_counter(counter: dict) -> tuple[tuple[float, float], ...]:
+    """ECDF from a {support_value: count} counter — identical to ``_ecdf`` over the same 8-decimal-rounded
+    values, but memory scales with UNIQUE support, not total events (Pi REVISE#5 #5)."""
+    if not counter:
+        return ()
+    total = sum(counter.values())
+    out, run = [], 0
+    for s in sorted(counter):
+        run += counter[s]
+        out.append((float(s), run / total))
+    return tuple(out)
+
+
 def _sequence_features(token_ids: np.ndarray, cdays: np.ndarray):
     cls = _class_of(token_ids)
     keep = cls >= 0
@@ -184,40 +198,41 @@ def aggregate_from_sequences(source: str, sequences) -> tuple[AggregateStats | s
     ({n_input_sequences, n_no_content_sequences}). No-content sequences are counted and emitted (never
     silently skipped); the build REFUSES above ``MAX_NO_CONTENT_FRACTION``. Returns (agg|NOT_EVALUABLE,
     counts)."""
-    lengths, cluster_counts, occ = [], [], []
+    from collections import Counter
+    length_ctr: Counter = Counter(); count_ctr: Counter = Counter(); gap_ctr: Counter = Counter()
     class_tot = np.zeros(ORACLE_ENV_N_CLASSES, dtype=np.int64)
-    n_clusters = n_pos_gaps = n_zero_adj = n_adj = 0
-    pos_gap_pool: list[np.ndarray] = []
+    occ_sum = 0.0
+    n_seq = n_clusters = n_pos_gaps = n_zero_adj = n_adj = 0
     n_seen = n_no_content = 0
-    for token_ids, cdays in sequences:
+    for token_ids, cdays in sequences:                                  # STREAMING — no full-gap retention
         n_seen += 1
         f = _sequence_features(np.asarray(token_ids), np.asarray(cdays))
         if f is None:
             n_no_content += 1
             continue
-        lengths.append(f["length"]); cluster_counts.append(f["n_clusters"]); occ.append(f["occupancy"])
-        class_tot += f["per_class"]
+        n_seq += 1
+        length_ctr[int(f["length"])] += 1
+        count_ctr[int(f["n_clusters"])] += 1
+        for g in np.round(np.asarray(f["pos_gaps"], float), 8):
+            gap_ctr[float(g)] += 1
+        class_tot += f["per_class"]; occ_sum += f["occupancy"]
         n_clusters += f["n_clusters"]; n_pos_gaps += f["n_pos_gaps"]
         n_zero_adj += f["n_zero_adj"]; n_adj += f["n_adj"]
-        if f["pos_gaps"].size:
-            pos_gap_pool.append(f["pos_gaps"])
     counts = {"n_input_sequences": n_seen, "n_no_content_sequences": n_no_content}
     if n_seen and n_no_content / n_seen > MAX_NO_CONTENT_FRACTION:
         raise ExtractionRefused(f"{source}: no-content fraction exceeds {MAX_NO_CONTENT_FRACTION}")
-    n_seq = len(lengths)
     if n_seq == 0:
         return NOT_EVALUABLE, counts
     n_events = int(class_tot.sum())
     if min(n_seq, n_clusters, n_events, n_pos_gaps) < ORACLE_ENV_MIN_DENOM:
         return NOT_EVALUABLE, counts
-    pos_gaps = np.concatenate(pos_gap_pool) if pos_gap_pool else np.empty(0)
     agg = AggregateStats(
         source=source, n_sequences=n_seq, n_events=n_events, n_clusters=n_clusters,
         n_positive_gaps=n_pos_gaps, class_counts=tuple(int(x) for x in class_tot),
         delta_t_zero_fraction=float(n_zero_adj / n_adj) if n_adj else 0.0,
-        length_ecdf=_ecdf(np.asarray(lengths)), positive_gap_ecdf=_ecdf(pos_gaps),
-        count_ecdf=_ecdf(np.asarray(cluster_counts)),
-        mean_occupancy_fraction=float(np.mean(occ)) if occ else 0.0)
+        length_ecdf=_ecdf_from_counter(length_ctr), positive_gap_ecdf=_ecdf_from_counter(gap_ctr),
+        count_ecdf=_ecdf_from_counter(count_ctr),
+        mean_occupancy_fraction=float(occ_sum / n_seq))
     ok, reason = validate_aggregate_input(agg)
     return (agg if ok else reason), counts
 
@@ -412,6 +427,35 @@ def _atomic_replace_json(path: str, obj: dict) -> None:
     os.replace(tmp, path)
 
 
+def _read_no_follow(path: str) -> str:
+    """Read a state file refusing to follow a symlink (Pi REVISE#5 #6)."""
+    if os.path.islink(path):
+        raise ExtractionRefused("state file is a symlink")
+    fd = os.open(path, os.O_RDONLY | _NOFOLLOW)
+    with os.fdopen(fd, "r") as fh:
+        return fh.read()
+
+
+def _make_run_dir(d: str) -> None:
+    """Validate every EXISTING ancestor is not a symlink BEFORE creating anything, then create the missing
+    run-dir components no-follow (Pi REVISE#5 #6) — a symlinked ancestor cannot cause creation outside the
+    intended state root."""
+    root = os.path.realpath(state_root())
+    d_abs = os.path.abspath(d)
+    if os.path.realpath(d_abs).split(os.sep)[:len(root.split(os.sep))] != root.split(os.sep):
+        raise ExtractionRefused("run directory escapes the canonical state root")
+    # walk existing ancestors and refuse any symlink before creating
+    parts, cur = [], d_abs
+    while cur and cur != os.path.dirname(cur):
+        parts.append(cur); cur = os.path.dirname(cur)
+    for p in reversed(parts):
+        if os.path.lexists(p):
+            if os.path.islink(p):
+                raise ExtractionRefused("symlinked state ancestor")
+        else:
+            os.mkdir(p, 0o700)                                 # create missing component (parent verified)
+
+
 def _refuse_symlinked_run_ancestors(path: str) -> None:
     """Reject a symlink in ANY component from the repo root down to the run path (Pi REVISE#4 #5), and
     verify the run path is under the intended absolute repo-anchored state root."""
@@ -433,8 +477,8 @@ class OneTimeRun:
 
     def claim(self) -> None:
         d = os.path.dirname(self.state_path)
-        os.makedirs(d, exist_ok=True)
-        _refuse_symlinked_run_ancestors(self.state_path)       # reject symlink in ANY ancestor (Pi #5)
+        _make_run_dir(d)                                       # validate ancestors THEN create no-follow (Pi #5/6)
+        _refuse_symlinked_run_ancestors(self.state_path)
         for p in (self.state_path, self.out_path):
             if os.path.islink(p) or os.path.exists(p):
                 raise ExtractionRefused("run artifact already exists: no replay")
@@ -446,7 +490,7 @@ class OneTimeRun:
     def advance(self, frm: str, to: str) -> None:
         if frm not in _STATES or to not in _STATES:
             raise ExtractionRefused("illegal state transition")
-        st = json.loads(open(self.state_path).read())
+        st = json.loads(_read_no_follow(self.state_path))     # no-follow read (Pi #6)
         if st.get("run_id") != self.run_id or st.get("state") != frm:
             raise ExtractionRefused("state precondition failed")
         _atomic_replace_json(self.state_path, {"run_id": self.run_id, "state": to})
@@ -473,42 +517,82 @@ def base_schema_hash() -> str:
                            "per_cell_seed_schedule": BASE_CELL_SEED_SCHEDULE,
                            "cell_order": [(f, float(k)) for (f, k) in BASE_CELLS],
                            "class_representatives": list(_REP), "length_law": "native_literal_fixed_L",
-                           "adapter": "generate_literal_cell.calib_knobs",
+                           "adapter": _adapter_version(),
                            "n_classes": ORACLE_ENV_N_CLASSES, "mechanism_hash": invariant_hash()})
+
+
+def _adapter_version() -> str:
+    from clinical_jepa.eval.oracle_literal_gen import CALIB_ADAPTER_VERSION
+    return CALIB_ADAPTER_VERSION
 
 
 # coarse deterministic knob grid the GENERATOR fit searches (Pi REVISE#4 #4: fit against regenerated
 # outputs). token_freq_temperature stays 1.0 — the synthetic class prior is uniform, so tempering it is a
-# no-op and the class marginal falsifies honestly; only the timing knobs are calibratable.
-GEN_FIT_ZGB = (0.05, 0.2, 0.4, 0.6, 0.8)
+# no-op and the class marginal falsifies honestly; only the timing knobs are calibratable. The native
+# ZERO_GAP_RATE=0.35 and rate=disp=1.0 are IN the grid so the BASE recovers itself (Pi REVISE#5 #2).
+GEN_FIT_ZGB = (0.05, 0.2, 0.35, 0.5, 0.65, 0.8)
 GEN_FIT_RATE = (0.6, 0.85, 1.0, 1.3, 1.7)
 GEN_FIT_DISP = (0.6, 0.85, 1.0, 1.3, 1.7)
 
 
-def _base_cells(calib_knobs: dict | None = None, calib_context: dict | None = None):
+def _base_cells(calib_knobs: dict | None = None, calib_context: dict | None = None,
+                source_profile: str = ""):
     """The frozen uniform-mixture BASE cells, optionally regenerated THROUGH the calibration adapter — the
     single generator route by which fitted knobs alter generated cells (Pi #6/#4). Deterministic per-cell
-    seed ``BASE_SEED + 101*j``."""
+    seed ``BASE_SEED + 101*j``. ``source_profile`` binds which SCID/MIMIC fitted profile is applied."""
     from clinical_jepa.eval.oracle_literal_gen import generate_literal_cell
     fms, tss = [], []
     for j, (fam, k) in enumerate(BASE_CELLS):
         c = generate_literal_cell(fam, k, BASE_NUISANCE, BASE_N_PER_CELL, seed=BASE_SEED + 101 * j,
-                                  calib_knobs=calib_knobs, calib_context=calib_context)
+                                  calib_knobs=calib_knobs, calib_context=calib_context,
+                                  calib_source_profile=source_profile)
         fms.append(np.asarray(c.future_multiset)); tss.append(np.asarray(c.future_timestamps, float))
     return np.concatenate(fms), np.concatenate(tss)
 
 
+def generator_fit_schema_hash() -> str:
+    """The CANONICAL generator-fit contract (Pi REVISE#5 #1): grids, hard bounds, fixed/no-op tunables, the
+    regenerated objective + conjunctive envelope, tie-break, and the provisional-only status. This is a
+    calibration-CONTRACT identity, bound in policy/output."""
+    from clinical_jepa.eval.oracle_literal_gen import CALIB_ADAPTER_VERSION
+    return canonical_hash({
+        "route": "fit_against_regenerated_generator_output_v1",
+        "grids": {"zero_gap_bias": list(GEN_FIT_ZGB), "timing_rate_scale": list(GEN_FIT_RATE),
+                  "gap_dispersion": list(GEN_FIT_DISP)},
+        "fixed_tunables": {"token_freq_temperature": 1.0}, "temp_is_noop_on": "uniform_class_prior",
+        "objective": "positive_gap_KS + abs(delta_t_zero_diff)", "tie_break": "first_argmin_strict_1e-12",
+        "final_gate": "conjunctive_realism_envelope_on_regenerated_output",
+        "adapter_version": CALIB_ADAPTER_VERSION, "status": "provisional_only",
+        "base_schema_hash": base_schema_hash(), "calibration_schema_hash": calibration_schema_hash()})
+
+
+def calibration_adapter_schema_hash() -> str:
+    """The frozen adapter transform contract (Pi REVISE#5 #1/#3): version, pooled-context construction, the
+    newly-positive-gap draw, and the bound-identity fields."""
+    from clinical_jepa.eval.oracle_literal_gen import CALIB_ADAPTER_VERSION
+    return canonical_hash({
+        "adapter_version": CALIB_ADAPTER_VERSION,
+        "class_layer": "tempered_pooled_class_prior_relabel",
+        "timing_layer": "newly_positive_adjacency <- inverse_cdf(pooled_positive_gap_ecdf); "
+                        "then (median + (g-median)*dispersion)/rate; zero_gap_bias sets Δt=0 rate",
+        "pooled_context": ["pooled_class_prior", "global_gap_median", "pooled_positive_gap_ecdf"],
+        "identity_fields": ["normalized_knobs", "context_hash", "family_id", "kappa", "nuisance_cell",
+                            "cell_seed", "source_profile"],
+        "rng": "dedicated_domain_separated_keyed_by_adapter_hash"})
+
+
 def calib_context() -> dict[str, Any]:
-    """POOLED calibration context (Pi REVISE#4 #4): the class prior and global positive-gap median of the
-    DEFAULT (uncalibrated) BASE population. Computed once; the adapter uses it so it is coherent, not a
-    per-cell surrogate mismatch. Deterministic."""
+    """POOLED calibration context (Pi REVISE#4 #4 / REVISE#5 #2): the class prior, the global positive-gap
+    median, AND the full pooled positive-gap ECDF of the DEFAULT (uncalibrated) BASE — the adapter draws
+    newly-positive gaps from this distribution so it reproduces the BASE at the native profile. Deterministic."""
     fm, ts = _base_cells(None)
     prior = (np.bincount(fm.ravel(), minlength=ORACLE_ENV_N_CLASSES)[:ORACLE_ENV_N_CLASSES]
              / max(1, fm.size)).astype(float)
     d = np.diff(ts, axis=1)
     pos = d[d > 0]
     return {"pooled_class_prior": [float(x) for x in prior],
-            "global_gap_median": float(np.median(pos)) if pos.size else 1.0}
+            "global_gap_median": float(np.median(pos)) if pos.size else 1.0,
+            "pooled_positive_gap_ecdf": list(_ecdf(pos))}
 
 
 def _seqs_from(fm: np.ndarray, ts: np.ndarray, source: str):
@@ -529,9 +613,9 @@ def synthetic_base(source: str) -> AggregateStats:
 
 
 def regenerate_via_generator(source: str, knobs: dict[str, float], context: dict) -> AggregateStats | str:
-    """Regenerate the BASE population THROUGH the generator adapter with the POOLED context — the actual
-    route certification would use — and re-aggregate (Pi REVISE#4 #4)."""
-    fm, ts = _base_cells(dict(knobs), context)
+    """Regenerate the BASE population THROUGH the generator adapter with the POOLED context and the source
+    profile — the actual route certification would use — and re-aggregate (Pi REVISE#4 #4 / REVISE#5 #3)."""
+    fm, ts = _base_cells(dict(knobs), context, source_profile=source)
     agg, _ = aggregate_from_sequences(source, _seqs_from(fm, ts, source))
     return agg
 
@@ -578,6 +662,9 @@ def sanitized_output(payload: dict[str, Any]) -> dict[str, Any]:
                           "calibration_schema_hash": calibration_schema_hash(),
                           "extraction_schema_hash": extraction_schema_hash(),
                           "base_schema_hash": base_schema_hash(),
+                          "generator_fit_schema_hash": generator_fit_schema_hash(),
+                          "calibration_adapter_schema_hash": calibration_adapter_schema_hash(),
+                          "provenance_procedure_hash": provenance_procedure_hash(),
                           "extraction_code_identity": extraction_code_identity(),
                           "state_root_identity": state_root_identity(),
                           "evaluator_identity": ORACLE_EVALUATOR_IDENTITY}}
@@ -593,8 +680,10 @@ def _live_identities(cfg: dict[str, Any], run_id: str) -> dict[str, Any]:
             "calibration_schema_hash": calibration_schema_hash(),
             "evaluator_identity": ORACLE_EVALUATOR_IDENTITY, "vocab_hash": cfg["vocab_hash"],
             "vocab_name": EXPECTED_VOCAB_NAME, "extraction_schema_hash": extraction_schema_hash(),
-            "base_schema_hash": base_schema_hash(), "code_identity": extraction_code_identity(),
-            "state_root_identity": state_root_identity(),
+            "base_schema_hash": base_schema_hash(),
+            "generator_fit_schema_hash": generator_fit_schema_hash(),
+            "calibration_adapter_schema_hash": calibration_adapter_schema_hash(),
+            "code_identity": extraction_code_identity(), "state_root_identity": state_root_identity(),
             "provenance_procedure_hash": provenance_procedure_hash(), "config_hash": cfg["config_hash"],
             "run_id": run_id}
 
@@ -643,7 +732,7 @@ def run_calibration_extraction(config_path: str, run_id: str) -> dict[str, Any]:
                         "regenerated_aggregate": (regen if isinstance(regen, str) else asdict(regen)),
                         "regenerated_hash": _agg_hash(regen), "envelope_checks": checks,
                         "adapter_source_profile": s,             # source-conditioning identity (#4)
-                        "calibration_adapter_hash": _adapter_hash(knobs, ctx)}
+                        "calibration_adapter_hash": _adapter_hash(knobs, ctx, s)}
     payload = {
         "sources": {s: (a if isinstance(a, str) else asdict(a)) for s, a in targets.items()},
         "audit_counts": counts,
@@ -668,9 +757,9 @@ def run_calibration_extraction(config_path: str, run_id: str) -> dict[str, Any]:
     return out
 
 
-def _adapter_hash(knobs: dict, ctx: dict) -> str:
+def _adapter_hash(knobs: dict, ctx: dict, source_profile: str) -> str:
     from clinical_jepa.eval.oracle_literal_gen import calibration_adapter_hash
-    return calibration_adapter_hash(knobs, ctx)
+    return calibration_adapter_hash(knobs, ctx, source_profile=source_profile)
 
 
 def main(argv: list[str] | None = None) -> int:

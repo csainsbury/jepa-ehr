@@ -23,6 +23,8 @@ APPROVED_AGGREGATE_READ_POLICY: dict[str, Any] = {
     "vocab_name": None,
     "extraction_schema_hash": None,
     "base_schema_hash": None,        # declared synthetic BASE population identity
+    "generator_fit_schema_hash": None,       # canonical generator-fit contract (grids/objective/etc)
+    "calibration_adapter_schema_hash": None, # frozen adapter transform contract
     "code_identity": None,           # complete executable logic-closure hash
     "state_root_identity": None,     # absolute canonical state-root identity
     "config_hash": None,             # approved LOCAL config (real paths) content hash

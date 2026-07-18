@@ -127,34 +127,64 @@ def _marked_cluster_timing(rng: np.random.Generator, n: int, rate_scale: np.ndar
     return _clusters_from_gaps(same, gaps)
 
 
-def calibration_adapter_hash(knobs: dict, context: dict) -> str:
-    """Identity of the frozen calibration adapter transform + its bound pooled context (Pi REVISE#4 #3/#4)."""
-    return canonical_hash({"adapter": "calibration_layer_v1",
-                           "knobs": {k: round(float(knobs.get(k, d)), 6) for k, d in
-                                     (("token_freq_temperature", 1.0), ("zero_gap_bias", 0.0),
-                                      ("timing_rate_scale", 1.0), ("gap_dispersion", 1.0))},
-                           "pooled_class_prior": [round(float(x), 9) for x in context["pooled_class_prior"]],
-                           "global_gap_median": round(float(context["global_gap_median"]), 9)})
+CALIB_ADAPTER_VERSION = "calibration_layer_v2"     # v2: newly-positive gaps drawn from the pooled ECDF
+
+
+def _normalize_knobs(knobs: dict) -> dict:
+    """Fill defaults ONCE and clip to hard bounds — the runner executes exactly this normalized payload, so
+    the adapter identity binds the executed values (Pi REVISE#4->5 #3). Default zero_gap_bias is the native
+    ZERO_GAP_RATE, matching execution."""
+    return {"token_freq_temperature": float(np.clip(knobs.get("token_freq_temperature", 1.0), 0.5, 2.0)),
+            "zero_gap_bias": float(np.clip(knobs.get("zero_gap_bias", ZERO_GAP_RATE), 0.0, 0.9)),
+            "timing_rate_scale": float(np.clip(knobs.get("timing_rate_scale", 1.0), 0.5, 2.0)),
+            "gap_dispersion": float(np.clip(knobs.get("gap_dispersion", 1.0), 0.5, 2.0))}
+
+
+def _context_hash(context: dict) -> str:
+    return canonical_hash({"pooled_class_prior": [float(x) for x in context["pooled_class_prior"]],
+                           "global_gap_median": float(context["global_gap_median"]),
+                           "pooled_positive_gap_ecdf": [[float(g), float(c)]
+                                                        for g, c in context["pooled_positive_gap_ecdf"]]})
+
+
+def calibration_adapter_hash(knobs: dict, context: dict, *, family_id: str = "", kappa: float = 0.0,
+                             nuisance_cell: str = "", cell_seed: int = 0, source_profile: str = "") -> str:
+    """Exact identity of an executed adapter transform: the NORMALIZED knobs (full canonical precision),
+    the full pooled-context hash, and the cell/source identity — so different executed transforms never
+    share a hash and the domain-separated RNG cannot correlate across cell identities (Pi #3)."""
+    return canonical_hash({"adapter": CALIB_ADAPTER_VERSION, "knobs": _normalize_knobs(knobs),
+                           "context_hash": _context_hash(context), "family_id": family_id,
+                           "kappa": float(kappa), "nuisance_cell": nuisance_cell,
+                           "cell_seed": int(cell_seed), "source_profile": source_profile})
+
+
+def _sample_positive_gaps(ecdf, size, arng: np.random.Generator) -> np.ndarray:
+    """Inverse-CDF draw of strictly-positive gaps from the bound pooled positive-gap ECDF (Pi #2): every
+    newly-positive adjacency gets a REAL positive gap from the declared distribution, not a median-clip of a
+    within-cluster zero."""
+    supp = np.asarray([g for g, _ in ecdf], float); cdf = np.asarray([c for _, c in ecdf], float)
+    if supp.size == 0:
+        return np.full(size, 1e-3)
+    idx = np.clip(np.searchsorted(cdf, arng.random(size), side="left"), 0, supp.size - 1)
+    return supp[idx]
 
 
 def _apply_calibration_layer(future_multiset: np.ndarray, ts: np.ndarray, knobs: dict, context: dict,
                              arng: np.random.Generator) -> tuple:
-    """POST-HOC calibration layer applied to an ALREADY-GENERATED default cell, with a DEDICATED
-    domain-separated RNG ``arng`` — it touches ONLY class labels + timestamps and never the shared mechanism
-    stream, so nuisance/order/context/item state are unchanged (Pi REVISE#4 #3). Uses POOLED context (class
-    prior + global positive-gap median) so it is coherent, not a per-cell surrogate mismatch (#4)."""
-    temp = float(np.clip(knobs.get("token_freq_temperature", 1.0), 0.5, 2.0))
-    zgb = float(np.clip(knobs.get("zero_gap_bias", ZERO_GAP_RATE), 0.0, 0.9))
-    rate = float(np.clip(knobs.get("timing_rate_scale", 1.0), 0.5, 2.0))
-    disp = float(np.clip(knobs.get("gap_dispersion", 1.0), 0.5, 2.0))
+    """POST-HOC calibration layer on an ALREADY-GENERATED default cell with a DEDICATED domain-separated
+    RNG — touches ONLY class labels + timestamps (nuisance/order/context/item unchanged, Pi #3). Newly
+    positive adjacencies draw a REAL positive gap from the pooled positive-gap ECDF, then apply the
+    median-anchored dispersion/rate transform; at the native profile (zero_gap_bias=ZERO_GAP_RATE,
+    rate=disp=1) it reproduces the BASE marginals so self-recovery passes (Pi #2)."""
+    k = _normalize_knobs(knobs)
     prior = np.asarray(context["pooled_class_prior"], float)
-    p = prior ** (1.0 / temp); p = p / p.sum() if p.sum() > 0 else prior
+    p = prior ** (1.0 / k["token_freq_temperature"]); p = p / p.sum() if p.sum() > 0 else prior
     fm2 = arng.choice(N_CLASSES, size=future_multiset.shape, p=p)      # tempered POOLED-prior class relabel
     med = float(context["global_gap_median"])
     n = ts.shape[0]
-    same = arng.random((n, L_ITEMS - 1)) < zgb
-    orig_gaps = np.diff(ts, axis=1)                                   # positive where a cluster boundary
-    gaps2 = np.maximum((med + (orig_gaps - med) * disp) / max(1e-6, rate), 1e-6)
+    same = arng.random((n, L_ITEMS - 1)) < k["zero_gap_bias"]
+    raw = _sample_positive_gaps(context["pooled_positive_gap_ecdf"], (n, L_ITEMS - 1), arng)
+    gaps2 = np.maximum((med + (raw - med) * k["gap_dispersion"]) / max(1e-6, k["timing_rate_scale"]), 1e-6)
     ts2, cid2, mult2 = _clusters_from_gaps(same, gaps2)
     return fm2, ts2, cid2, mult2
 
@@ -170,7 +200,7 @@ def _nuisance(rng: np.random.Generator, s_true: np.ndarray, nuisance_cell: str) 
 def _finish(family_id, kappa, nuisance_cell, *, is_null, s_true, hidden, ctx, item_feats,
             covar, rng, allowlist, params, fam_channels, support_status,
             calib_knobs: dict | None = None, calib_context: dict | None = None,
-            cell_seed: int | None = None) -> LiteralCell:
+            cell_seed: int | None = None, calib_source_profile: str = "") -> LiteralCell:
     # --- FROZEN default cell (RNG stream identical to the None path; never perturbed by calibration) ---
     future_multiset = rng.integers(0, N_CLASSES, size=(s_true.shape[0], L_ITEMS))
     future_events = np.argsort(np.argsort(s_true, axis=1), axis=1)      # realized-order rank per item
@@ -181,11 +211,14 @@ def _finish(family_id, kappa, nuisance_cell, *, is_null, s_true, hidden, ctx, it
     #     class labels + timestamps; order/nuisance/context/item/covariates stay the default cell's. ---
     adapter_hash = None
     if calib_knobs is not None:
-        if calib_context is None:
-            raise ValueError("calib_knobs requires calib_context (pooled class prior + global gap median)")
-        adapter_hash = calibration_adapter_hash(calib_knobs, calib_context)
-        key = f"calib_adapter|{cell_seed}|{adapter_hash}".encode()
-        arng = np.random.default_rng(int.from_bytes(hashlib.sha256(key).digest()[:8], "big"))
+        if calib_context is None or "pooled_positive_gap_ecdf" not in calib_context:
+            raise ValueError("calib_knobs requires calib_context with the pooled positive-gap ECDF")
+        adapter_hash = calibration_adapter_hash(calib_knobs, calib_context, family_id=family_id,
+                                                kappa=kappa, nuisance_cell=nuisance_cell,
+                                                cell_seed=int(cell_seed or 0),
+                                                source_profile=calib_source_profile)
+        # domain-separated RNG keyed by the FULL adapter identity — cannot correlate across cells (Pi #3)
+        arng = np.random.default_rng(int.from_bytes(hashlib.sha256(adapter_hash.encode()).digest()[:8], "big"))
         future_multiset, ts, cid, mult = _apply_calibration_layer(
             future_multiset, ts, calib_knobs, calib_context, arng)
     phash = canonical_hash({"family": family_id, "params": params, "kappa": float(kappa),
@@ -296,7 +329,7 @@ _MECHANISMS = {
 def generate_literal_cell(family_id: str, kappa: float, nuisance_cell: str, n_sequences: int,
                           *, seed: int, null_weight: float | None = None,
                           support_starved: bool = False, calib_knobs: dict | None = None,
-                          calib_context: dict | None = None) -> LiteralCell:
+                          calib_context: dict | None = None, calib_source_profile: str = "") -> LiteralCell:
     """Generate one literal (family, kappa, nuisance-cell) cell. ``support_starved`` emits fewer than
     ORDER_SUPPORT_FLOOR sequences and tags SUPPORT_STARVED so downstream scoring returns NOT_EVALUABLE.
     ``calib_knobs`` (default None → frozen mechanism, byte-identical) applies the FROZEN post-hoc
@@ -320,4 +353,5 @@ def generate_literal_cell(family_id: str, kappa: float, nuisance_cell: str, n_se
     return _finish(family_id, kappa, nuisance_cell, is_null=is_null, s_true=s, hidden=hidden,
                    ctx=ctx, item_feats=item, covar=covar, rng=rng, allowlist=allowlist,
                    params=params, fam_channels=fam_channels, support_status=status,
-                   calib_knobs=calib_knobs, calib_context=calib_context, cell_seed=seed)
+                   calib_knobs=calib_knobs, calib_context=calib_context, cell_seed=seed,
+                   calib_source_profile=calib_source_profile)

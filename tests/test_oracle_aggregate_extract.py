@@ -99,7 +99,8 @@ class GeneratorAdapterTests(unittest.TestCase):
 
     def test_adapter_touches_only_class_and_timing(self) -> None:
         from clinical_jepa.eval.oracle_literal_gen import generate_literal_cell
-        ctx = {"pooled_class_prior": [0.2] * 5, "global_gap_median": 1.0}
+        ctx = {"pooled_class_prior": [0.2] * 5, "global_gap_median": 1.0,
+               "pooled_positive_gap_ecdf": [(0.5, 0.4), (1.0, 0.8), (2.0, 1.0)]}
         a = generate_literal_cell("T_latent_factor", 0.3, "orthogonal", 50, seed=7)
         c = generate_literal_cell("T_latent_factor", 0.3, "orthogonal", 50, seed=7,
                                   calib_knobs={"zero_gap_bias": 0.7, "timing_rate_scale": 1.6,
@@ -112,7 +113,8 @@ class GeneratorAdapterTests(unittest.TestCase):
 
     def test_fitted_layer_identity_changes_with_knobs(self) -> None:
         from clinical_jepa.eval.oracle_literal_gen import calibration_adapter_hash
-        ctx = {"pooled_class_prior": [0.2] * 5, "global_gap_median": 1.0}
+        ctx = {"pooled_class_prior": [0.2] * 5, "global_gap_median": 1.0,
+               "pooled_positive_gap_ecdf": [(0.5, 0.4), (1.0, 0.8), (2.0, 1.0)]}
         h1 = calibration_adapter_hash({"zero_gap_bias": 0.2}, ctx)
         h2 = calibration_adapter_hash({"zero_gap_bias": 0.8}, ctx)
         self.assertNotEqual(h1, h2)
@@ -263,11 +265,11 @@ class PolicyTests(unittest.TestCase):
     def test_every_live_anchor_and_dup_source(self) -> None:
         live = {k: k for k in P._LIVE_ANCHORS}
         pol = {**live, "gate_event_ref": "e", "reviewed_commit": "c",
-               "sources": sorted(REQUIRED_SOURCES), "split": "train"}
+               "sources": list(REQUIRED_SOURCES), "split": "train"}
         self.assertTrue(P.aggregate_read_authorized(pol, live)[0])
         for k in P._LIVE_ANCHORS:
             self.assertFalse(P.aggregate_read_authorized({**pol, k: "X"}, live)[0])
-        dup = {**pol, "sources": sorted(REQUIRED_SOURCES) + ["SCID"]}
+        dup = {**pol, "sources": list(REQUIRED_SOURCES) + ["SCID"]}
         self.assertFalse(P.aggregate_read_authorized(dup, live)[0])   # duplicate source refused
 
     def test_provenance_anchor_present_and_data_logic_split(self) -> None:
@@ -323,7 +325,7 @@ class EndToEndTests(unittest.TestCase):
         cfg = X.load_and_verify_config(cpath)
         live = X._live_identities(cfg, run_id)
         return {**live, "gate_event_ref": "evt-TEST", "reviewed_commit": "TESTCOMMIT",
-                "sources": sorted(REQUIRED_SOURCES), "split": "train"}
+                "sources": list(REQUIRED_SOURCES), "split": "train"}
 
     def _run(self, tmp, run_id):
         cpath = _make_bundle(tmp, write=True)
@@ -376,6 +378,74 @@ class OutputContractTests(unittest.TestCase):
         out = X.sanitized_output({"sources": {"SCID": NOT_EVALUABLE}})
         self.assertIn("base_schema_hash", out["identities"])
         self.assertIn("state_root_identity", out["identities"])
+
+
+class Revise5ControlTests(unittest.TestCase):
+    def test_base_as_target_self_recovery_passes(self) -> None:
+        # DECISIVE positive control (Pi REVISE#5): the fit must place its own BASE inside the envelope.
+        with mock.patch.object(X, "BASE_N_PER_CELL", 400):
+            ctx = X.calib_context()
+            target = X.synthetic_base("SCID")
+            knobs, regen, env = X.generator_fit("SCID", target, ctx)
+            self.assertIsNotNone(env)
+            self.assertTrue(env.within_envelope)                   # self-recovery PASSES
+            self.assertEqual(knobs["zero_gap_bias"], 0.35)         # recovers the native profile
+            self.assertEqual((knobs["timing_rate_scale"], knobs["gap_dispersion"]), (1.0, 1.0))
+
+    def test_impossible_length_target_fails_provisionally(self) -> None:
+        # a target with a spread length distribution cannot be matched by the fixed-length synthetic
+        with mock.patch.object(X, "BASE_N_PER_CELL", 300):
+            ctx = X.calib_context()
+            tgt, _ = X.aggregate_from_sequences("SCID", _healthy("SCID", ORACLE_ENV_MIN_DENOM + 200, 9))
+            _, _, env = X.generator_fit("SCID", tgt, ctx)
+            self.assertFalse(env.within_envelope)                  # length_ks fails; provisional, no crash
+
+    def test_streaming_equals_batch_aggregate(self) -> None:
+        seqs = list(_healthy("SCID", ORACLE_ENV_MIN_DENOM + 300, 12))
+        agg, _ = X.aggregate_from_sequences("SCID", seqs)
+        # rebuild the ECDFs the OLD batch way and compare
+        feats = [X._sequence_features(t, c) for t, c in seqs]
+        feats = [f for f in feats if f is not None]
+        lengths = np.array([f["length"] for f in feats]); counts = np.array([f["n_clusters"] for f in feats])
+        gaps = np.concatenate([f["pos_gaps"] for f in feats if f["pos_gaps"].size])
+        self.assertEqual(agg.length_ecdf, X._ecdf(lengths))
+        self.assertEqual(agg.count_ecdf, X._ecdf(counts))
+        self.assertEqual(agg.positive_gap_ecdf, X._ecdf(gaps))
+
+    def test_content_digest_frozen_little_endian_vector(self) -> None:
+        d = X._ContentDigest("SCID")
+        d.add(np.array([1048, 1, 10, 60], dtype=np.int64), np.array([0.0, 0.0, 1.0, 3.0]))
+        d.add(np.array([1048, 1, 100], dtype=np.int64), np.array([0.0, 0.0, 2.5]))
+        self.assertEqual(d.hexdigest(),
+                         "4a87994c1e26118b81b2dca6a233368333d6bb178089d495913b8fecf1f0496d")
+
+    def test_adapter_hash_binds_executed_defaults_and_source(self) -> None:
+        from clinical_jepa.eval.oracle_literal_gen import calibration_adapter_hash, ZERO_GAP_RATE
+        ctx = {"pooled_class_prior": [0.2] * 5, "global_gap_median": 1.0,
+               "pooled_positive_gap_ecdf": [(0.5, 0.4), (1.0, 1.0)]}
+        # a MISSING zero_gap_bias must bind to the executed default ZERO_GAP_RATE, not 0.0
+        h_missing = calibration_adapter_hash({"timing_rate_scale": 1.0}, ctx)
+        h_native = calibration_adapter_hash({"zero_gap_bias": ZERO_GAP_RATE, "timing_rate_scale": 1.0}, ctx)
+        h_zero = calibration_adapter_hash({"zero_gap_bias": 0.0, "timing_rate_scale": 1.0}, ctx)
+        self.assertEqual(h_missing, h_native)
+        self.assertNotEqual(h_missing, h_zero)
+        # source profile is part of the identity
+        self.assertNotEqual(calibration_adapter_hash({}, ctx, source_profile="SCID"),
+                            calibration_adapter_hash({}, ctx, source_profile="MIMIC"))
+
+    def test_symlinked_state_ancestor_refused_before_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            realroot = os.path.join(tmp, "real"); os.makedirs(realroot)
+            linkroot = os.path.join(tmp, "linkroot"); os.symlink(realroot, linkroot)
+            with mock.patch.object(X, "state_root", lambda: os.path.join(linkroot, "aggregate-calib")):
+                with self.assertRaises(X.ExtractionRefused):
+                    X.OneTimeRun("rS").claim()
+
+    def test_schema_anchors_present(self) -> None:
+        for a in ("generator_fit_schema_hash", "calibration_adapter_schema_hash"):
+            self.assertIn(a, P._LIVE_ANCHORS)
+        self.assertEqual(len(X.generator_fit_schema_hash()), 64)
+        self.assertEqual(len(X.calibration_adapter_schema_hash()), 64)
 
 
 if __name__ == "__main__":

@@ -16,12 +16,14 @@ from clinical_jepa.eval.oracle_aggregate_policy_data import APPROVED_AGGREGATE_R
 
 _SCALAR_ANCHORS = ("gate_event_ref", "reviewed_commit", "invariant_hash", "ledger_hash",
                    "calibration_schema_hash", "evaluator_identity", "vocab_hash", "vocab_name",
-                   "extraction_schema_hash", "base_schema_hash", "code_identity", "state_root_identity",
+                   "extraction_schema_hash", "base_schema_hash", "generator_fit_schema_hash",
+                   "calibration_adapter_schema_hash", "code_identity", "state_root_identity",
                    "provenance_procedure_hash", "config_hash", "split", "run_id")
 # anchors re-derived live and compared exactly (gate_event_ref/reviewed_commit are bound at policy-
 # population review, not derivable here).
 _LIVE_ANCHORS = ("invariant_hash", "ledger_hash", "calibration_schema_hash", "evaluator_identity",
-                 "vocab_hash", "vocab_name", "extraction_schema_hash", "base_schema_hash", "code_identity",
+                 "vocab_hash", "vocab_name", "extraction_schema_hash", "base_schema_hash",
+                 "generator_fit_schema_hash", "calibration_adapter_schema_hash", "code_identity",
                  "state_root_identity", "provenance_procedure_hash", "config_hash", "run_id")
 
 
@@ -42,8 +44,8 @@ def aggregate_read_authorized(policy: dict[str, Any], live: dict[str, Any]) -> t
     if not policy_is_populated(policy):
         return False, "aggregate_read_policy_empty"
     from clinical_jepa.eval.oracle_calibration import REQUIRED_SOURCES
-    if list(policy.get("sources", [])) != sorted(REQUIRED_SOURCES):     # exact ordered list (Pi #6)
-        return False, "policy_sources_not_required_list"
+    if list(policy.get("sources", [])) != list(REQUIRED_SOURCES):       # ONE canonical order = run order (Pi #7)
+        return False, "policy_sources_not_canonical_list"
     if policy.get("split") != "train":
         return False, "policy_split_not_train"
     for k in _LIVE_ANCHORS:
