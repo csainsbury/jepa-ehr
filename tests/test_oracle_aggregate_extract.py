@@ -259,8 +259,19 @@ class ConfigIdentityTests(unittest.TestCase):
 
 
 class PolicyTests(unittest.TestCase):
-    def test_empty_refuses(self) -> None:
-        self.assertEqual(P.aggregate_read_authorized(P.load_policy(), {})[1], "aggregate_read_policy_empty")
+    def test_empty_policy_fixture_refuses(self) -> None:
+        # explicit EMPTY fixture (the committed policy may be populated) — emptiness must refuse (Pi PP-gate)
+        empty = {k: ([] if isinstance(v, list) else None) for k, v in P.load_policy().items()}
+        self.assertEqual(P.aggregate_read_authorized(empty, {})[1], "aggregate_read_policy_empty")
+
+    def test_committed_policy_is_populated_and_mismatch_refuses(self) -> None:
+        # separately assert the COMMITTED policy state: populated, and a non-matching live derivation refuses
+        # on a specific identity mismatch — NOT on emptiness.
+        self.assertTrue(P.policy_is_populated(P.load_policy()))
+        ok, reason = P.aggregate_read_authorized(P.load_policy(), {k: "no-match" for k in P._LIVE_ANCHORS})
+        self.assertFalse(ok)
+        self.assertNotEqual(reason, "aggregate_read_policy_empty")
+        self.assertTrue(reason.startswith("policy_"))
 
     def test_every_live_anchor_and_dup_source(self) -> None:
         live = {k: k for k in P._LIVE_ANCHORS}
@@ -350,7 +361,10 @@ class EndToEndTests(unittest.TestCase):
             with self.assertRaises(X.ExtractionRefused):
                 X.run_calibration_extraction(cpath, "runE")           # replay refused
 
-    def test_empty_committed_policy_refuses(self) -> None:
+    def test_committed_policy_refuses_synthetic_config(self) -> None:
+        # a run against the REAL committed policy with a SYNTHETIC test config refuses fail-closed: whether
+        # the committed policy is empty (identity vs empty) or populated (synthetic config/run does not match
+        # the approved identities), the outcome is the same — refusal, no governed read (Pi PP-gate rename).
         with tempfile.TemporaryDirectory() as tmp:
             cpath = _make_bundle(tmp, write=True)
             with mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st")):
@@ -363,7 +377,8 @@ class EndToEndTests(unittest.TestCase):
             for p in _fast_generator() + [mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st"))]:
                 p.start()
             self.addCleanup(mock.patch.stopall)
-            self.assertEqual(X.main(["--config", cpath, "--run-id", "cliX"]), 2)   # empty policy
+            # real committed policy + synthetic config => refuse (exit 2), whether empty or identity-mismatch
+            self.assertEqual(X.main(["--config", cpath, "--run-id", "cliX"]), 2)
             with mock.patch("clinical_jepa.eval.oracle_aggregate_policy.load_policy",
                             return_value=self._policy(cpath, "cliOK")):
                 self.assertEqual(X.main(["--config", cpath, "--run-id", "cliOK"]), 0)
