@@ -82,7 +82,8 @@ def calibration_schema_hash() -> str:
         "required_sources": REQUIRED_SOURCES,
         "ecdf_convention": _ECDF_CONVENTION, "transform_version": _TRANSFORM_VERSION,
         "optimizer": {"temp_grid": _TEMP_GRID, "rate_grid": _RATE_GRID, "disp_grid": _DISP_GRID,
-                      "tie_break": _TIE_BREAK, "objective": _OBJECTIVE},
+                      "tie_break": _TIE_BREAK, "objective": _OBJECTIVE,
+                      "stages": "deterministic_grid_search_single_stage_no_local_refine"},
         "denominator_semantics": _DENOMINATOR_SEMANTICS, "governance_class": _GOVERNANCE_CLASS,
         "governance_clearance": _GOVERNANCE_CLEARANCE,
         "class_families": ORACLE_ENV_CLASS_FAMILIES, "structural_ranges": ORACLE_ENV_STRUCTURAL_RANGES})
@@ -154,19 +155,26 @@ def validate_aggregate_input(agg: Any) -> tuple[bool, str]:
 
 
 def _ks(a: tuple, b: tuple) -> float:
-    """KS distance between two ECDFs sampled on a common frozen support (max |cdf_a - cdf_b|)."""
-    da, db = dict(a), dict(b)
-    support = sorted(set(da) | set(db))
+    """KS distance between two ECDFs sampled on a common frozen support (max |cdf_a - cdf_b|). Linear
+    single-pass step evaluation: identical to a right-continuous step interpolation (cdf at s = the last
+    support point ≤ s, else 0), but O(n log n) instead of O(n²) — the quadratic form blew up on realistic
+    float gap supports. Pure compute; no schema/identity change."""
+    support = sorted(set(dict(a)) | set(dict(b)))
+    if not support:
+        return 1.0
 
-    def _interp(d, s):
-        keys = sorted(d)
-        prev = 0.0
-        for k in keys:
-            if k > s:
-                break
-            prev = d[k]
-        return prev
-    return max(abs(_interp(da, s) - _interp(db, s)) for s in support) if support else 1.0
+    def _step_vals(ecdf):
+        keys = sorted(ecdf)                      # ecdf = ((support_point, cdf), ...)
+        vals, prev, ki = [], 0.0, 0
+        for s in support:                        # support ascends, so advance keys monotonically
+            while ki < len(keys) and keys[ki][0] <= s:
+                prev = keys[ki][1]
+                ki += 1
+            vals.append(prev)
+        return vals
+
+    va, vb = _step_vals(a), _step_vals(b)
+    return max(abs(x - y) for x, y in zip(va, vb))
 
 
 def _tv(p: np.ndarray, q: np.ndarray) -> float:

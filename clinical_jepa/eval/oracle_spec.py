@@ -212,7 +212,8 @@ CALIBRATION_SPEC: dict[str, Any] = {
         "top_token_frequency_decile_curve",
     ),
     "fitting_objective": "minimize_weighted_L1_between_synthetic_and_real_aggregate_quantiles",
-    "optimizer": "deterministic_grid_then_Nelder_Mead",    # deterministic; seeded start; no randomness
+    "optimizer": "deterministic_grid_search",              # grid-only (Pi micro-gate #6: match the code —
+                                                           # fit_calibration does grid search, no 2nd stage)
     "tunable_params": {                                     # ONLY these knobs; ranges are hard bounds
         "timing_rate_scale": (0.5, 2.0),
         "gap_dispersion": (0.5, 2.0),
