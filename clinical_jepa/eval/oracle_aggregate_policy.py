@@ -27,6 +27,8 @@ APPROVED_AGGREGATE_READ_POLICY: dict[str, Any] = {
     "vocab_hash": None,              # flatascend_joint_corrected_v1 vocab hash
     "vocab_name": None,
     "extraction_schema_hash": None,  # the frozen extraction field/range/convention schema
+    "code_identity": None,           # hash of the executable extraction/calibration/spec logic (a later
+                                     # code change invalidates authorization; policy-only edits do not)
     "config_hash": None,             # approved LOCAL config (real paths) content hash
     "sources": [],                   # must equal REQUIRED_SOURCES exactly
     "split": None,                   # must be "train"
@@ -35,7 +37,7 @@ APPROVED_AGGREGATE_READ_POLICY: dict[str, Any] = {
 
 _SCALAR_ANCHORS = ("gate_event_ref", "reviewed_commit", "invariant_hash", "ledger_hash",
                    "calibration_schema_hash", "evaluator_identity", "vocab_hash", "vocab_name",
-                   "extraction_schema_hash", "config_hash", "split", "run_id")
+                   "extraction_schema_hash", "code_identity", "config_hash", "split", "run_id")
 
 
 def load_policy() -> dict[str, Any]:
@@ -61,7 +63,8 @@ def aggregate_read_authorized(policy: dict[str, Any], live: dict[str, Any]) -> t
     if policy.get("split") != "train":
         return False, "policy_split_not_train"
     for k in ("invariant_hash", "ledger_hash", "calibration_schema_hash", "evaluator_identity",
-              "vocab_hash", "vocab_name", "extraction_schema_hash", "config_hash", "run_id"):
+              "vocab_hash", "vocab_name", "extraction_schema_hash", "code_identity", "config_hash",
+              "run_id"):
         if policy.get(k) != live.get(k):
             return False, f"policy_{k}_mismatch"
     return True, "authorized"

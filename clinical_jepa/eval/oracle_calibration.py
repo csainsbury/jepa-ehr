@@ -41,7 +41,9 @@ _TIE_BREAK = "first_argmin_strict_1e-12"
 _OBJECTIVE = "zero_gap_bias_clip|class_tv_then_gap_ks_conjunctive"
 _ECDF_CONVENTION = {"pairs": "(support_point, cdf)", "support": "ascending_unique_positive",
                     "cdf": "nondecreasing_final_mass_1", "support_round_dp": 8,
-                    "bins": "right_continuous_step", "ks": "sup_norm_on_shared_support"}
+                    "bins": "right_continuous_step", "ks": "sup_norm_on_shared_support",
+                    "min_support_points": 1,          # a point mass is a valid degenerate distribution
+                    "point_mass_policy": "accept_and_let_KS_fail_honestly"}
 _TRANSFORM_VERSION = "calib_forward_v1"     # _forward_aggregate / _transform_gap_ecdf semantics version
 _DENOMINATOR_SEMANTICS = {"class_counts_sum_equals_n_events": True,
                           "min_denominator_floor": ORACLE_ENV_MIN_DENOM,
@@ -111,8 +113,11 @@ class AggregateStats:
 
 def _ecdf_valid(ecdf) -> bool:
     """A well-formed ECDF: finite strictly-increasing support, non-decreasing cdf in [0,1] reaching
-    ~1 at the last support point."""
-    if not ecdf or len(ecdf) < 2:
+    ~1 at the last support point. A single-support POINT MASS (cdf==1 at one value) is a legitimate,
+    degenerate distribution and is accepted — e.g. a fixed-length synthetic generator gives a
+    length point mass whose KS against a spread real length must be allowed to FAIL honestly rather
+    than short-circuit to NOT_EVALUABLE (Pi micro-gate REVISE#2 #5, Chris's ruling)."""
+    if not ecdf or len(ecdf) < 1:
         return False
     supp = [s for s, _ in ecdf]; cdf = [c for _, c in ecdf]
     if any(not np.isfinite(s) for s in supp) or any(not 0.0 <= c <= 1.0 for c in cdf):
