@@ -101,13 +101,25 @@ class LiteralCell:
 # ----------------------------------------------------------------------------------------------
 # timing: build Δt=0 multiplicity clusters with strictly-positive inter-cluster gaps.
 # ----------------------------------------------------------------------------------------------
-def _marked_cluster_timing(rng: np.random.Generator, n: int, rate_scale: np.ndarray) -> tuple:
+def _marked_cluster_timing(rng: np.random.Generator, n: int, rate_scale: np.ndarray,
+                           *, calib_knobs: dict | None = None) -> tuple:
     """Return (timestamps, cluster_ids, multiplicity) for n sequences of L items.
     Adjacent items share a timestamp (Δt=0 multiplicity) with prob ZERO_GAP_RATE; otherwise a
-    strictly-positive gap (Exp) scaled per sequence by rate_scale (>0)."""
+    strictly-positive gap (Exp) scaled per sequence by rate_scale (>0). ``calib_knobs`` (default None →
+    frozen behaviour) applies the calibration timing layer: ``zero_gap_bias`` sets the Δt=0 rate,
+    ``timing_rate_scale``/``gap_dispersion`` transform positive gaps around the population median — the
+    SAME forward model as ``oracle_calibration._transform_gap_ecdf`` so the generator adapter and the
+    analytic surrogate agree (Pi REVISE#3 #6)."""
     ts = np.zeros((n, L_ITEMS)); cid = np.zeros((n, L_ITEMS), dtype=int)
-    same = rng.random((n, L_ITEMS - 1)) < ZERO_GAP_RATE          # Δt=0 (same cluster)
+    zero_rate = ZERO_GAP_RATE if calib_knobs is None else float(np.clip(
+        calib_knobs.get("zero_gap_bias", ZERO_GAP_RATE), 0.0, 0.9))
+    same = rng.random((n, L_ITEMS - 1)) < zero_rate             # Δt=0 (same cluster)
     gaps = rng.exponential(1.0, size=(n, L_ITEMS - 1)) * rate_scale[:, None] + 1e-3  # strictly positive
+    if calib_knobs is not None:
+        rate = float(np.clip(calib_knobs.get("timing_rate_scale", 1.0), 0.5, 2.0))
+        disp = float(np.clip(calib_knobs.get("gap_dispersion", 1.0), 0.5, 2.0))
+        med = float(np.median(gaps))
+        gaps = np.maximum((med + (gaps - med) * disp) / max(1e-6, rate), 1e-6)
     for j in range(1, L_ITEMS):
         step = np.where(same[:, j - 1], 0.0, gaps[:, j - 1])
         ts[:, j] = ts[:, j - 1] + step
@@ -128,11 +140,18 @@ def _nuisance(rng: np.random.Generator, s_true: np.ndarray, nuisance_cell: str) 
 
 
 def _finish(family_id, kappa, nuisance_cell, *, is_null, s_true, hidden, ctx, item_feats,
-            covar, rng, allowlist, params, fam_channels, support_status) -> LiteralCell:
+            covar, rng, allowlist, params, fam_channels, support_status,
+            calib_knobs: dict | None = None) -> LiteralCell:
     future_multiset = rng.integers(0, N_CLASSES, size=(s_true.shape[0], L_ITEMS))
+    if calib_knobs is not None:      # calibration class layer: temper the class draw (matches _forward)
+        temp = float(np.clip(calib_knobs.get("token_freq_temperature", 1.0), 0.5, 2.0))
+        base_p = (np.bincount(future_multiset.ravel(), minlength=N_CLASSES)[:N_CLASSES]
+                  / max(1, future_multiset.size)).astype(float)
+        p = base_p ** (1.0 / temp); p = p / p.sum() if p.sum() > 0 else base_p
+        future_multiset = rng.choice(N_CLASSES, size=future_multiset.shape, p=p)
     future_events = np.argsort(np.argsort(s_true, axis=1), axis=1)      # realized-order rank per item
     rate_scale = np.exp(0.3 * (ctx[:, 0] - ctx[:, 0].mean())) + 0.2     # per-seq positive timing scale
-    ts, cid, mult = _marked_cluster_timing(rng, s_true.shape[0], rate_scale)
+    ts, cid, mult = _marked_cluster_timing(rng, s_true.shape[0], rate_scale, calib_knobs=calib_knobs)
     u = _nuisance(rng, s_true, nuisance_cell)
     phash = canonical_hash({"family": family_id, "params": params, "kappa": float(kappa),
                             "nuisance": nuisance_cell})
@@ -240,9 +259,12 @@ _MECHANISMS = {
 
 def generate_literal_cell(family_id: str, kappa: float, nuisance_cell: str, n_sequences: int,
                           *, seed: int, null_weight: float | None = None,
-                          support_starved: bool = False) -> LiteralCell:
+                          support_starved: bool = False, calib_knobs: dict | None = None) -> LiteralCell:
     """Generate one literal (family, kappa, nuisance-cell) cell. ``support_starved`` emits fewer than
-    ORDER_SUPPORT_FLOOR sequences and tags SUPPORT_STARVED so downstream scoring returns NOT_EVALUABLE."""
+    ORDER_SUPPORT_FLOOR sequences and tags SUPPORT_STARVED so downstream scoring returns NOT_EVALUABLE.
+    ``calib_knobs`` (default None → frozen mechanism, byte-identical) applies the FROZEN calibration timing/
+    class adapter at generation time — the single route by which fitted knobs alter generated cells (Pi
+    REVISE#3 #6). It does NOT touch the order mechanism, so the mechanism/invariant identity is unchanged."""
     if family_id not in _MECHANISMS:
         raise KeyError(f"no literal mechanism for {family_id!r}")
     if nuisance_cell not in ("orthogonal", "correlated_leak"):
@@ -258,4 +280,4 @@ def generate_literal_cell(family_id: str, kappa: float, nuisance_cell: str, n_se
     status = "SUPPORT_STARVED" if (support_starved or n < ORDER_SUPPORT_FLOOR) else "SUPPORTED"
     return _finish(family_id, kappa, nuisance_cell, is_null=is_null, s_true=s, hidden=hidden,
                    ctx=ctx, item_feats=item, covar=covar, rng=rng, allowlist=allowlist,
-                   params=params, fam_channels=fam_channels, support_status=status)
+                   params=params, fam_channels=fam_channels, support_status=status, calib_knobs=calib_knobs)

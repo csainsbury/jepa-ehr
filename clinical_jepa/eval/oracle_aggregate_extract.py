@@ -50,7 +50,20 @@ EXPECTED_FAMILY_RANGES = (
     ("medication", 951, 1032), ("state", 1032, 1048), ("dataset_context", 1048, 1050),
 )
 MAX_NO_CONTENT_FRACTION = 0.02             # predeclared, schema-bound; counts are EMITTED, never silent
-FIXED_STATE_ROOT = os.path.join("state", "aggregate-calib")   # gitignored; canonical run root
+
+
+def _repo_root() -> str:
+    """Absolute repository root, anchored to the installed package (not the process cwd) — so the one-time
+    state cannot be re-claimed from a different working directory (Pi REVISE#3 #1)."""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+
+def state_root() -> str:
+    return os.path.join(_repo_root(), "state", "aggregate-calib")   # gitignored; absolute canonical root
+
+
+def state_root_identity() -> str:
+    return hashlib.sha256(state_root().encode()).hexdigest()
 
 
 class ExtractionRefused(RuntimeError):
@@ -73,13 +86,22 @@ def extraction_schema_hash() -> str:
 
 
 def extraction_code_identity() -> str:
-    """Hash of the EXECUTABLE logic (this module + calibration + spec). The policy binds this, so any later
-    code change invalidates authorization — while a policy-only edit (the ``oracle_aggregate_policy`` data
-    module, excluded here) does NOT, avoiding a circular commit hash (Pi REVISE#2 #1)."""
+    """Hash of the COMPLETE executable logic closure that can affect what is read, how the BASE is
+    generated, how authorization is decided, or how output is leak-scanned (Pi REVISE#3 #5): this module,
+    calibration, spec, the literal + meta generators, contracts, the policy LOGIC (data split out), and the
+    validation scanner. The policy DATA module is excluded, so a policy-population edit does not change the
+    identity (no circular hash) while any executable change does."""
     import clinical_jepa.eval.oracle_calibration as _cal
     import clinical_jepa.eval.oracle_spec as _spec
+    import clinical_jepa.eval.oracle_literal_gen as _lit
+    import clinical_jepa.eval.oracle_meta_gen as _meta
+    import clinical_jepa.eval.oracle_contracts as _con
+    import clinical_jepa.eval.oracle_aggregate_policy as _pol
+    import clinical_jepa.eval.rung2_contract as _r2c
+    import clinical_jepa.validation as _val
     h = hashlib.sha256()
-    for mod in (__file__, _cal.__file__, _spec.__file__):
+    for mod in sorted((__file__, _cal.__file__, _spec.__file__, _lit.__file__, _meta.__file__,
+                       _con.__file__, _pol.__file__, _r2c.__file__, _val.__file__)):
         with open(mod, "rb") as fh:
             h.update(hashlib.sha256(fh.read()).digest())
     return h.hexdigest()
@@ -197,9 +219,12 @@ def _validate_raw_sequence(source: str, ordinal: int, tok: Any, cdays: Any):
     return tok, cdays
 
 
-def _iter_validated_sequences(h5_path: str, source: str):
-    """Yield validated (token_ids, cumulative_days). Rejects soft/external/virtual links so a nominal TRAIN
-    file cannot open another (Pi REVISE#2 #3). Wraps h5py errors into sanitized refusals (#4)."""
+def _iter_validated_sequences(h5_path: str, source: str, digest: "hashlib._Hash | None" = None):
+    """Yield validated (token_ids, cumulative_days). Rejects soft/external/virtual links AND datasets with
+    external raw storage so a nominal TRAIN file cannot pull bytes from another (Pi REVISE#3 #3). Wraps
+    h5py errors into sanitized refusals with an ORDINAL, never a raw group key (#4). If ``digest`` is given,
+    folds each validated sequence's bytes into it — the provenance digest computed DURING the one permitted
+    traversal (Pi REVISE#3 #4); raw keys are never hashed or exposed."""
     import h5py
     try:
         h5 = h5py.File(h5_path, "r")
@@ -207,8 +232,7 @@ def _iter_validated_sequences(h5_path: str, source: str):
         raise ExtractionRefused(f"{source}: cannot open TRAIN bundle ({type(e).__name__})")
     with h5:
         for ordinal, group in enumerate(h5.keys()):
-            link = h5.get(group, getlink=True)
-            if not isinstance(link, h5py.HardLink):
+            if not isinstance(h5.get(group, getlink=True), h5py.HardLink):
                 raise ExtractionRefused(f"{source}#seq{ordinal}: non-hard link rejected")
             grp = h5.get(group)
             if grp is None or not isinstance(grp, h5py.Group):
@@ -218,13 +242,24 @@ def _iter_validated_sequences(h5_path: str, source: str):
                     raise ExtractionRefused(f"{source}#seq{ordinal}: missing {ds}")
                 if not isinstance(grp.get(ds, getlink=True), h5py.HardLink):
                     raise ExtractionRefused(f"{source}#seq{ordinal}: {ds} non-hard link rejected")
-                if getattr(grp[ds], "is_virtual", False):
+                d = grp[ds]
+                if getattr(d, "is_virtual", False):
                     raise ExtractionRefused(f"{source}#seq{ordinal}: {ds} virtual dataset rejected")
+                try:
+                    ext = d.external
+                except Exception:
+                    ext = None
+                if ext:
+                    raise ExtractionRefused(f"{source}#seq{ordinal}: {ds} external raw storage rejected")
             try:
                 tok, cd = grp["token_ids"][:], grp[TIME_CHANNEL][:]
             except Exception as e:
                 raise ExtractionRefused(f"{source}#seq{ordinal}: unreadable dataset ({type(e).__name__})")
-            yield _validate_raw_sequence(source, ordinal, tok, cd)
+            tok, cd = _validate_raw_sequence(source, ordinal, tok, cd)
+            if digest is not None:                             # provenance digest over content bytes only
+                digest.update(np.ascontiguousarray(tok, dtype=np.int64).tobytes())
+                digest.update(np.ascontiguousarray(cd, dtype=np.float64).tobytes())
+            yield tok, cd
 
 
 # ============================ exact config / source identity (R3) ============================
@@ -241,27 +276,22 @@ def load_and_verify_config(config_path: str) -> dict[str, Any]:
     block = next((n for n in _walk(cfg) if isinstance(n, dict) and "source_datasets" in n), None)
     if block is None:
         raise ExtractionRefused("config has no source_datasets block")
-    seen: dict[str, str] = {}
-    for entry in block["source_datasets"]:
-        name = str(entry.get("name"))
-        if name not in SOURCE_DATASET_TOKENS:
-            continue
-        if name in seen:
-            raise ExtractionRefused(f"duplicate source entry: {name}")
-        h5 = (entry.get("h5_paths") or {}).get(TRAIN_SPLIT_ONLY)
-        if not h5:
-            raise ExtractionRefused(f"{name}: no TRAIN h5 path")
-        seen[name] = str(h5)
-    if set(seen) != set(REQUIRED_SOURCES):
-        raise ExtractionRefused(f"config sources != required set {sorted(REQUIRED_SOURCES)}")
+    # the ENTIRE source-dataset entry list must be exactly one SCID and one MIMIC — no unknown, no
+    # duplicate (Pi REVISE#3 #3: an ignored extra source must not pass).
+    names = [str(e.get("name")) for e in block["source_datasets"]]
+    if sorted(names) != sorted(REQUIRED_SOURCES):
+        raise ExtractionRefused("config source entries must be exactly one SCID and one MIMIC")
+    seen = {str(e["name"]): str((e.get("h5_paths") or {}).get(TRAIN_SPLIT_ONLY) or "")
+            for e in block["source_datasets"]}
+    if any(not p for p in seen.values()):
+        raise ExtractionRefused("a source has no TRAIN h5 path")
     tc = str(block.get("time_channel", cfg.get("time_channel", "")))
     if tc != TIME_CHANNEL:
         raise ExtractionRefused(f"config time_channel {tc!r} != {TIME_CHANNEL!r}")
     real_paths: dict[str, str] = {}
     for src, p in seen.items():
+        _refuse_symlinked_components(src, p)                    # reject a symlink in ANY path component
         rp = os.path.realpath(p)
-        if os.path.islink(p):
-            raise ExtractionRefused(f"{src}: TRAIN path is a symlink")
         if os.path.basename(rp) != EXPECTED_TRAIN_FILENAMES[src]:
             raise ExtractionRefused(f"{src}: TRAIN filename != {EXPECTED_TRAIN_FILENAMES[src]}")
         if EXPECTED_BUNDLE not in rp.split(os.sep):
@@ -269,6 +299,19 @@ def load_and_verify_config(config_path: str) -> dict[str, Any]:
         real_paths[src] = rp
     vocab_hash = _verify_manifest(real_paths)
     return {"paths": real_paths, "config_hash": hashlib.sha256(raw).hexdigest(), "vocab_hash": vocab_hash}
+
+
+def _refuse_symlinked_components(src: str, path: str) -> None:
+    """Reject a symlink in ANY component of the path, not just the final one (Pi REVISE#3 #3)."""
+    cur = path if os.path.isabs(path) else os.path.abspath(path)
+    parts: list[str] = []
+    while True:
+        if os.path.islink(cur):
+            raise ExtractionRefused(f"{src}: symlinked path component")
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        parts.append(cur); cur = parent
 
 
 def _walk(node):
@@ -305,12 +348,33 @@ _STATES = ("APPROVED", "READING_SCID", "READING_MIMIC", "FITTING", "REGEN_CHECK"
 
 
 def canonical_run_paths(run_id: str) -> tuple[str, str]:
-    """Canonical state + output paths DERIVED from the run id under the fixed gitignored root — never
-    caller-supplied (Pi REVISE#2 #2). run_id is constrained to a safe slug."""
+    """Canonical state + output paths DERIVED from the run id under the ABSOLUTE repo-anchored gitignored
+    root — never caller-supplied and never cwd-relative (Pi REVISE#3 #1/#2). run_id is a safe slug (no `.`
+    so `../escape` refuses)."""
     if not run_id or not all(ch.isalnum() or ch in "-_" for ch in run_id):
         raise ExtractionRefused("run_id must be a nonempty [A-Za-z0-9-_] slug")
-    d = os.path.join(FIXED_STATE_ROOT, run_id)
+    d = os.path.join(state_root(), run_id)
     return os.path.join(d, "state.json"), os.path.join(d, "result.json")
+
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def _excl_write_json(path: str, obj: dict) -> None:
+    """Exclusive, symlink-refusing create + write (O_EXCL|O_NOFOLLOW): a pre-existing file or a symlink at
+    ``path`` refuses rather than being followed (Pi REVISE#3 #1)."""
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(obj, fh, sort_keys=True)
+
+
+def _atomic_replace_json(path: str, obj: dict) -> None:
+    """Write to a fresh exclusive tmp then atomically replace — the tmp cannot follow a pre-existing symlink."""
+    tmp = path + ".tmp"
+    if os.path.islink(tmp) or os.path.exists(tmp):
+        os.unlink(tmp)
+    _excl_write_json(tmp, obj)
+    os.replace(tmp, path)
 
 
 class OneTimeRun:
@@ -320,16 +384,16 @@ class OneTimeRun:
 
     def claim(self) -> None:
         d = os.path.dirname(self.state_path)
+        if os.path.islink(d):
+            raise ExtractionRefused("run directory is a symlink")
         os.makedirs(d, exist_ok=True)
         for p in (self.state_path, self.out_path):
             if os.path.islink(p) or os.path.exists(p):
                 raise ExtractionRefused("run artifact already exists: no replay")
         try:
-            fd = os.open(self.state_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            _excl_write_json(self.state_path, {"run_id": self.run_id, "state": "APPROVED"})
         except FileExistsError:
             raise ExtractionRefused("run state already exists: no replay")
-        with os.fdopen(fd, "w") as fh:
-            json.dump({"run_id": self.run_id, "state": "APPROVED"}, fh)
 
     def advance(self, frm: str, to: str) -> None:
         if frm not in _STATES or to not in _STATES:
@@ -337,10 +401,7 @@ class OneTimeRun:
         st = json.loads(open(self.state_path).read())
         if st.get("run_id") != self.run_id or st.get("state") != frm:
             raise ExtractionRefused("state precondition failed")
-        tmp = self.state_path + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump({"run_id": self.run_id, "state": to}, fh)
-        os.replace(tmp, self.state_path)
+        _atomic_replace_json(self.state_path, {"run_id": self.run_id, "state": to})
 
 
 # ============================ declared synthetic BASE + regeneration (R5) ============================
@@ -354,20 +415,29 @@ BASE_CELLS = tuple((fam, float(k)) for fam in TRAIN_FAMILIES for k in BASE_KAPPA
 _REP = tuple(lo for (_, lo, _) in ORACLE_ENV_CLASS_FAMILIES)   # representative content token per class
 
 
+BASE_CELL_SEED_SCHEDULE = "BASE_SEED + 101*j"          # per-cell seed, bound in base_schema_hash
+
+
 def base_schema_hash() -> str:
     return canonical_hash({"families": TRAIN_FAMILIES, "kappas": [float(k) for k in BASE_KAPPAS],
                            "excluded_kappa": ORACLE_POWER_KAPPA_MID, "weights": "uniform",
-                           "nuisance": BASE_NUISANCE, "n_per_cell": BASE_N_PER_CELL, "seed": BASE_SEED,
+                           "nuisance": BASE_NUISANCE, "n_per_cell": BASE_N_PER_CELL, "root_seed": BASE_SEED,
+                           "per_cell_seed_schedule": BASE_CELL_SEED_SCHEDULE,
+                           "cell_order": [(f, float(k)) for (f, k) in BASE_CELLS],
                            "class_representatives": list(_REP), "length_law": "native_literal_fixed_L",
+                           "adapter": "generate_literal_cell.calib_knobs",
                            "n_classes": ORACLE_ENV_N_CLASSES, "mechanism_hash": invariant_hash()})
 
 
-def _base_multiset_and_times():
-    """Deterministic pooled (future_multiset, future_timestamps) over the frozen uniform mixture."""
+def _base_cells(calib_knobs: dict | None = None):
+    """The frozen uniform-mixture BASE cells, optionally generated THROUGH the calibration adapter
+    (``calib_knobs``) — the single generator route by which fitted knobs alter generated cells (Pi
+    REVISE#3 #6). Deterministic per-cell seed ``BASE_SEED + 101*j``."""
     from clinical_jepa.eval.oracle_literal_gen import generate_literal_cell
     fms, tss = [], []
     for j, (fam, k) in enumerate(BASE_CELLS):
-        c = generate_literal_cell(fam, k, BASE_NUISANCE, BASE_N_PER_CELL, seed=BASE_SEED + 101 * j)
+        c = generate_literal_cell(fam, k, BASE_NUISANCE, BASE_N_PER_CELL, seed=BASE_SEED + 101 * j,
+                                  calib_knobs=calib_knobs)
         fms.append(np.asarray(c.future_multiset)); tss.append(np.asarray(c.future_timestamps, float))
     return np.concatenate(fms), np.concatenate(tss)
 
@@ -383,96 +453,65 @@ def _seqs_from(fm: np.ndarray, ts: np.ndarray, source: str):
 def synthetic_base(source: str) -> AggregateStats:
     """The declared synthetic BASE aggregate (native fixed length — the length ECDF is a legitimate point
     mass; its KS against real spread may fail honestly)."""
-    fm, ts = _base_multiset_and_times()
+    fm, ts = _base_cells(None)
     agg, _ = aggregate_from_sequences(source, _seqs_from(fm, ts, source))
     if isinstance(agg, str):
         raise ExtractionRefused(f"synthetic BASE for {source} is {agg}")
     return agg
 
 
-def regenerate_with_knobs(source: str, knobs: dict[str, float], seed: int) -> AggregateStats | str:
-    """Apply fitted knobs at the SEQUENCE level to the frozen BASE population and RE-AGGREGATE — the
-    generator-output regeneration check (Pi REVISE#2 #5), distinct from the analytic ``_forward_aggregate``
-    surrogate. token_freq_temperature reshapes class draws; zero_gap_bias sets Δt=0 adjacencies;
-    timing_rate_scale/gap_dispersion transform the positive gaps."""
-    from clinical_jepa.eval.oracle_meta_gen import INVARIANT
-    fm, ts = _base_multiset_and_times()
-    rng = np.random.default_rng(seed)
-    temp = float(np.clip(knobs.get("token_freq_temperature", 1.0), 0.5, 2.0))
-    zgb = float(np.clip(knobs.get("zero_gap_bias", 0.0), 0.0, 0.9))
-    rate = float(np.clip(knobs.get("timing_rate_scale", 1.0), 0.5, 2.0))
-    disp = float(np.clip(knobs.get("gap_dispersion", 1.0), 0.5, 2.0))
-    base_p = np.bincount(fm.ravel(), minlength=ORACLE_ENV_N_CLASSES)[:ORACLE_ENV_N_CLASSES].astype(float)
-    base_p = base_p / base_p.sum()
-    p = base_p ** (1.0 / temp); p = p / p.sum()
-
-    def regen():
-        for i in range(fm.shape[0]):
-            L = fm.shape[1]
-            classes = rng.choice(ORACLE_ENV_N_CLASSES, size=L, p=p)         # tempered class draw
-            toks = np.array([SOURCE_DATASET_TOKENS[source], BOS_ID] + [_REP[int(x)] for x in classes],
-                            dtype=np.int64)
-            # rebuild content timestamps: median-anchored gap transform + zero-gap resampling
-            _pg = np.diff(ts[i])[np.diff(ts[i]) > 0] if L > 1 else np.empty(0)
-            med = float(np.median(_pg)) if _pg.size else 1.0
-            t = [float(ts[i, 0])]
-            for j in range(1, L):
-                same = rng.random() < zgb
-                if same:
-                    t.append(t[-1])
-                else:
-                    g0 = max(1e-6, float(ts[i, j] - ts[i, j - 1]))
-                    g = max(1e-6, (med + (g0 - med) * disp) / max(1e-6, rate))
-                    t.append(t[-1] + g)
-            times = np.concatenate([[t[0], t[0]], np.array(t, float)])
-            yield toks, times
-
-    agg, _ = aggregate_from_sequences(source, regen())
+def regenerate_via_generator(source: str, knobs: dict[str, float]) -> AggregateStats | str:
+    """Regenerate the BASE population THROUGH ``generate_literal_cell(calib_knobs=knobs)`` — the actual
+    generator adapter certification would use — and re-aggregate. This is the CANONICAL calibration-
+    eligibility source (Pi REVISE#3 #6), not the analytic ``_forward_aggregate`` surrogate."""
+    fm, ts = _base_cells(dict(knobs))
+    agg, _ = aggregate_from_sequences(source, _seqs_from(fm, ts, source))
     return agg
 
 
 # ============================ sanitized output (R4/R7) ============================
-def sanitized_output(targets, target_counts, bases, calibration, regen, run_meta) -> dict[str, Any]:
+def _agg_hash(a: AggregateStats | str) -> str:
+    return canonical_hash(a if isinstance(a, str) else asdict(a))
+
+
+def sanitized_output(payload: dict[str, Any]) -> dict[str, Any]:
     from clinical_jepa.validation import _scan_forbidden_aggregate_keys
-    out: dict[str, Any] = {
-        "governance_class": "explicitly_cleared_safe_aggregate_only_no_patient_rows",
-        "split": TRAIN_SPLIT_ONLY, "n_classes": ORACLE_ENV_N_CLASSES,
-        "sources": {s: (a if isinstance(a, str) else asdict(a)) for s, a in targets.items()},
-        "audit_counts": target_counts,
-        "base": {s: (b if isinstance(b, str) else asdict(b)) for s, b in bases.items()},
-        "calibration": calibration, "regeneration_check": regen,
-        "identities": {"invariant_hash": invariant_hash(), "ledger_hash": ledger_hash(),
-                       "calibration_schema_hash": calibration_schema_hash(),
-                       "extraction_schema_hash": extraction_schema_hash(),
-                       "base_schema_hash": base_schema_hash(),
-                       "extraction_code_identity": extraction_code_identity(),
-                       "evaluator_identity": ORACLE_EVALUATOR_IDENTITY},
-        "run": run_meta}
+    out = {"governance_class": "explicitly_cleared_safe_aggregate_only_no_patient_rows",
+           "split": TRAIN_SPLIT_ONLY, "n_classes": ORACLE_ENV_N_CLASSES, **payload,
+           "identities": {"invariant_hash": invariant_hash(), "ledger_hash": ledger_hash(),
+                          "calibration_schema_hash": calibration_schema_hash(),
+                          "extraction_schema_hash": extraction_schema_hash(),
+                          "base_schema_hash": base_schema_hash(),
+                          "extraction_code_identity": extraction_code_identity(),
+                          "state_root_identity": state_root_identity(),
+                          "evaluator_identity": ORACLE_EVALUATOR_IDENTITY}}
     leaks = _scan_forbidden_aggregate_keys(out)
     if leaks:
         raise ExtractionRefused("aggregate output failed the forbidden-key scan")
     return out
 
 
-# ============================ the one-time governed runner (R1/R2/R5) ============================
+# ============================ the one-time governed runner (R1/R2/R4/R6) ============================
 def _live_identities(cfg: dict[str, Any], run_id: str) -> dict[str, Any]:
     return {"invariant_hash": invariant_hash(), "ledger_hash": ledger_hash(),
             "calibration_schema_hash": calibration_schema_hash(),
             "evaluator_identity": ORACLE_EVALUATOR_IDENTITY, "vocab_hash": cfg["vocab_hash"],
             "vocab_name": EXPECTED_VOCAB_NAME, "extraction_schema_hash": extraction_schema_hash(),
-            "code_identity": extraction_code_identity(), "config_hash": cfg["config_hash"],
+            "base_schema_hash": base_schema_hash(), "code_identity": extraction_code_identity(),
+            "state_root_identity": state_root_identity(), "config_hash": cfg["config_hash"],
             "run_id": run_id}
 
 
 def run_calibration_extraction(config_path: str, run_id: str) -> dict[str, Any]:
     """The SINGLE governed entry point. Takes ONLY the approved config location and run id — NO caller
-    policy, NO caller paths (Pi REVISE#2 #1/#2). Loads the committed policy internally; refuses if empty or
-    on any identity mismatch; derives canonical one-time paths; reads TRAIN SCID then MIMIC once; builds the
-    declared BASE; calibrates; runs the generator-output regeneration check; writes the sanitized summary."""
+    policy, NO caller paths (Pi #1/#2). Loads the committed policy internally; refuses if empty or on any
+    identity mismatch; derives canonical one-time paths; reads TRAIN SCID then MIMIC once (computing a
+    provenance digest DURING the traversal, #4); builds the declared BASE; the CANONICAL calibration
+    eligibility comes from the generator-adapter regeneration (#6, surrogate demoted to diagnostic), failing
+    closed on NOT_EVALUABLE / envelope failure / surrogate disagreement; writes the sanitized summary."""
     from clinical_jepa.eval.oracle_aggregate_policy import aggregate_read_authorized, load_policy
     cfg = load_and_verify_config(config_path)
-    live = _live_identities(cfg, run_id)
-    ok, reason = aggregate_read_authorized(load_policy(), live)
+    ok, reason = aggregate_read_authorized(load_policy(), _live_identities(cfg, run_id))
     if not ok:
         raise ExtractionRefused(f"aggregate read refused: {reason}")
 
@@ -480,35 +519,56 @@ def run_calibration_extraction(config_path: str, run_id: str) -> dict[str, Any]:
     run.claim()
     targets: dict[str, Any] = {}
     counts: dict[str, Any] = {}
+    artifact_digests: dict[str, str] = {}
     for src, frm, to in (("SCID", "APPROVED", "READING_SCID"), ("MIMIC", "READING_SCID", "READING_MIMIC")):
         run.advance(frm, to)
-        targets[src], counts[src] = aggregate_from_sequences(src, _iter_validated_sequences(cfg["paths"][src], src))
+        dig = hashlib.sha256()                               # provenance digest over content bytes only (#4)
+        targets[src], counts[src] = aggregate_from_sequences(
+            src, _iter_validated_sequences(cfg["paths"][src], src, digest=dig))
+        artifact_digests[src] = dig.hexdigest()
     if any(isinstance(t, str) for t in targets.values()):
         run.advance("READING_MIMIC", "REFUSED")
         raise ExtractionRefused("a source is NOT_EVALUABLE")
     run.advance("READING_MIMIC", "FITTING")
     bases = {s: synthetic_base(s) for s in REQUIRED_SOURCES}
     coll = calibrate_sources({s: targets[s] for s in REQUIRED_SOURCES}, bases)
-    calib = {"all_sources_within_envelope": coll.all_sources_within_envelope,
-             "source_coverage_ok": coll.source_coverage_ok, "combined_hash": coll.combined_hash,
-             "per_source": {s: {"fitted_knobs": r.fitted_knobs, "within_envelope": r.within_envelope,
-                                "input_hash": r.input_hash, "fitted_param_hash": r.fitted_param_hash,
-                                "diagnostics": r.diagnostics} for s, r in coll.per_source.items()}}
     run.advance("FITTING", "REGEN_CHECK")
-    regen = {}                                               # envelope on ACTUAL knob-applied generator output
+    regen: dict[str, Any] = {}                               # CANONICAL: envelope on knob-applied generator
+    eligible = True
     for s in REQUIRED_SOURCES:
-        rq = regenerate_with_knobs(s, coll.per_source[s].fitted_knobs, seed=BASE_SEED + 7)
-        env = None if isinstance(rq, str) else realism_envelope(rq, targets[s]).within_envelope
-        regen[s] = {"regenerated_within_envelope": env,
-                    "surrogate_within_envelope": coll.per_source[s].within_envelope,
-                    "agrees": (env == coll.per_source[s].within_envelope)}
-    run_meta = {"run_id": run_id, "reviewed_commit": load_policy().get("reviewed_commit"),
-                "gate_event_ref": load_policy().get("gate_event_ref"), "config_hash": cfg["config_hash"]}
-    out = sanitized_output(targets, counts, bases, calib, regen, run_meta)
-    tmp = run.out_path + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(out, fh, sort_keys=True, indent=2)
-    os.replace(tmp, run.out_path)
+        knobs = coll.per_source[s].fitted_knobs
+        rq = regenerate_via_generator(s, knobs)
+        surrogate = bool(coll.per_source[s].within_envelope)
+        if isinstance(rq, str):
+            regenerated, agrees, checks = None, False, None
+        else:
+            env = realism_envelope(rq, targets[s])
+            regenerated = bool(env.within_envelope)
+            agrees = (regenerated == surrogate)
+            checks = {k: [float(v), bool(ok)] for k, (v, ok) in env.checks.items()}
+        src_eligible = bool(regenerated) and agrees
+        eligible = eligible and src_eligible
+        regen[s] = {"regenerated_within_envelope": regenerated, "surrogate_within_envelope": surrogate,
+                    "agrees": agrees, "source_eligible": src_eligible,
+                    "regenerated_aggregate": (rq if isinstance(rq, str) else asdict(rq)),
+                    "regenerated_hash": _agg_hash(rq), "envelope_checks": checks}
+    payload = {
+        "sources": {s: (a if isinstance(a, str) else asdict(a)) for s, a in targets.items()},
+        "audit_counts": counts,
+        "train_artifact_digests": artifact_digests, "provenance_verified": False,   # pending result gate (#4)
+        "base": {s: asdict(bases[s]) for s in REQUIRED_SOURCES},
+        "calibration_surrogate_diagnostic": {                # surrogate = DIAGNOSTIC ONLY (#6)
+            "source_coverage_ok": coll.source_coverage_ok, "combined_hash": coll.combined_hash,
+            "per_source": {s: {"fitted_knobs": coll.per_source[s].fitted_knobs,
+                               "within_envelope": coll.per_source[s].within_envelope,
+                               "input_hash": coll.per_source[s].input_hash,
+                               "diagnostics": coll.per_source[s].diagnostics} for s in REQUIRED_SOURCES}},
+        "regeneration_canonical": regen,
+        "calibration_eligible": bool(eligible and coll.source_coverage_ok),    # CANONICAL result
+        "run": {"run_id": run_id, "reviewed_commit": load_policy().get("reviewed_commit"),
+                "gate_event_ref": load_policy().get("gate_event_ref"), "config_hash": cfg["config_hash"]}}
+    out = sanitized_output(payload)
+    _atomic_replace_json(run.out_path, out)
     run.advance("REGEN_CHECK", "COMPLETE")
     return out
 
@@ -527,3 +587,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(json.dumps({"ok": True, "run_id": args.run_id}))
     return 0
+
+
+if __name__ == "__main__":               # functional entrypoint (Pi REVISE#3 #2)
+    raise SystemExit(main())
