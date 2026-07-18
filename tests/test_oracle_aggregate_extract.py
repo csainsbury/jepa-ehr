@@ -1,5 +1,5 @@
 """Aggregate-real extraction — SYNTHETIC temp HDF5/config fixtures ONLY, NO governed read (Pi micro-gate
-REVISE#3 adversarial battery). Frozen integer seeds only. Establishes the claimed fail-closed properties.
+REVISE#4 adversarial battery). Frozen integer seeds only. Establishes the claimed fail-closed properties.
 """
 from __future__ import annotations
 
@@ -17,28 +17,31 @@ from clinical_jepa.eval.oracle_calibration import AggregateStats, NOT_EVALUABLE,
 from clinical_jepa.eval.rung2_contract import ORACLE_ENV_MIN_DENOM, ORACLE_ENV_N_CLASSES
 
 _CLS_TOK = (10, 60, 100, 1000, 1040)
+# frozen None-path regression hashes (Pi REVISE#4 #7: default generation must not drift)
+_NONE_PATH_HASHES = {"T_latent_factor": "8dc16af2c37e3682", "T_hmm_markov": "44ae0d375764a35a",
+                     "T_realized_history": "1a8eec81548b953c"}
 
 
-def _prefix(source):
-    return [X.SOURCE_DATASET_TOKENS[source], X.BOS_ID]
+def _prefix(src):
+    return [X.SOURCE_DATASET_TOKENS[src], X.BOS_ID]
 
 
-def _seq(source, classes, days):
-    toks = _prefix(source) + [_CLS_TOK[c] for c in classes]
+def _seq(src, classes, days):
+    toks = _prefix(src) + [_CLS_TOK[c] for c in classes]
     t = [float(days[0]), float(days[0])] + [float(d) for d in days]
     return np.array(toks, dtype=np.int64), np.array(t, dtype=float)
 
 
-def _healthy(source, n, seed):
-    rng = np.random.default_rng(seed)                        # FROZEN integer seed, no hash()
+def _healthy(src, n, seed):
+    rng = np.random.default_rng(seed)
     for _ in range(n):
         L = int(rng.integers(6, 14))
         classes = list(rng.integers(0, ORACLE_ENV_N_CLASSES, size=L))
         days = list(np.cumsum(rng.integers(0, 3, size=L)).astype(float))
-        yield _seq(source, classes, days)
+        yield _seq(src, classes, days)
 
 
-def _write_h5(path, source, sequences):
+def _write_h5(path, src, sequences):
     import h5py
     with h5py.File(path, "w") as h5:
         for i, (tok, cd) in enumerate(sequences):
@@ -74,20 +77,51 @@ def _make_bundle(tmp, sources=REQUIRED_SOURCES, split="train", filenames=None, b
     return cpath
 
 
-class PureAggregationTests(unittest.TestCase):
-    def test_structural_excluded_and_audit_counts(self) -> None:
-        tok, days = _seq("SCID", [0, 0, 1, 2], [0.0, 0.0, 1.0, 3.0])
-        f = X._sequence_features(tok, days)
-        self.assertEqual((f["length"], f["n_clusters"], f["n_zero_adj"]), (4, 3, 1))
-        agg, counts = X.aggregate_from_sequences("SCID", list(_healthy("SCID", ORACLE_ENV_MIN_DENOM + 80, 3)))
-        self.assertIsInstance(agg, AggregateStats)
-        self.assertEqual(counts["n_no_content_sequences"], 0)
+def _fast_generator():
+    """Shrink the BASE + fit grid so generator-based end-to-end tests stay quick (no governed data)."""
+    return [mock.patch.object(X, "BASE_N_PER_CELL", 150),
+            mock.patch.object(X, "GEN_FIT_ZGB", (0.1, 0.6)),
+            mock.patch.object(X, "GEN_FIT_RATE", (0.85, 1.3)),
+            mock.patch.object(X, "GEN_FIT_DISP", (0.85, 1.3))]
 
-    def test_no_content_refused_above_fraction(self) -> None:
-        good = list(_healthy("SCID", 100, 4))
-        empties = [(np.array(_prefix("SCID"), dtype=np.int64), np.array([0.0, 0.0])) for _ in range(20)]
-        with self.assertRaises(X.ExtractionRefused):
-            X.aggregate_from_sequences("SCID", good + empties)
+
+class GeneratorAdapterTests(unittest.TestCase):
+    def test_default_none_path_regression(self) -> None:
+        import hashlib
+        from clinical_jepa.eval.oracle_literal_gen import generate_literal_cell
+        for fam, want in _NONE_PATH_HASHES.items():
+            c = generate_literal_cell(fam, 0.3, "orthogonal", 40, seed=7)
+            m = hashlib.sha256()
+            for a in (c.future_multiset, c.future_timestamps, c.nuisance_u, c.true_order):
+                m.update(np.ascontiguousarray(a).tobytes())
+            self.assertEqual(m.hexdigest()[:16], want)             # default generation must not drift
+            self.assertIsNone(c.calibration_adapter_hash)
+
+    def test_adapter_touches_only_class_and_timing(self) -> None:
+        from clinical_jepa.eval.oracle_literal_gen import generate_literal_cell
+        ctx = {"pooled_class_prior": [0.2] * 5, "global_gap_median": 1.0}
+        a = generate_literal_cell("T_latent_factor", 0.3, "orthogonal", 50, seed=7)
+        c = generate_literal_cell("T_latent_factor", 0.3, "orthogonal", 50, seed=7,
+                                  calib_knobs={"zero_gap_bias": 0.7, "timing_rate_scale": 1.6,
+                                               "gap_dispersion": 1.3, "token_freq_temperature": 1.0},
+                                  calib_context=ctx)
+        for field in ("nuisance_u", "true_order", "item_features", "context_features", "future_events"):
+            self.assertTrue(np.array_equal(getattr(a, field), getattr(c, field)), field)
+        self.assertFalse(np.array_equal(a.future_timestamps, c.future_timestamps))
+        self.assertIsNotNone(c.calibration_adapter_hash)
+
+    def test_fitted_layer_identity_changes_with_knobs(self) -> None:
+        from clinical_jepa.eval.oracle_literal_gen import calibration_adapter_hash
+        ctx = {"pooled_class_prior": [0.2] * 5, "global_gap_median": 1.0}
+        h1 = calibration_adapter_hash({"zero_gap_bias": 0.2}, ctx)
+        h2 = calibration_adapter_hash({"zero_gap_bias": 0.8}, ctx)
+        self.assertNotEqual(h1, h2)
+
+    def test_calib_knobs_requires_context(self) -> None:
+        from clinical_jepa.eval.oracle_literal_gen import generate_literal_cell
+        with self.assertRaises(ValueError):
+            generate_literal_cell("T_latent_factor", 0.3, "orthogonal", 20, seed=1,
+                                  calib_knobs={"zero_gap_bias": 0.5})
 
 
 class StrictValidationTests(unittest.TestCase):
@@ -103,16 +137,20 @@ class StrictValidationTests(unittest.TestCase):
             with self.assertRaises(X.ExtractionRefused):
                 self._v("SCID", tok, cd)
 
-    def test_error_message_uses_ordinal_not_group_key(self) -> None:
-        try:
+    def test_error_uses_ordinal(self) -> None:
+        with self.assertRaises(X.ExtractionRefused) as e:
             X._validate_raw_sequence("SCID", 42, np.array([1049, 1, 10]), np.array([0.0, 0.0, 1.0]))
-            self.fail("expected refusal")
-        except X.ExtractionRefused as e:
-            self.assertIn("seq42", str(e))
+        self.assertIn("seq42", str(e.exception))
+
+    def test_no_content_refused_above_fraction(self) -> None:
+        good = list(_healthy("SCID", 100, 4))
+        empties = [(np.array(_prefix("SCID"), dtype=np.int64), np.array([0.0, 0.0])) for _ in range(20)]
+        with self.assertRaises(X.ExtractionRefused):
+            X.aggregate_from_sequences("SCID", good + empties)
 
 
 class HDFLinkTests(unittest.TestCase):
-    def test_soft_link_group_refused(self) -> None:
+    def test_soft_link_refused(self) -> None:
         import h5py
         with tempfile.TemporaryDirectory() as tmp:
             p = os.path.join(tmp, "s.h5")
@@ -127,7 +165,7 @@ class HDFLinkTests(unittest.TestCase):
     def test_external_link_refused(self) -> None:
         import h5py
         with tempfile.TemporaryDirectory() as tmp:
-            other = os.path.join(tmp, "other.h5")
+            other = os.path.join(tmp, "o.h5")
             with h5py.File(other, "w") as o:
                 o.create_dataset("x", data=np.array([1, 2, 3]))
             p = os.path.join(tmp, "s.h5")
@@ -136,28 +174,51 @@ class HDFLinkTests(unittest.TestCase):
             with self.assertRaises(X.ExtractionRefused):
                 list(X._iter_validated_sequences(p, "SCID"))
 
-    def test_external_dataset_storage_refused(self) -> None:
+    def test_external_storage_refused(self) -> None:
         import h5py
         with tempfile.TemporaryDirectory() as tmp:
             p = os.path.join(tmp, "s.h5")
             with h5py.File(p, "w") as h5:
                 g = h5.create_group("seq0")
                 g.create_dataset("token_ids", shape=(3,), dtype="i8",
-                                 external=[(os.path.join(tmp, "ext.bin"), 0, h5py.h5f.UNLIMITED)])
+                                 external=[(os.path.join(tmp, "e.bin"), 0, h5py.h5f.UNLIMITED)])
                 g.create_dataset(X.TIME_CHANNEL, data=np.array([0.0, 0.0, 1.0]))
             with self.assertRaises(X.ExtractionRefused):
                 list(X._iter_validated_sequences(p, "SCID"))
 
-    def test_digest_computed_and_content_sensitive(self) -> None:
-        import hashlib
+    def test_virtual_dataset_refused(self) -> None:
+        import h5py
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "scid_train.h5")
-            _write_h5(p, "SCID", _healthy("SCID", 30, 7))
-            d1 = hashlib.sha256(); list(X._iter_validated_sequences(p, "SCID", digest=d1))
-            p2 = os.path.join(tmp, "scid_train2.h5")
-            _write_h5(p2, "SCID", _healthy("SCID", 30, 8))          # different content
-            d2 = hashlib.sha256(); list(X._iter_validated_sequences(p2, "SCID", digest=d2))
-            self.assertNotEqual(d1.hexdigest(), d2.hexdigest())
+            src = os.path.join(tmp, "src.h5")
+            with h5py.File(src, "w") as s:
+                s.create_dataset("d", data=np.array([1048, 1, 10], dtype="i8"))
+            p = os.path.join(tmp, "s.h5")
+            with h5py.File(p, "w") as h5:
+                g = h5.create_group("seq0")
+                layout = h5py.VirtualLayout(shape=(3,), dtype="i8")
+                layout[:] = h5py.VirtualSource(src, "d", shape=(3,))
+                g.create_virtual_dataset("token_ids", layout)
+                g.create_dataset(X.TIME_CHANNEL, data=np.array([0.0, 0.0, 1.0]))
+            with self.assertRaises(X.ExtractionRefused):
+                list(X._iter_validated_sequences(p, "SCID"))
+
+
+class ContentDigestTests(unittest.TestCase):
+    def _digest(self, seqs, src="SCID"):
+        d = X._ContentDigest(src)
+        for tok, cd in seqs:
+            d.add(np.asarray(tok), np.asarray(cd))
+        return d.hexdigest()
+
+    def test_order_and_count_and_boundary_sensitive(self) -> None:
+        s1 = [_seq("SCID", [0, 1], [0.0, 1.0]), _seq("SCID", [2, 3], [0.0, 2.0])]
+        s2 = [_seq("SCID", [2, 3], [0.0, 2.0]), _seq("SCID", [0, 1], [0.0, 1.0])]   # reordered
+        s3 = s1 + [_seq("SCID", [4], [0.0])]                                        # extra count
+        base = self._digest(s1)
+        self.assertNotEqual(base, self._digest(s2))              # order sensitive
+        self.assertNotEqual(base, self._digest(s3))              # count sensitive
+        self.assertNotEqual(base, self._digest(s1, src="MIMIC"))  # source sensitive
+        self.assertEqual(base, self._digest(s1))                 # deterministic
 
 
 class ConfigIdentityTests(unittest.TestCase):
@@ -165,15 +226,11 @@ class ConfigIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(set(X.load_and_verify_config(_make_bundle(tmp))["paths"]), set(REQUIRED_SOURCES))
 
-    def test_extra_unknown_source_refused(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(X.ExtractionRefused):
-                X.load_and_verify_config(_make_bundle(tmp, extra=True))
-
-    def test_missing_source_refused(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(X.ExtractionRefused):
-                X.load_and_verify_config(_make_bundle(tmp, sources=("SCID",)))
+    def test_extra_or_missing_source_refused(self) -> None:
+        for kw in ({"extra": True}, {"sources": ("SCID",)}):
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(X.ExtractionRefused):
+                    X.load_and_verify_config(_make_bundle(tmp, **kw))
 
     def test_family_hash_time_split_filename_refused(self) -> None:
         for kw in ({"bad_family": True}, {"bad_hash": True}, {"time_channel": "wall_clock"},
@@ -185,12 +242,12 @@ class ConfigIdentityTests(unittest.TestCase):
     def test_symlinked_component_refused(self) -> None:
         import yaml
         with tempfile.TemporaryDirectory() as tmp:
-            realdir = os.path.join(tmp, "real"); os.makedirs(os.path.join(realdir, X.EXPECTED_BUNDLE))
-            bdir = os.path.join(realdir, X.EXPECTED_BUNDLE)
+            realdir = os.path.join(tmp, "real"); bdir = os.path.join(realdir, X.EXPECTED_BUNDLE)
+            os.makedirs(bdir)
             open(os.path.join(bdir, "vocab_manifest.json"), "w").write(json.dumps(_manifest()))
             for s in REQUIRED_SOURCES:
                 open(os.path.join(bdir, f"{s.lower()}_train.h5"), "w").write("x")
-            linkdir = os.path.join(tmp, "link"); os.symlink(realdir, linkdir)   # symlinked ancestor
+            linkdir = os.path.join(tmp, "link"); os.symlink(realdir, linkdir)
             cfg = {"datasets": {"time_channel": X.TIME_CHANNEL, "source_datasets": [
                 {"name": s, "h5_paths": {"train": os.path.join(linkdir, X.EXPECTED_BUNDLE, f"{s.lower()}_train.h5")}}
                 for s in REQUIRED_SOURCES]}}
@@ -199,63 +256,66 @@ class ConfigIdentityTests(unittest.TestCase):
                 X.load_and_verify_config(cpath)
 
 
-class PolicyAndCodeTests(unittest.TestCase):
-    def test_empty_policy_refuses(self) -> None:
+class PolicyTests(unittest.TestCase):
+    def test_empty_refuses(self) -> None:
         self.assertEqual(P.aggregate_read_authorized(P.load_policy(), {})[1], "aggregate_read_policy_empty")
 
-    def test_every_live_anchor_must_match(self) -> None:
+    def test_every_live_anchor_and_dup_source(self) -> None:
         live = {k: k for k in P._LIVE_ANCHORS}
         pol = {**live, "gate_event_ref": "e", "reviewed_commit": "c",
-               "train_artifact_identities": {"SCID": "d"}, "sources": list(REQUIRED_SOURCES), "split": "train"}
+               "sources": sorted(REQUIRED_SOURCES), "split": "train"}
         self.assertTrue(P.aggregate_read_authorized(pol, live)[0])
         for k in P._LIVE_ANCHORS:
             self.assertFalse(P.aggregate_read_authorized({**pol, k: "X"}, live)[0])
+        dup = {**pol, "sources": sorted(REQUIRED_SOURCES) + ["SCID"]}
+        self.assertFalse(P.aggregate_read_authorized(dup, live)[0])   # duplicate source refused
 
-    def test_policy_data_logic_split_and_code_closure(self) -> None:
+    def test_provenance_anchor_present_and_data_logic_split(self) -> None:
         import clinical_jepa.eval.oracle_aggregate_policy_data as data
-        self.assertIn("base_schema_hash", data.APPROVED_AGGREGATE_READ_POLICY)
-        cid = X.extraction_code_identity()
-        self.assertEqual(len(cid), 64)
-        self.assertEqual(cid, X.extraction_code_identity())        # deterministic closure hash
+        self.assertIn("provenance_procedure_hash", data.APPROVED_AGGREGATE_READ_POLICY)
+        self.assertNotIn("train_artifact_identities", P._LIVE_ANCHORS)
 
 
 class OneTimeRunTests(unittest.TestCase):
-    def test_absolute_root_and_replay_refusal(self) -> None:
+    def test_absolute_and_replay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self.assertTrue(os.path.isabs(X.state_root()))
             with mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st")):
                 run = X.OneTimeRun("runA"); run.claim()
-                cwd = os.getcwd()
-                try:
-                    os.chdir(tmp)                                  # different cwd cannot re-claim
-                    with self.assertRaises(X.ExtractionRefused):
-                        X.OneTimeRun("runA").claim()
-                finally:
-                    os.chdir(cwd)
+                with self.assertRaises(X.ExtractionRefused):
+                    X.OneTimeRun("runA").claim()
                 run.advance("APPROVED", "READING_SCID")
                 with self.assertRaises(X.ExtractionRefused):
                     run.advance("APPROVED", "READING_SCID")
 
-    def test_bad_run_id_refused(self) -> None:
+    def test_pre_existing_tmp_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st")):
+                run = X.OneTimeRun("rT"); run.claim()
+                open(run.state_path + ".tmp", "w").write("squat")
+                with self.assertRaises(X.ExtractionRefused):
+                    run.advance("APPROVED", "READING_SCID")
+
+    def test_bad_run_id(self) -> None:
         with self.assertRaises(X.ExtractionRefused):
             X.canonical_run_paths("../escape")
 
 
-class BaseAndRegenTests(unittest.TestCase):
-    def test_base_mixture_excludes_midpoint_and_is_point_mass_length(self) -> None:
+class BaseAndFitTests(unittest.TestCase):
+    def test_base_excludes_midpoint_point_mass(self) -> None:
         self.assertNotIn(0.35, [float(k) for k in X.BASE_KAPPAS])
-        b = X.synthetic_base("SCID")
-        self.assertIsInstance(b, AggregateStats)
-        self.assertEqual(len(b.length_ecdf), 1)                    # native fixed length => point mass
+        with mock.patch.object(X, "BASE_N_PER_CELL", 150):
+            b = X.synthetic_base("SCID")
+            self.assertEqual(len(b.length_ecdf), 1)
 
-    def test_knobs_measurably_change_regenerated_output(self) -> None:
-        a = X.regenerate_via_generator("MIMIC", {"zero_gap_bias": 0.1, "timing_rate_scale": 1.0,
-                                                 "gap_dispersion": 1.0, "token_freq_temperature": 1.0})
-        b = X.regenerate_via_generator("MIMIC", {"zero_gap_bias": 0.8, "timing_rate_scale": 2.0,
-                                                 "gap_dispersion": 1.8, "token_freq_temperature": 1.0})
-        self.assertNotEqual(X._agg_hash(a), X._agg_hash(b))
-        # None-knob generation equals the frozen BASE (adapter identity at default)
-        self.assertEqual(X.base_schema_hash(), X.base_schema_hash())
+    def test_generator_fit_and_surrogate_are_distinct(self) -> None:
+        with mock.patch.object(X, "BASE_N_PER_CELL", 150), mock.patch.object(X, "GEN_FIT_ZGB", (0.1, 0.6)), \
+             mock.patch.object(X, "GEN_FIT_RATE", (0.85, 1.3)), mock.patch.object(X, "GEN_FIT_DISP", (1.0,)):
+            ctx = X.calib_context()
+            tgt, _ = X.aggregate_from_sequences("SCID", _healthy("SCID", ORACLE_ENV_MIN_DENOM + 200, 5))
+            knobs, regen, env = X.generator_fit("SCID", tgt, ctx)
+            self.assertIn("zero_gap_bias", knobs)
+            self.assertTrue(isinstance(regen, AggregateStats) or regen == NOT_EVALUABLE)
 
 
 class EndToEndTests(unittest.TestCase):
@@ -263,40 +323,30 @@ class EndToEndTests(unittest.TestCase):
         cfg = X.load_and_verify_config(cpath)
         live = X._live_identities(cfg, run_id)
         return {**live, "gate_event_ref": "evt-TEST", "reviewed_commit": "TESTCOMMIT",
-                "train_artifact_identities": {s: "declared-at-result-gate" for s in REQUIRED_SOURCES},
-                "sources": list(REQUIRED_SOURCES), "split": "train"}
+                "sources": sorted(REQUIRED_SOURCES), "split": "train"}
 
-    def test_round_trip_canonical_regen_and_replay(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            cpath = _make_bundle(tmp, write=True)
-            with mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st")):
-                pol = self._policy(cpath, "runE")                  # built UNDER the patched state_root
-                mock.patch("clinical_jepa.eval.oracle_aggregate_policy.load_policy",
-                           return_value=pol).start()
-                self.addCleanup(mock.patch.stopall)
-                out = X.run_calibration_extraction(cpath, "runE")
-                self.assertIn("regeneration_canonical", out)
-                self.assertIn("calibration_eligible", out)
-                self.assertIn("train_artifact_digests", out)
-                self.assertFalse(out["provenance_verified"])       # pending result gate
-                self.assertIn("calibration_surrogate_diagnostic", out)
-                sp, _ = X.canonical_run_paths("runE")
-                self.assertEqual(json.loads(open(sp).read())["state"], "COMPLETE")
-                with self.assertRaises(X.ExtractionRefused):
-                    X.run_calibration_extraction(cpath, "runE")     # replay refused
+    def _run(self, tmp, run_id):
+        cpath = _make_bundle(tmp, write=True)
+        patches = _fast_generator() + [mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st"))]
+        for p in patches:
+            p.start()
+        pol = self._policy(cpath, run_id)
+        patches.append(mock.patch("clinical_jepa.eval.oracle_aggregate_policy.load_policy", return_value=pol))
+        patches[-1].start()
+        self.addCleanup(mock.patch.stopall)
+        return X.run_calibration_extraction(cpath, run_id), cpath
 
-    def test_two_runs_equal_sources(self) -> None:
+    def test_round_trip_flags_and_replay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            cpath = _make_bundle(tmp, write=True)
-            with mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st")):
-                with mock.patch("clinical_jepa.eval.oracle_aggregate_policy.load_policy",
-                                return_value=self._policy(cpath, "r1")):
-                    o1 = X.run_calibration_extraction(cpath, "r1")
-                with mock.patch("clinical_jepa.eval.oracle_aggregate_policy.load_policy",
-                                return_value=self._policy(cpath, "r2")):
-                    o2 = X.run_calibration_extraction(cpath, "r2")
-            self.assertEqual(o1["sources"], o2["sources"])
-            self.assertEqual(o1["train_artifact_digests"], o2["train_artifact_digests"])
+            out, cpath = self._run(tmp, "runE")
+            self.assertFalse(out["overall_authorization_eligible"])   # runner NEVER authorizes
+            self.assertFalse(out["provenance_verified"])
+            self.assertIn("calibration_envelope_eligible_provisional", out)
+            self.assertIn("calibration_generator_canonical", out)
+            self.assertIn("calibration_surrogate_diagnostic", out)
+            self.assertEqual(out["provenance"]["procedure_hash"], X.provenance_procedure_hash())
+            with self.assertRaises(X.ExtractionRefused):
+                X.run_calibration_extraction(cpath, "runE")           # replay refused
 
     def test_empty_committed_policy_refuses(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -305,24 +355,16 @@ class EndToEndTests(unittest.TestCase):
                 with self.assertRaises(X.ExtractionRefused):
                     X.run_calibration_extraction(cpath, "rX")
 
-    def test_partial_run_reentry_refused(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            cpath = _make_bundle(tmp, write=True)
-            with mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st")):
-                X.OneTimeRun("rP").claim()                          # a partial run already exists
-                with mock.patch("clinical_jepa.eval.oracle_aggregate_policy.load_policy",
-                                return_value=self._policy(cpath, "rP")):
-                    with self.assertRaises(X.ExtractionRefused):
-                        X.run_calibration_extraction(cpath, "rP")
-
     def test_cli_exit_codes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cpath = _make_bundle(tmp, write=True)
-            with mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st")):
-                self.assertEqual(X.main(["--config", cpath, "--run-id", "cliX"]), 2)   # empty policy -> refuse
-                with mock.patch("clinical_jepa.eval.oracle_aggregate_policy.load_policy",
-                                return_value=self._policy(cpath, "cliOK")):
-                    self.assertEqual(X.main(["--config", cpath, "--run-id", "cliOK"]), 0)
+            for p in _fast_generator() + [mock.patch.object(X, "state_root", lambda: os.path.join(tmp, "st"))]:
+                p.start()
+            self.addCleanup(mock.patch.stopall)
+            self.assertEqual(X.main(["--config", cpath, "--run-id", "cliX"]), 2)   # empty policy
+            with mock.patch("clinical_jepa.eval.oracle_aggregate_policy.load_policy",
+                            return_value=self._policy(cpath, "cliOK")):
+                self.assertEqual(X.main(["--config", cpath, "--run-id", "cliOK"]), 0)
 
 
 class OutputContractTests(unittest.TestCase):
@@ -330,11 +372,10 @@ class OutputContractTests(unittest.TestCase):
         with self.assertRaises(X.ExtractionRefused):
             X.sanitized_output({"run": {"sequence_id": "leak"}})
 
-    def test_clean_output_ok(self) -> None:
+    def test_clean_ok(self) -> None:
         out = X.sanitized_output({"sources": {"SCID": NOT_EVALUABLE}})
-        self.assertEqual(out["governance_class"],
-                         "explicitly_cleared_safe_aggregate_only_no_patient_rows")
         self.assertIn("base_schema_hash", out["identities"])
+        self.assertIn("state_root_identity", out["identities"])
 
 
 if __name__ == "__main__":

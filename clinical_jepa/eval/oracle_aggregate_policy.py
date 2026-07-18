@@ -17,12 +17,12 @@ from clinical_jepa.eval.oracle_aggregate_policy_data import APPROVED_AGGREGATE_R
 _SCALAR_ANCHORS = ("gate_event_ref", "reviewed_commit", "invariant_hash", "ledger_hash",
                    "calibration_schema_hash", "evaluator_identity", "vocab_hash", "vocab_name",
                    "extraction_schema_hash", "base_schema_hash", "code_identity", "state_root_identity",
-                   "config_hash", "split", "run_id")
-# anchors re-derived live and compared exactly (gate_event_ref/reviewed_commit/train_artifact_identities
-# are bound at policy-population review, not derivable here).
+                   "provenance_procedure_hash", "config_hash", "split", "run_id")
+# anchors re-derived live and compared exactly (gate_event_ref/reviewed_commit are bound at policy-
+# population review, not derivable here).
 _LIVE_ANCHORS = ("invariant_hash", "ledger_hash", "calibration_schema_hash", "evaluator_identity",
                  "vocab_hash", "vocab_name", "extraction_schema_hash", "base_schema_hash", "code_identity",
-                 "state_root_identity", "config_hash", "run_id")
+                 "state_root_identity", "provenance_procedure_hash", "config_hash", "run_id")
 
 
 def load_policy() -> dict[str, Any]:
@@ -32,18 +32,18 @@ def load_policy() -> dict[str, Any]:
 
 def policy_is_populated(policy: dict[str, Any] | None = None) -> bool:
     p = policy if policy is not None else APPROVED_AGGREGATE_READ_POLICY
-    return (all(isinstance(p.get(k), str) and p[k] for k in _SCALAR_ANCHORS)
-            and bool(p.get("sources")) and bool(p.get("train_artifact_identities")))
+    return all(isinstance(p.get(k), str) and p[k] for k in _SCALAR_ANCHORS) and bool(p.get("sources"))
 
 
 def aggregate_read_authorized(policy: dict[str, Any], live: dict[str, Any]) -> tuple[bool, str]:
-    """Fail-closed. ``live`` carries the currently-derived identities. The policy must be populated AND
-    every live anchor must equal its live value."""
+    """Fail-closed. ``live`` carries the currently-derived identities. The policy must be populated AND the
+    source LIST must equal the required list exactly (duplicates refused) AND every live anchor must equal
+    its live value."""
     if not policy_is_populated(policy):
         return False, "aggregate_read_policy_empty"
     from clinical_jepa.eval.oracle_calibration import REQUIRED_SOURCES
-    if set(policy.get("sources", [])) != set(REQUIRED_SOURCES):
-        return False, "policy_sources_not_required_set"
+    if list(policy.get("sources", [])) != sorted(REQUIRED_SOURCES):     # exact ordered list (Pi #6)
+        return False, "policy_sources_not_required_list"
     if policy.get("split") != "train":
         return False, "policy_split_not_train"
     for k in _LIVE_ANCHORS:

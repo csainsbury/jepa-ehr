@@ -26,8 +26,8 @@ APPROVED_AGGREGATE_READ_POLICY: dict[str, Any] = {
     "code_identity": None,           # complete executable logic-closure hash
     "state_root_identity": None,     # absolute canonical state-root identity
     "config_hash": None,             # approved LOCAL config (real paths) content hash
-    "train_artifact_identities": None,   # per-source immutable TRAIN artifact identity (or provenance rule)
-    "sources": [],                   # must equal REQUIRED_SOURCES exactly
+    "provenance_procedure_hash": None,   # frozen extracted-content provenance procedure (pre-read UNVERIFIED)
+    "sources": [],                   # must equal REQUIRED_SOURCES exactly (as an ordered list)
     "split": None,                   # must be "train"
     "run_id": None,                  # single approved one-time run id
 }

@@ -75,6 +75,7 @@ class LiteralCell:
     observable_allowlist: tuple[str, ...] = ()
     mechanism_params_hash: str = ""
     support_status: str = "SUPPORTED"
+    calibration_adapter_hash: str | None = None   # None => uncalibrated default cell (Pi REVISE#4 #3)
 
     def context_data(self) -> dict[str, Any]:
         """Assemble the ContextView payload from ONLY this family's allowlisted observable channels
@@ -101,25 +102,10 @@ class LiteralCell:
 # ----------------------------------------------------------------------------------------------
 # timing: build Δt=0 multiplicity clusters with strictly-positive inter-cluster gaps.
 # ----------------------------------------------------------------------------------------------
-def _marked_cluster_timing(rng: np.random.Generator, n: int, rate_scale: np.ndarray,
-                           *, calib_knobs: dict | None = None) -> tuple:
-    """Return (timestamps, cluster_ids, multiplicity) for n sequences of L items.
-    Adjacent items share a timestamp (Δt=0 multiplicity) with prob ZERO_GAP_RATE; otherwise a
-    strictly-positive gap (Exp) scaled per sequence by rate_scale (>0). ``calib_knobs`` (default None →
-    frozen behaviour) applies the calibration timing layer: ``zero_gap_bias`` sets the Δt=0 rate,
-    ``timing_rate_scale``/``gap_dispersion`` transform positive gaps around the population median — the
-    SAME forward model as ``oracle_calibration._transform_gap_ecdf`` so the generator adapter and the
-    analytic surrogate agree (Pi REVISE#3 #6)."""
+def _clusters_from_gaps(same: np.ndarray, gaps: np.ndarray) -> tuple:
+    """Assemble (timestamps, cluster_ids, multiplicity) from a per-adjacency same-cluster mask + gaps."""
+    n = same.shape[0]
     ts = np.zeros((n, L_ITEMS)); cid = np.zeros((n, L_ITEMS), dtype=int)
-    zero_rate = ZERO_GAP_RATE if calib_knobs is None else float(np.clip(
-        calib_knobs.get("zero_gap_bias", ZERO_GAP_RATE), 0.0, 0.9))
-    same = rng.random((n, L_ITEMS - 1)) < zero_rate             # Δt=0 (same cluster)
-    gaps = rng.exponential(1.0, size=(n, L_ITEMS - 1)) * rate_scale[:, None] + 1e-3  # strictly positive
-    if calib_knobs is not None:
-        rate = float(np.clip(calib_knobs.get("timing_rate_scale", 1.0), 0.5, 2.0))
-        disp = float(np.clip(calib_knobs.get("gap_dispersion", 1.0), 0.5, 2.0))
-        med = float(np.median(gaps))
-        gaps = np.maximum((med + (gaps - med) * disp) / max(1e-6, rate), 1e-6)
     for j in range(1, L_ITEMS):
         step = np.where(same[:, j - 1], 0.0, gaps[:, j - 1])
         ts[:, j] = ts[:, j - 1] + step
@@ -129,6 +115,48 @@ def _marked_cluster_timing(rng: np.random.Generator, n: int, rate_scale: np.ndar
         counts = np.bincount(cid[i])
         mult[i] = counts[cid[i]]
     return ts, cid, mult
+
+
+def _marked_cluster_timing(rng: np.random.Generator, n: int, rate_scale: np.ndarray) -> tuple:
+    """Return (timestamps, cluster_ids, multiplicity) for n sequences of L items. Adjacent items share a
+    timestamp (Δt=0 multiplicity) with prob ZERO_GAP_RATE; otherwise a strictly-positive gap (Exp) scaled
+    per sequence by rate_scale (>0). FROZEN mechanism — the calibration timing layer is applied SEPARATELY
+    and post-hoc (see ``_apply_calibration_layer``), never interleaved with this RNG stream."""
+    same = rng.random((n, L_ITEMS - 1)) < ZERO_GAP_RATE         # Δt=0 (same cluster)
+    gaps = rng.exponential(1.0, size=(n, L_ITEMS - 1)) * rate_scale[:, None] + 1e-3  # strictly positive
+    return _clusters_from_gaps(same, gaps)
+
+
+def calibration_adapter_hash(knobs: dict, context: dict) -> str:
+    """Identity of the frozen calibration adapter transform + its bound pooled context (Pi REVISE#4 #3/#4)."""
+    return canonical_hash({"adapter": "calibration_layer_v1",
+                           "knobs": {k: round(float(knobs.get(k, d)), 6) for k, d in
+                                     (("token_freq_temperature", 1.0), ("zero_gap_bias", 0.0),
+                                      ("timing_rate_scale", 1.0), ("gap_dispersion", 1.0))},
+                           "pooled_class_prior": [round(float(x), 9) for x in context["pooled_class_prior"]],
+                           "global_gap_median": round(float(context["global_gap_median"]), 9)})
+
+
+def _apply_calibration_layer(future_multiset: np.ndarray, ts: np.ndarray, knobs: dict, context: dict,
+                             arng: np.random.Generator) -> tuple:
+    """POST-HOC calibration layer applied to an ALREADY-GENERATED default cell, with a DEDICATED
+    domain-separated RNG ``arng`` — it touches ONLY class labels + timestamps and never the shared mechanism
+    stream, so nuisance/order/context/item state are unchanged (Pi REVISE#4 #3). Uses POOLED context (class
+    prior + global positive-gap median) so it is coherent, not a per-cell surrogate mismatch (#4)."""
+    temp = float(np.clip(knobs.get("token_freq_temperature", 1.0), 0.5, 2.0))
+    zgb = float(np.clip(knobs.get("zero_gap_bias", ZERO_GAP_RATE), 0.0, 0.9))
+    rate = float(np.clip(knobs.get("timing_rate_scale", 1.0), 0.5, 2.0))
+    disp = float(np.clip(knobs.get("gap_dispersion", 1.0), 0.5, 2.0))
+    prior = np.asarray(context["pooled_class_prior"], float)
+    p = prior ** (1.0 / temp); p = p / p.sum() if p.sum() > 0 else prior
+    fm2 = arng.choice(N_CLASSES, size=future_multiset.shape, p=p)      # tempered POOLED-prior class relabel
+    med = float(context["global_gap_median"])
+    n = ts.shape[0]
+    same = arng.random((n, L_ITEMS - 1)) < zgb
+    orig_gaps = np.diff(ts, axis=1)                                   # positive where a cluster boundary
+    gaps2 = np.maximum((med + (orig_gaps - med) * disp) / max(1e-6, rate), 1e-6)
+    ts2, cid2, mult2 = _clusters_from_gaps(same, gaps2)
+    return fm2, ts2, cid2, mult2
 
 
 def _nuisance(rng: np.random.Generator, s_true: np.ndarray, nuisance_cell: str) -> np.ndarray:
@@ -141,18 +169,25 @@ def _nuisance(rng: np.random.Generator, s_true: np.ndarray, nuisance_cell: str) 
 
 def _finish(family_id, kappa, nuisance_cell, *, is_null, s_true, hidden, ctx, item_feats,
             covar, rng, allowlist, params, fam_channels, support_status,
-            calib_knobs: dict | None = None) -> LiteralCell:
+            calib_knobs: dict | None = None, calib_context: dict | None = None,
+            cell_seed: int | None = None) -> LiteralCell:
+    # --- FROZEN default cell (RNG stream identical to the None path; never perturbed by calibration) ---
     future_multiset = rng.integers(0, N_CLASSES, size=(s_true.shape[0], L_ITEMS))
-    if calib_knobs is not None:      # calibration class layer: temper the class draw (matches _forward)
-        temp = float(np.clip(calib_knobs.get("token_freq_temperature", 1.0), 0.5, 2.0))
-        base_p = (np.bincount(future_multiset.ravel(), minlength=N_CLASSES)[:N_CLASSES]
-                  / max(1, future_multiset.size)).astype(float)
-        p = base_p ** (1.0 / temp); p = p / p.sum() if p.sum() > 0 else base_p
-        future_multiset = rng.choice(N_CLASSES, size=future_multiset.shape, p=p)
     future_events = np.argsort(np.argsort(s_true, axis=1), axis=1)      # realized-order rank per item
     rate_scale = np.exp(0.3 * (ctx[:, 0] - ctx[:, 0].mean())) + 0.2     # per-seq positive timing scale
-    ts, cid, mult = _marked_cluster_timing(rng, s_true.shape[0], rate_scale, calib_knobs=calib_knobs)
-    u = _nuisance(rng, s_true, nuisance_cell)
+    ts, cid, mult = _marked_cluster_timing(rng, s_true.shape[0], rate_scale)
+    u = _nuisance(rng, s_true, nuisance_cell)                           # nuisance from the DEFAULT stream
+    # --- POST-HOC calibration layer (Pi REVISE#4 #3/#4): dedicated domain-separated RNG; touches only
+    #     class labels + timestamps; order/nuisance/context/item/covariates stay the default cell's. ---
+    adapter_hash = None
+    if calib_knobs is not None:
+        if calib_context is None:
+            raise ValueError("calib_knobs requires calib_context (pooled class prior + global gap median)")
+        adapter_hash = calibration_adapter_hash(calib_knobs, calib_context)
+        key = f"calib_adapter|{cell_seed}|{adapter_hash}".encode()
+        arng = np.random.default_rng(int.from_bytes(hashlib.sha256(key).digest()[:8], "big"))
+        future_multiset, ts, cid, mult = _apply_calibration_layer(
+            future_multiset, ts, calib_knobs, calib_context, arng)
     phash = canonical_hash({"family": family_id, "params": params, "kappa": float(kappa),
                             "nuisance": nuisance_cell})
     return LiteralCell(
@@ -163,6 +198,7 @@ def _finish(family_id, kappa, nuisance_cell, *, is_null, s_true, hidden, ctx, it
         future_timestamps=ts, cluster_ids=cid, multiplicity=mult,
         family_channels=fam_channels, observable_allowlist=allowlist,
         mechanism_params_hash=phash, support_status=support_status,
+        calibration_adapter_hash=adapter_hash,
     )
 
 
@@ -259,12 +295,15 @@ _MECHANISMS = {
 
 def generate_literal_cell(family_id: str, kappa: float, nuisance_cell: str, n_sequences: int,
                           *, seed: int, null_weight: float | None = None,
-                          support_starved: bool = False, calib_knobs: dict | None = None) -> LiteralCell:
+                          support_starved: bool = False, calib_knobs: dict | None = None,
+                          calib_context: dict | None = None) -> LiteralCell:
     """Generate one literal (family, kappa, nuisance-cell) cell. ``support_starved`` emits fewer than
     ORDER_SUPPORT_FLOOR sequences and tags SUPPORT_STARVED so downstream scoring returns NOT_EVALUABLE.
-    ``calib_knobs`` (default None → frozen mechanism, byte-identical) applies the FROZEN calibration timing/
-    class adapter at generation time — the single route by which fitted knobs alter generated cells (Pi
-    REVISE#3 #6). It does NOT touch the order mechanism, so the mechanism/invariant identity is unchanged."""
+    ``calib_knobs`` (default None → frozen mechanism, byte-identical) applies the FROZEN post-hoc
+    calibration adapter — the single route by which fitted knobs alter generated cells. The default cell is
+    generated first (RNG stream untouched) and the adapter runs with a DEDICATED domain-separated RNG,
+    touching ONLY class labels + timestamps; it needs ``calib_context`` (pooled class prior + global gap
+    median). The order mechanism / nuisance / invariant identity are unchanged (Pi REVISE#4 #3/#4)."""
     if family_id not in _MECHANISMS:
         raise KeyError(f"no literal mechanism for {family_id!r}")
     if nuisance_cell not in ("orthogonal", "correlated_leak"):
@@ -280,4 +319,5 @@ def generate_literal_cell(family_id: str, kappa: float, nuisance_cell: str, n_se
     status = "SUPPORT_STARVED" if (support_starved or n < ORDER_SUPPORT_FLOOR) else "SUPPORTED"
     return _finish(family_id, kappa, nuisance_cell, is_null=is_null, s_true=s, hidden=hidden,
                    ctx=ctx, item_feats=item, covar=covar, rng=rng, allowlist=allowlist,
-                   params=params, fam_channels=fam_channels, support_status=status, calib_knobs=calib_knobs)
+                   params=params, fam_channels=fam_channels, support_status=status,
+                   calib_knobs=calib_knobs, calib_context=calib_context, cell_seed=seed)
