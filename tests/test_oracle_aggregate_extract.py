@@ -264,11 +264,24 @@ class PolicyTests(unittest.TestCase):
         empty = {k: ([] if isinstance(v, list) else None) for k, v in P.load_policy().items()}
         self.assertEqual(P.aggregate_read_authorized(empty, {})[1], "aggregate_read_policy_empty")
 
-    def test_committed_policy_is_populated_and_mismatch_refuses(self) -> None:
-        # separately assert the COMMITTED policy state: populated, and a non-matching live derivation refuses
-        # on a specific identity mismatch — NOT on emptiness.
-        self.assertTrue(P.policy_is_populated(P.load_policy()))
-        ok, reason = P.aggregate_read_authorized(P.load_policy(), {k: "no-match" for k in P._LIVE_ANCHORS})
+    def test_committed_policy_is_retired_and_refuses(self) -> None:
+        # after the spent one-time run, the COMMITTED policy is RETIRED (empty / fail-closed) so it refuses.
+        self.assertFalse(P.policy_is_populated(P.load_policy()))
+        self.assertEqual(P.aggregate_read_authorized(P.load_policy(), {})[1], "aggregate_read_policy_empty")
+        # the spent run is durably recorded (sanitized) so its id is known-consumed
+        import clinical_jepa.eval.oracle_aggregate_policy_data as data
+        spent_ids = {r["run_id"] for r in data.SPENT_RUNS}
+        self.assertIn("aggcalib-microgate-run-1", spent_ids)
+
+    def test_historical_populated_policy_fixture_authorizes(self) -> None:
+        # historical validation: a fully-populated policy fixture matching a live derivation authorizes, and a
+        # single wrong anchor refuses on a specific identity mismatch (not emptiness). Uses an explicit
+        # fixture — NOT the committed (now retired) policy.
+        live = {k: k for k in P._LIVE_ANCHORS}
+        pol = {**live, "gate_event_ref": "e", "reviewed_commit": "c",
+               "sources": list(REQUIRED_SOURCES), "split": "train"}
+        self.assertTrue(P.aggregate_read_authorized(pol, live)[0])
+        ok, reason = P.aggregate_read_authorized({**pol, "run_id": "X"}, live)
         self.assertFalse(ok)
         self.assertNotEqual(reason, "aggregate_read_policy_empty")
         self.assertTrue(reason.startswith("policy_"))
