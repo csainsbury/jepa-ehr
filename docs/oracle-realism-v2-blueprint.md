@@ -6,9 +6,26 @@ Blueprint for the redesigned aggregate-realism layer after v1 falsified on real 
 pre-registered confirmatory gate. Direction: **Option D — the frozen order mechanism wrapped in a
 source-conditioned, variable-length, compound-burst copula realism envelope.**
 
-Incorporates Cog scout `20260719T141540Z-jepa-e5b45c1e` (verdict PROMOTE) and a Fable pre-implementation
-review (verdict REVISE-before-implementation). Both are folded below; the review's seven required revisions
-are all reflected. **Implementation has NOT begun.**
+Incorporates Cog scout `20260719T141540Z-jepa-e5b45c1e` (verdict PROMOTE), a Fable pre-implementation
+review (verdict REVISE-before-implementation), and a **Pi M1 design pre-review** (agent-room thread
+`thr-20260719T155635Z-fff46633`, artifact `jepa-pi-oracle-realism-v2-m1-prereview.md`; verdict **REVISE
+before M3a — no M2 fitting**). All three are folded below; Fable's seven revisions and Pi's four answers +
+nine M3a preconditions are all reflected. **Implementation has NOT begun.**
+
+### Pi M1 pre-review — folded conditions ledger (traceability)
+Pi accepted the boundary (fixed-L certification + emission-only variable length), the full default byte-pin
+as the primary tripwire, and the additive scaffold (no v1 identity moved; independent battery 12 passed;
+`realism_v2_schema_hash = ffb4f3d8a8b50bd3…` confirmed). Required corrections, folded into the milestones:
+- **P-A** (M0): drop the false "context-only" rationale; add a fail-hard certification rejection guard;
+  remove the restricted-literal `eo1_r_bayes` requirement; replace the `_restrict` proof fixture with a
+  production restriction primitive. See M0.
+- **P-B** (cross-stats): S6 mandatory when length-dependent class mix is modelled; add **S7**
+  (cluster-size-conditioned class diversity) or drop+exclude the coupling; count DoF after constraints;
+  Jacobian rank + grid-recovery + collision search. See ★ Identifiability and M3a.
+- **P-C** (pins): add a v1 **calibrated-path** pin; branch v2 behind a distinct versioned adapter (never
+  mutate v1 in place); pin the scaffold hash renamed as a *development* identity. See M1.
+- **P-D** (M3a): **separate Option-A and Option-D identities** (common marginal schema + distinct
+  `A_independent`/`D_copula` hashes; M2 binds A first). See M2/M3a and the nine preconditions.
 
 ## Novelty frame (scout)
 
@@ -27,6 +44,15 @@ line are standing prior-art guardrails; differentiate on the frozen order/nuisan
   literal).
 The variable-length restriction and every seam edit happen on the LITERAL stack.
 
+**Fixed-L certification boundary — corrected rationale (Pi P-A).** Certification stays fixed-L=8 and variable
+length is emission-only. The *reason* is a governance decision, NOT the earlier (wrong) claim that
+`GoodContextRecipe.predict_latent` is context-only: `_design` (oracle_recipe.py:99–111) DOES read
+`item_features` and forms context×item interaction blocks; the recipe is fixed-L only because of the hard-coded
+`self._L` reshape (line 147). Feeding a restricted/variable-L cell to `_design` builds `X` at subset-L then
+reshapes to L=8 — i.e. it *breaks*, which is an incidental reshape failure, not a boundary. Therefore the
+fixed-L boundary must be enforced by an explicit fail-hard rejection guard (M0), never left to rely on the
+reshape happening to fail.
+
 ## Non-negotiable contracts
 
 1. Preserve the frozen ORDER mechanism and NUISANCE-control boundaries.
@@ -44,9 +70,16 @@ and what M3 recovery tests; **(ii) identification of the true joint event proces
 impossible from any finite predeclared summary (a sequence-level random-effects mixture reproduces dependence
 summaries without genuine coupling; tail dependence / position-nonstationarity beyond the declared summaries
 are invisible). The admissible claim after any pass is *"matches the declared marginal + cross-statistic
-envelope,"* NEVER "matches the joint process." The predeclared cross-statistics must be jointly sufficient to
-recover the declared copula parameters, demonstrated by M3 grid-recovery at predeclared tolerance. Rule:
-#dependence-parameters ≤ #independent predeclared cross-statistic DoF.
+envelope,"* NEVER "matches the joint process."
+
+**Sufficiency is more than a parameter count (Pi P-B).** The rule `#dependence-parameters ≤ #independent
+cross-statistic DoF` is NECESSARY but NOT sufficient. Before declaring within-family identifiability, freeze an
+exact **parameter→statistic attribution table** and establish BOTH (a) local rank — a full-column-rank
+sensitivity/Jacobian of the cross-statistics w.r.t. the dependence parameters at every registered profile —
+and (b) global recovery / no-collision on a joint grid with the marginal nuisance parameters varied
+(grid-recovery + collision search; a single known profile is insufficient). Count independent vector
+*components* after constraints/covariance, not the six/seven statistic labels as that many DoF. These recovery
+tests are what M3 exercises; they are declared here and frozen in M3a.
 
 ### Predeclared cross-statistics set (per source; frozen bins/thresholds/denominator floors)
 
@@ -57,14 +90,26 @@ recover the declared copula parameters, demonstrated by M3 grid-recovery at pred
 | S3 | mean positive gap by preceding-cluster-size class (or τ) | burst-timing coupling (MIMIC 0.89/0.95) |
 | S4 | P(same class \| same cluster) − P(same class \| adjacent clusters) | mark–burst tie (same-class panels) |
 | S5 | E[occupancy \| L] on the same L-bins | composition–length coupling (occ is L-censored) |
-| S6 (opt) | class TV between length terciles | length-dependent class mix |
+| S6 | class TV between length terciles | length-dependent class mix |
+| S7 | within-cluster class diversity \| cluster-size bin: E[n_distinct_classes / min(C,5) \| size-bin] (or mixed-class-cluster prob vector) | how class diversity is allocated across burst sizes |
 
-**Computability (trust the code):** NONE of S1–S6 are in the committed contract — `_AGG_FIELDS` /
+**S6 is now MANDATORY, not optional (Pi P-B):** it cannot be optional while a length-dependent class-composition
+parameter is claimed identifiable.
+
+**S7 added (Pi P-B):** S4's single same-class contrast plus the sequence-level S5 can BOTH be matched while
+class diversity is mis-allocated between large and small bursts — precisely the high-occupancy/burst ambiguity
+Option D exists to resolve. Therefore either (a) include S7, OR (b) **remove the cluster-size→mark-diversity
+coupling from D and explicitly exclude it from the claim** — the coupling must not be present-but-untested.
+Default: include S7.
+
+**Computability (trust the code):** NONE of S1–S7 are in the committed contract — `_AGG_FIELDS` /
 `AggregateStats` carry marginals only (only `n_events/n_clusters` = mean cluster size is derivable). For M3
 (synthetic) they are new pure functions in the frozen verification spec. For M4 (any real read) each is a NEW
 governed aggregate field ⇒ new extraction schema hash / question / run id / clearance, so M4 pre-registration
 must include the EXTENDED EXTRACTION CODE, not just thresholds — and a small-cell coarsening / min-cell-count
 policy (joint histograms have a higher re-identification surface than marginals) disclosed in the clearance.
+Also freeze, per source: bin edges, denominator floors, small-cell coarsening, sequence-clustered uncertainty,
+multi-seed aggregation, multiplicity handling, and the source conjunction rule (Pi P-B).
 
 ## Route decisions (scout)
 
@@ -79,40 +124,98 @@ policy (joint histograms have a higher re-identification surface than marginals)
 
 ## Milestones (each a gate; order corrected per Fable #1c)
 
-### M0 — order-restriction invariance: DONE for META, OPEN for LITERAL (Fable #1)
+### M0 — order-restriction invariance: DONE for META; LITERAL property proven, REVISE-before-complete (Pi P-A)
 Proven pairwise-local on the META stack (exact-0.0 full-vs-restricted `r0`/`pi_star`, sub-ranking =
-restriction, `invariant_hash` unchanged; `tests/test_oracle_order_restriction.py`). NOT yet established on the
-LITERAL stack where v2 edits + verdicts live. **M0 is not complete until a LiteralCell mirror test passes**
-(restricted `s_true` sub-ranking = restriction; restricted `nuisance_u` = exact column slice for BOTH nuisance
-cells; `eo1_r0`/`eo1_r_bayes` on a restricted literal cell = pair-restriction of the full-cell values) AND the
-support-floor half (below) is gated.
+restriction, `invariant_hash` unchanged; `tests/test_oracle_order_restriction.py`). The LITERAL
+order-restriction PROPERTY is also demonstrated (`tests/test_oracle_literal_order_restriction.py`, 5 families ×
+2 nuisance cells), and Pi accepts the boundary. But Pi requires the following corrections before M0-literal is
+marked complete **for the order-restriction property only** (M0b remains open):
 
-### M0b — support-floor / min-length policy (Fable #1b)
+1. **Fix the rationale** — see the corrected fixed-L note above; do not lean on `predict_latent` being
+   context-only (it reads `item_features`).
+2. **Explicit fail-hard certification rejection guard** — a test proving: certification/verdict/reference APIs
+   accept ONLY canonical `L_ITEMS=8` cells; a v2 emission mask / restricted cell CANNOT reach `eo1_recipe`,
+   `eo1_r_bayes`, or governed certification; v2 restriction metadata is emission/evaluator-realism-only; and
+   changing emitted length/items cannot change the fixed-L certification input/artifact. (Rejection, not
+   reshape-failure.)
+3. **Resolve the blueprint contradiction** — M0 previously required restricted-literal `eo1_r_bayes`, but the
+   chosen boundary says variable-L never reaches that fixed-L recipe. That requirement is REMOVED and replaced
+   by the rejection/separation test in (2). If variable-L certification is ever wanted, M0 REOPENS and the
+   recipe/reference contracts must be redesigned and re-gated.
+4. **Replace the `_restrict` proof fixture with a production restriction primitive.** The landed `_restrict`
+   blindly slices every array whose second dim = L, leaving `future_events`/`cluster_ids`/`multiplicity`
+   semantically stale, and its sub-ranking assertion is tautological (`rc.true_order` is the same slice). The
+   production primitive (with test) must: select items from full-L `s_true`/item/nuisance channels; RECOMPUTE
+   `future_events = argsort(argsort(s_true_subset))` (never slice it); verify surviving pair signs against the
+   full order; NEVER re-standardize correlated nuisance; and generate marks/timing/cluster IDs/multiplicity
+   FRESH at realized length rather than slicing them. Exercise representative **contiguous and non-contiguous**
+   subsets over lengths **2–8** (L=1 belongs to M0b).
+
+Only after (1)–(4) is M0-literal complete for the order-restriction property; M0b (support floor) is still an
+open gate below.
+
+### M0b — support-floor / min-length policy (Fable #1b; Pi P-A owns L=1)
 A fitted length law yields short and L=1 sequences (real length KS was 1.0 = broad real lengths). Define and
-gate: per-cell and per-pair support ≥ `ORDER_SUPPORT_FLOOR` or an explicit `SUPPORT_STARVED` tag (never
-silent); L=1 (vacuous order, undefined adjacency) and L<5 (occupancy cap L/5) handling.
+gate: support accounting with per-cell and per-pair support ≥ `ORDER_SUPPORT_FLOOR` or an explicit
+`SUPPORT_STARVED` tag (never silent); **pair-denominator floors**; L=1 (vacuous order, undefined adjacency —
+explicitly a M0b case, kept out of the M0 L=2–8 restriction test) and L<5 (occupancy cap L/5) handling.
 
-### M1 — v2 identity scaffolding (no behaviour change)
-Extend the default-path byte-pin (Fable #1e): full-digest hashes of EVERY array field of fixed-seed default
-`LiteralCell`s, all 5 families × both nuisance cells — committed BEFORE any v2 edit. New module (do not grow
-the literal default path) with `realism_v2_schema_hash()` binding {version, per-source profile (length / class
-+ structural-zero mask / cluster-size / gap / Δt=0 laws), sparse copula descriptor, cross-statistics set with
-bins/thresholds, required sources}. Bump/branch `CALIB_ADAPTER_VERSION` and fold the schema into the adapter
-identity. Which identities MAY move: `extraction_code_identity` (file-byte hash), adapter/`realism_v2` schema
+### M1 — v2 identity scaffolding (no behaviour change) — LANDED, REVISE per Pi P-C
+Landed (commit `c9f3b6e`): the full default-path byte-pin (every array field of fixed-seed default
+`LiteralCell`s, all 5 families × both nuisance cells, full sha256, committed BEFORE any v2 edit); a new module
+`oracle_realism_v2.py` with `realism_v2_schema_hash()` binding {version, per-source profile, sparse copula
+descriptor, cross-statistics set, required sources}. Pi accepts the full default pin as the correct PRIMARY
+tripwire and confirms no v1 identity moved. Required additions before M2 (Pi P-C):
+- **Add a v1 CALIBRATED-path pin** — representative digests of the v1 calibrated path for BOTH source profiles
+  across the literal families/nuisance cells. The default-only pin would not catch an edit that keeps
+  `calib_knobs=None` on the default path but silently changes the historical v1 adapter path / result
+  reproducibility.
+- **Branch v2 behind a distinct versioned adapter/module/API with a NEW v2 adapter schema — never mutate the
+  existing v1 adapter in place.** Keep tests pinning: v1 default path; v1 calibrated path; v2
+  non-order/non-nuisance invariance; unchanged `invariant_hash`, evaluator identity, and every identity M1
+  declares pinned.
+- **Pin the scaffold hash exactly and rename it a DEVELOPMENT scaffold identity** (`realism_v2_scaffold_dev`),
+  explicitly NOT the final frozen M3a verification identity.
+Which identities MAY move: `extraction_code_identity` (file-byte hash), the new v2 adapter/`realism_v2` schema
 hashes. Which are PINNED: `invariant_hash`, `ORACLE_EVALUATOR_IDENTITY`, `base_schema_hash` /
 `generator_fit_schema_hash` / `calibration_schema_hash` (unless an explicit, gated M1 change). Gate: default
-byte-pin + literal M0 test + Pi design pre-review (record the agent-room thread id here).
+byte-pin + v1 calibrated-path pin + literal M0 (per P-A) + Pi design pre-review — DONE, thread
+`thr-20260719T155635Z-fff46633`, verdict REVISE-before-M3a (conditions folded here).
 
 ### M3a — FREEZE the evaluator BEFORE any fitting (Fable #1c — reordered ahead of M2)
-Freeze, and hash into `realism_v2_schema_hash`, the verification spec: the six marginal checks PLUS S1–S6
-cross-statistics (bins/thresholds/floors/refusal), the escalation **attribution map** (component→check, with a
-tie rule), the escalation **decision basis = the known-ground-truth control battery ONLY** (TRAIN-target
-comparisons are labelled exploratory and CANNOT drive design, per Fable #1d and the v1 result note), an
-iteration cap + escalation ledger, and a predeclared **power statement per threshold** (the mis-specified
-control must fail it at stated power; multi-seed with a predeclared aggregation rule).
+Freeze, and hash into the FINAL (non-dev) `realism_v2_schema_hash`, the verification spec. The nine Pi P-D
+preconditions that must ALL hold before this freeze:
+1. **Separate Option-A and Option-D identities.** The dev scaffold currently declares
+   `join=sparse_compound_burst_copula` while the escalation says start at independent Option A. Freeze a common
+   marginal schema PLUS distinct `A_independent` and `D_copula` variant hashes. M2 initially binds A; a
+   controls-driven D escalation creates a NEW identity + ledger entry.
+2. Land the explicit fixed-L certification rejection guard (M0 item 2).
+3. Land the production restriction primitive (M0 item 4) and complete M0b (support accounting,
+   `SUPPORT_STARVED`, L=1, L<5 occupancy cap, pair-denominator floors).
+4. Decide rectangular-full-L+mask vs ragged — ACCEPT full-L canonical internals + explicit emission
+   mask/restricted output; certification receives ONLY unmasked fixed-L cells.
+5. Freeze the six marginal checks PLUS revised **S1–S7** — exact units/bins/thresholds/floors/refusal rules
+   and aggregate-safe coarsening.
+6. Freeze the dependence-parameter table, the identifiability/rank/recovery tests (Jacobian full-column-rank +
+   grid-recovery + collision search), per-check power, seed aggregation, and failure controls.
+7. Freeze the component→check escalation attribution, the tie rule, the iteration cap, and an immutable
+   escalation ledger. TRAIN-target diagnostics remain non-decisional.
+8. Keep the neural marked-TPP and latent-JEPA realism routes parked — no latent/AR replacement of the frozen
+   ordering mechanism.
+9. Keep M4 blocked until a non-TRAIN locked/external target AND its expected provenance identity are specified
+   and separately gated.
+
+Concretely the frozen spec hashes in: the six marginal checks PLUS S1–S7 cross-statistics
+(bins/thresholds/floors/refusal), the escalation **attribution map** (component→check, with a tie rule), the
+escalation **decision basis = the known-ground-truth control battery ONLY** (TRAIN-target comparisons are
+labelled exploratory and CANNOT drive design, per Fable #1d and the v1 result note), an iteration cap +
+immutable escalation ledger, and a predeclared **power statement per threshold** (the mis-specified control
+must fail it at stated power; multi-seed with a predeclared aggregation rule).
 
 ### M2 — Option A baseline (source-conditioned independent marginals)
-Generalize the adapter seam (marks + timestamps only). Seam rules (Fable #4), each a test:
+Binds the **`A_independent` identity** (distinct from `D_copula`, per Pi P-D-1); D is entered ONLY by a
+controls-driven escalation in M3, which mints a new identity + ledger entry. Generalize the (new, v2-branched)
+adapter seam (marks + timestamps only). Seam rules (Fable #4), each a test:
 - length/subset draws come EXCLUSIVELY from the adapter RNG `arng`, NEVER from `rng` (a new `rng` draw shifts
   the nuisance stream for every cell);
 - generate at full L then RESTRICT for order; `future_events` recomputed as `argsort(argsort(s_true[mask]))`,
@@ -137,7 +240,7 @@ identity, re-runs the FULL battery, and is ledgered under the cap.
 ### M4 — pre-registered locked/external confirmatory gate (governed; BLOCKING open item)
 TRAIN targets are development-seen, so freeze + pre-register the v2 generator, thresholds, and EXACT statistics
 (marginals + cross-stats) before any locked/external read; the target must NOT be the seen TRAIN marginals.
-Pre-registration must include the EXTENDED extraction code (S1–S6 are new governed fields) AND the expected
+Pre-registration must include the EXTENDED extraction code (S1–S7 are new governed fields) AND the expected
 content digests / target manifest identity committed BEFORE the read (fixes v1's `UNVERIFIED` provenance,
 Fable #3). Requires new question/schema/run-id/generator identity, spent-run accounting, and its own Pi
 micro-gate + policy-population + result gate. **The locked/external target is UNSPECIFIED — this is a blocking
@@ -153,10 +256,12 @@ target," never a joint-process, latent-mechanism, or causal claim.
 
 - **BLOCKING:** the M4 locked/external confirmatory target (Chris/Pi decision) — required before escalation is
   allowed to be anything but controls-driven.
-- The exact S1–S6 bins/thresholds/power (frozen in M3a).
-- The ragged-vs-mask representation decision (recommend mask + full-L internal arrays, restriction only at
-  emission/scoring — preserves M0 semantics; rectangular (N,L)/(N,L,L) contracts pervade the code).
-- Whether certification cells stay fixed-L=8 (if so, most seam risk collapses — decide + state).
+- The exact S1–S7 bins/thresholds/power (frozen in M3a).
+- **RESOLVED (Pi P-D-4):** ragged-vs-mask → full-L canonical internals + explicit emission mask/restricted
+  output; certification receives ONLY unmasked fixed-L cells.
+- **RESOLVED (Pi P-A):** certification cells stay fixed-L=8; variable length is emission-only, enforced by the
+  fail-hard rejection guard (NOT by the reshape accident).
+- The S7-vs-drop-coupling decision (default: include S7).
 - Literature citations to confirm (Shchur et al. 2020).
 
 ## Stop lines
