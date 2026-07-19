@@ -10,7 +10,15 @@ Incorporates Cog scout `20260719T141540Z-jepa-e5b45c1e` (verdict PROMOTE), a Fab
 review (verdict REVISE-before-implementation), and a **Pi M1 design pre-review** (agent-room thread
 `thr-20260719T155635Z-fff46633`, artifact `jepa-pi-oracle-realism-v2-m1-prereview.md`; verdict **REVISE
 before M3a — no M2 fitting**). All three are folded below; Fable's seven revisions and Pi's four answers +
-nine M3a preconditions are all reflected. **Implementation has NOT begun.**
+nine M3a preconditions are all reflected. **v2 generator behaviour / fitting has NOT begun** (proof tests +
+identity scaffolding have landed; no sampling law, parameter fit, or target comparison exists).
+
+**Agreed work order (Pi assent-with-reorder, thread `thr-20260719T155635Z-fff46633`):** (1) pins first — v1
+calibrated-path golden digests + exact dev-scaffold hash + assert frozen v1 identities; (2) M0 as an
+order-core boundary only (fixed-L rejection guard + additive `RestrictedOrderCore` primitive); (3) identity
+split (common marginal schema + distinct `A_independent`/`D_copula`, v2 adapter interface/schema STUB only);
+(4) M0b; (5) full M3a freeze; (6) only then implement + fit M2 Option A; (7) escalate to D only under frozen
+M3 rules + a new identity.
 
 ### Pi M1 pre-review — folded conditions ledger (traceability)
 Pi accepted the boundary (fixed-L certification + emission-only variable length), the full default byte-pin
@@ -145,11 +153,14 @@ marked complete **for the order-restriction property only** (M0b remains open):
 4. **Replace the `_restrict` proof fixture with a production restriction primitive.** The landed `_restrict`
    blindly slices every array whose second dim = L, leaving `future_events`/`cluster_ids`/`multiplicity`
    semantically stale, and its sub-ranking assertion is tautological (`rc.true_order` is the same slice). The
-   production primitive (with test) must: select items from full-L `s_true`/item/nuisance channels; RECOMPUTE
+   production primitive (with test) — an additive `RestrictedOrderCore`/mask object, **NOT a partially sliced
+   `LiteralCell`** — must: select items from full-L `s_true`/item/nuisance channels; RECOMPUTE
    `future_events = argsort(argsort(s_true_subset))` (never slice it); verify surviving pair signs against the
-   full order; NEVER re-standardize correlated nuisance; and generate marks/timing/cluster IDs/multiplicity
-   FRESH at realized length rather than slicing them. Exercise representative **contiguous and non-contiguous**
-   subsets over lengths **2–8** (L=1 belongs to M0b).
+   full order; and NEVER re-standardize correlated nuisance. **It must NOT slice OR fabricate emission fields**
+   — `future_timestamps`, `cluster_ids`, `multiplicity`, and marks are absent/unmaterialized at this stage
+   (generating them fresh at realized length is M2 adapter behaviour under the frozen verifier, per Pi; doing it
+   here would be premature generator behaviour before M3a). Exercise representative **contiguous and
+   non-contiguous** subsets over lengths **2–8** (L=1 belongs to M0b).
 
 Only after (1)–(4) is M0-literal complete for the order-restriction property; M0b (support floor) is still an
 open gate below.
@@ -178,9 +189,21 @@ tripwire and confirms no v1 identity moved. Required additions before M2 (Pi P-C
   explicitly NOT the final frozen M3a verification identity.
 Which identities MAY move: `extraction_code_identity` (file-byte hash), the new v2 adapter/`realism_v2` schema
 hashes. Which are PINNED: `invariant_hash`, `ORACLE_EVALUATOR_IDENTITY`, `base_schema_hash` /
-`generator_fit_schema_hash` / `calibration_schema_hash` (unless an explicit, gated M1 change). Gate: default
-byte-pin + v1 calibrated-path pin + literal M0 (per P-A) + Pi design pre-review — DONE, thread
-`thr-20260719T155635Z-fff46633`, verdict REVISE-before-M3a (conditions folded here).
+`generator_fit_schema_hash` / `calibration_schema_hash` (unless an explicit, gated M1 change).
+
+**Gate status (Pi assent):**
+- Pi design pre-review: **DONE** (thread `thr-20260719T155635Z-fff46633`, verdict REVISE-before-M3a, assented
+  with reorder; conditions folded here).
+- Landed default byte-pin + dev scaffold: **DONE** (commit `c9f3b6e`).
+- M1 milestone gate: **OPEN** until the v1 calibrated-path pin, the corrected M0 boundary (P-A rejection guard
+  + `RestrictedOrderCore` primitive), the `A_independent`/`D_copula` identity split, and the required guards
+  all pass.
+
+**Guard-integration condition (Pi).** The fail-hard guard may clarify the existing fixed-shape domain but must
+NOT move any valid-path output; it must be bound into the v2 boundary identity and tested at EVERY public
+certification/reference/verdict entrypoint (do not rely on the recipe reshape exception). If integrating the
+guard would change a frozen evaluator identity or a valid-path artifact, STOP and re-gate that identity
+explicitly.
 
 ### M3a — FREEZE the evaluator BEFORE any fitting (Fable #1c — reordered ahead of M2)
 Freeze, and hash into the FINAL (non-dev) `realism_v2_schema_hash`, the verification spec. The nine Pi P-D
