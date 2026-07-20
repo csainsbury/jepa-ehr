@@ -16,7 +16,7 @@ from clinical_jepa.eval import oracle_realism_v2 as v2
 
 # re-gated DEV identities (all moved by the re-architecture)
 _REALISM_V2 = "2a7405ddadcdfdf3261a2b18e149c5523298a73d3e765cde78b6611927377673"
-_MARGINAL = "adfdf975fa827eae12cd580d662ad2b09630c1141d29165a71a8e69df1a7de50"
+_MARGINAL = "1ac8c61c7a2a541355253831de87f785db35b0f5bff16b1522d75fabedccb947"
 _ADAPTER_IFACE = "4ff9a5dabbb78fdaa41642e04bc3c9559ca5c9a8af9ad8c46bfb8131382dd19d"
 _M0B = "c7532ee9cd8629a20e8943c30729263e429f074258c6d7bb069ab104e688cd6d"
 

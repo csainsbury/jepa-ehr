@@ -232,10 +232,12 @@ V2_BLOCK_COMPOSITION = {
                                   "block; cross-block and restricted-tail pairs carry no order claim",
     "per_block_construction": "each complete block is a canonical 8-item order block (context/item/order); the "
                               "residual tail (length R) is an emission-only RestrictedOrderCore",
-    "cross_block_gap": "strictly-positive inter-block gap by default; a ZERO inter-block gap MERGES the boundary "
-                       "items into one Delta_t=0 cluster",
+    "cross_block_gap": "the timing process is generated over the WHOLE sequence, INDEPENDENT of block "
+                       "boundaries: a seam (8-item boundary) adjacency follows the SAME Delta_t=0 / positive-gap "
+                       "law as any within-block adjacency — seams are NOT forced strictly-positive (guarded by "
+                       "S9 block-seam invisibility)",
     "cluster_merge": "zero-gap clusters MAY span block boundaries; cluster ids/multiplicity computed AFTER "
-                     "whole-sequence composition",
+                     "whole-sequence composition; the block grid is a certification overlay only",
     "timestamp_order": "nondecreasing over the whole sequence; within a certifiable block order = certified "
                        "order; across blocks = emission order (block index, then within-block emission position)",
     "R1_tail": "R=1 tail is a single item => VACUOUS_ORDER (no pairs), emission-only",
