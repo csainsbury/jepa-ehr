@@ -26,6 +26,7 @@ from clinical_jepa.eval.oracle_literal_gen import LiteralCell, generate_literal_
 from clinical_jepa.eval.oracle_recipe import (
     CandidateRecipe, GoodContextRecipe, pairwise_probs_from_scores, split_views,
 )
+from clinical_jepa.eval.oracle_realism_v2 import assert_canonical_certification_cell as _assert_cert
 
 EO1_TIE_ATOL = 1e-9
 
@@ -64,23 +65,27 @@ def _probs_from_scores(scores: np.ndarray) -> np.ndarray:
 
 
 def eo1_recipe(recipe: CandidateRecipe, cell: LiteralCell, *, seed: int = 0) -> np.ndarray:
+    _assert_cert(cell, entrypoint="eo1_recipe")
     z = recipe.predict_latent(cell.context_view(), SamplerSpec(), seed)
     probs = recipe.decode_order(z, DecoderSamplerSpec(), seed).pairwise_probs
     return per_sequence_eo1(probs, cell.true_order)
 
 
 def eo1_r0(cell: LiteralCell) -> np.ndarray:
+    _assert_cert(cell, entrypoint="eo1_r0")
     probs = np.full((cell.true_order.shape[0], cell.true_order.shape[1], cell.true_order.shape[1]), 0.5)
     return per_sequence_eo1(probs, cell.true_order)
 
 
 def eo1_r_nuis(cell: LiteralCell) -> np.ndarray:
+    _assert_cert(cell, entrypoint="eo1_r_nuis")
     return per_sequence_eo1(_probs_from_scores(cell.nuisance_u), cell.true_order)
 
 
 def eo1_r_bayes(cell: LiteralCell, *, ref_n: int = 4000, seed: int = 0) -> np.ndarray:
     """Fair CONTEXT ceiling: a strong context predictor fit on an INDEPENDENT large sample of the same
     (family, kappa, orthogonal) mechanism — the practical E[order | context]."""
+    _assert_cert(cell, entrypoint="eo1_r_bayes")
     ref_train = generate_literal_cell(cell.family_id, cell.kappa, "orthogonal", ref_n, seed=seed + 991)
     r = GoodContextRecipe()
     r.fit(split_views(ref_train), split_views(ref_train))
@@ -89,6 +94,7 @@ def eo1_r_bayes(cell: LiteralCell, *, ref_n: int = 4000, seed: int = 0) -> np.nd
 
 def eo1_mean_embed_quantized(cell: LiteralCell, *, bits: int = 8) -> np.ndarray:
     """U6 control 1: order-blind mean-embed of item features, quantized to matched bits."""
+    _assert_cert(cell, entrypoint="eo1_mean_embed_quantized")
     item = cell.item_features
     scores = item.mean(axis=2)                       # order-blind pooling over item feature dims
     lo, hi = scores.min(), scores.max()
@@ -100,6 +106,7 @@ def eo1_mean_embed_quantized(cell: LiteralCell, *, bits: int = 8) -> np.ndarray:
 def eo1_random_codebook(cell: LiteralCell, *, bits: int = 8, seed: int = 0) -> np.ndarray:
     """U6 control 2: a FROZEN random codebook at matched bits. Must PASS null and FAIL positive; if it
     spuriously predicts positives the U6 comparison is not interpretable (caller marks not-evaluable)."""
+    _assert_cert(cell, entrypoint="eo1_random_codebook")
     rng = np.random.default_rng(seed ^ 0xC0DEB00C)
     n, L, di = cell.item_features.shape
     codebook = rng.standard_normal((max(2, 2 ** min(bits, 12)), di))
@@ -142,6 +149,7 @@ def hidden_null_excluded(cell: LiteralCell, *, margin: float, seed: int = 0) -> 
     HIDDEN NULL and is excluded from positive certification (Pi ORACLE_HIDDEN_NULL_RULE). Scored on the
     non-null sequences (the evaluator knows is_null) so the camouflage null mixture does not dilute the
     ceiling — a true kappa=0 cell has no positive signal and is correctly excluded."""
+    _assert_cert(cell, entrypoint="hidden_null_excluded")
     pos = ~cell.is_null
     pc = paired_contrast(restrict_to(eo1_r_bayes(cell, seed=seed), pos),
                          restrict_to(eo1_r0(cell), pos), seed=seed)

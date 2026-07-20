@@ -25,6 +25,7 @@ import numpy as np
 from clinical_jepa.eval import oracle_references as RF
 from clinical_jepa.eval.oracle_recipe import CandidateRecipe, split_views
 from clinical_jepa.eval.oracle_literal_gen import generate_literal_cell
+from clinical_jepa.eval.oracle_realism_v2 import assert_canonical_certification_cell as _assert_cert
 from clinical_jepa.eval.oracle_spec import heldout_families, train_families
 from clinical_jepa.eval.rung2_contract import (
     ORACLE_EO1_SKILL_GATE, ORACLE_NUISANCE_MARGIN, ORACLE_U6_BANDWIDTH_MARGIN,
@@ -61,6 +62,7 @@ def _cell_pass(recipe_factory: RecipeFactory, fam_id: str, kappa: float, seed: i
     recipe = recipe_factory()
     recipe.fit(split_views(train), split_views(train))
     cell = generate_literal_cell(fam_id, kappa, "orthogonal", n, seed=seed + 1)
+    _assert_cert(cell, entrypoint="verdict._cell_pass")   # fixed-L boundary at the verdict entrypoint
     if cell.support_status != "SUPPORTED":
         return CellVerdict(fam_id, NOT_EVALUABLE, {"support": cell.support_status})
     if RF.hidden_null_excluded(cell, margin=ORACLE_EO1_SKILL_GATE, seed=seed):
