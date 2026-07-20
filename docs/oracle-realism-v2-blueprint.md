@@ -72,17 +72,32 @@ as the primary tripwire, and the additive scaffold (no v1 identity moved; indepe
   generator/reference constructor with its OWN hash + closed-form profiles — it must NOT reuse the future M2
   candidate as ground truth (else evaluator + candidate share a bug and self-certify), must not become an
   alternative realism candidate, and no TRAIN comparisons. Freeze it before implementing M2.
-- **Rebuild step 2 (verifier/control DESIGN FREEZE) — DRAFTED + routed to Pi** (`m3a_design_dev_hash
-  3ec8577d…`, `clinical_jepa/eval/oracle_realism_v2_verifier_design.py`, thread `thr-20260720T143304Z`):
-  typed full-sequence input schema; exact S1–S8 algorithms (per-sequence equal-weight, max-norm over bins,
-  candidate−reference) + tolerances + overflow bins + deterministic coarsening + floor units; numeric
-  closed-form profiles (scid_like/mimic_like shape-anchored, interior low/mid/high, null, boundary, source-swap,
-  per-component ablation); 25 deterministic seeds + 4000 seqs/source/seed rate-based power; the INDEPENDENT
-  fixture generator identity (`realism_v2_reference_constructor_dev`, no shared code path with M2); standardized
-  Jacobian identifiability; and the separate `CHECK_TO_D_COMPONENTS` map + active-set escalation ledger.
-- **Next:** on Pi confirm → rebuild step 3 (implement the executable verifier + independent fixtures), step 4
-  (estimator-precision/identifiability/power sims), step 5 (route for M3a final review), step 6 (freeze +
-  unblock M2). M2 fitting stays BLOCKED.
+- **Rebuild step 2 (verifier/control DESIGN FREEZE) — ACCEPTED by Pi after 3 rounds** (final
+  `m3a_design_dev_hash 60c85b64…`, `clinical_jepa/eval/oracle_realism_v2_verifier_design.py`, thread
+  `thr-20260720T143304Z`). Rounds: rev-1 REVISE (realism-unit + registered-estimand defects) → rev-2 REVISE
+  (overdetermined fixture, seam guard, S8 map) → rev-3 NARROW REVISE (exact cluster semantics, executable S9 +
+  coarsening, honest coupling constructions) → **ACCEPT TO IMPLEMENT step 3**. Accepted: two-route separation
+  (registered marginals vs synthetic S1–S9), exact raw-`dt==0` clusters (8dp only for positive-gap support),
+  canonical maximal-run fixture, terminal S8/S9, source-level S1 tau, reference-only coarsening, deterministic
+  grid recovery, two distinct claims.
+- **Binding implementation conditions (Pi, on this acceptance):** (1) resolve + pin EVERY `COUPLING_PROTOCOL`
+  code-level choice (integer `s→units`, cycle selection, exact conditional run-composition law, RNG seed
+  derivation/draw order, infeasibility) in executable code + an implementation identity + toy tests BEFORE any
+  step-4 sim; once minted, NO tuning in response to step-4 (a failed preservation/power condition ⇒ DESIGN FAIL
+  + re-gate). (2) test claimed invariants DIRECTLY (exact L/K multiset for burst_count_length; per-seq gap
+  multiset for burst_timing; class-count preservation for relabel components; structural-zero preservation;
+  short-seq refusal; exact ts ties; malformed/non-finite/bool refusal). (3) S9 floors apply SEPARATELY to
+  candidate and reference (no pooled floor); emit every seam/nonseam/positive-gap denominator. (4) compute-cap
+  exhaustion ⇒ `PARTIAL` = NON-passing (can't support freeze/M2); state whether cap is CPU-hours OR wall-clock
+  (not both); record workers/hardware/runtime/RAM. (5) fixture independence is STRUCTURAL — must not import/call
+  the M2 candidate adapter; shared generic math only if it can't encode generation behaviour + separately
+  tested. (6) fix the stale "rev-2" docstring.
+- **This acceptance is NOT M3a final PASS**, does not mint `m3a_spec_frozen_v1`, does not authorize step-4
+  conclusions, does not unblock M2.
+- **Next:** rebuild step 3 (implement the executable verifier + independent fixtures under the binding
+  conditions), then route the implementation identity + coupling spec + toy fixtures + malformed-input tests +
+  focused results back to Pi; step 4 (sims) only from that pinned implementation; step 5 (M3a final review);
+  step 6 (freeze + unblock M2). M2 fitting stays BLOCKED.
 
 ## ★ Realism-unit vs certification-unit — DECISIVE architecture decision (Pi M3a gate)
 

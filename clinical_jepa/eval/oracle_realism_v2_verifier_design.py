@@ -430,6 +430,6 @@ M3A_VERIFIER_DESIGN = {
 
 
 def m3a_design_dev_hash() -> str:
-    """DEVELOPMENT identity of the rev-2 executable-verifier design. FINAL identity minted only after Pi's M3a
-    final review of the IMPLEMENTED verifier (rebuild step 5)."""
+    """DEVELOPMENT identity of the rev-3 executable-verifier design (Pi ACCEPT-to-implement). FINAL identity
+    minted only after Pi's M3a final review of the IMPLEMENTED verifier (rebuild step 5)."""
     return canonical_hash(M3A_VERIFIER_DESIGN)
