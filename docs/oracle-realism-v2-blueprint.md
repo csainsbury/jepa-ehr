@@ -72,10 +72,17 @@ as the primary tripwire, and the additive scaffold (no v1 identity moved; indepe
   generator/reference constructor with its OWN hash + closed-form profiles — it must NOT reuse the future M2
   candidate as ground truth (else evaluator + candidate share a bug and self-certify), must not become an
   alternative realism candidate, and no TRAIN comparisons. Freeze it before implementing M2.
-- **Next:** rebuild step 2 — freeze the draft verifier/control DESIGN (typed full-sequence input schema, exact
-  S1–S8 algorithms + tolerances + bins/coarsening/floors/weighting/ties, exact numeric scid_like/mimic_like/
-  interior/null/boundary/swap/ablation profiles, deterministic seed list + per-source sample sizes, and the
-  independent control-fixture generator identity). M2 fitting stays BLOCKED.
+- **Rebuild step 2 (verifier/control DESIGN FREEZE) — DRAFTED + routed to Pi** (`m3a_design_dev_hash
+  3ec8577d…`, `clinical_jepa/eval/oracle_realism_v2_verifier_design.py`, thread `thr-20260720T143304Z`):
+  typed full-sequence input schema; exact S1–S8 algorithms (per-sequence equal-weight, max-norm over bins,
+  candidate−reference) + tolerances + overflow bins + deterministic coarsening + floor units; numeric
+  closed-form profiles (scid_like/mimic_like shape-anchored, interior low/mid/high, null, boundary, source-swap,
+  per-component ablation); 25 deterministic seeds + 4000 seqs/source/seed rate-based power; the INDEPENDENT
+  fixture generator identity (`realism_v2_reference_constructor_dev`, no shared code path with M2); standardized
+  Jacobian identifiability; and the separate `CHECK_TO_D_COMPONENTS` map + active-set escalation ledger.
+- **Next:** on Pi confirm → rebuild step 3 (implement the executable verifier + independent fixtures), step 4
+  (estimator-precision/identifiability/power sims), step 5 (route for M3a final review), step 6 (freeze +
+  unblock M2). M2 fitting stays BLOCKED.
 
 ## ★ Realism-unit vs certification-unit — DECISIVE architecture decision (Pi M3a gate)
 
