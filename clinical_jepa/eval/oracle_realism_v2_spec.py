@@ -1,5 +1,12 @@
 """Oracle realism v2 — M3a verification-spec DRAFT (blueprint step 5; Pi P-B/P-D).
 
+SUPERSEDED-PENDING-REBUILD (Pi M3a gate, thread thr-20260720T143304Z): REVISE — do NOT freeze. This draft's
+length unit (restriction of one L=8 block) and length bins capped at 8 are INFEASIBLE against the spent
+full-sequence target (SCID/MIMIC P(L<=8)=0). The realism unit must become the full-sequence multi-block unit
+and the verifier must be EXECUTABLE (not descriptive dicts). See `docs/oracle-realism-v2-blueprint.md`
+§ Realism-unit vs certification-unit and § M3a REVISE. Kept only as the superseded reference identity
+(m3a_spec_dev_hash 57ecfc93…) until the rebuild lands; it does NOT gate anything.
+
 This module declares the verification spec that M3a will FREEZE **before** any M2 fitting: the six marginal
 checks plus cross-statistics S1–S7 (exact bins / thresholds / denominator floors / refusal), the
 parameter→statistic attribution table, the identifiability battery spec (Jacobian full-column-rank +

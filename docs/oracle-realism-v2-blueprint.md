@@ -51,8 +51,101 @@ as the primary tripwire, and the additive scaffold (no v1 identity moved; indepe
   per-cell + per-pair denominator floors (500), and the L<5 occupancy cap L/5 as an explicit accounting flag;
   bound into the additive `m0b_support_policy_hash = 876bffb6…`. Restricted cores are classifiable here but
   still rejected by the certification guard (complementary roles).
-- **Next:** step 5 (full M3a freeze — 6 marginals + S1–S7, identifiability battery, escalation ledger), then
-  step 6 (M2 Option A fit). M3a is the BLOCKING freeze before any M2 fitting.
+- **Step 5 (M3a spec DRAFT) — REVISE (Pi gate, thread `thr-20260720T143304Z`)** (`ee58219`): the declarative
+  draft (`m3a_spec_dev_hash 57ecfc93…`) was routed to Pi and returned **REVISE — do not freeze; M2 stays
+  blocked**. It surfaced a DECISIVE architectural defect (see next section) plus a full REVISE of bins,
+  statistic semantics, identifiability, power, escalation, and an executable-verifier requirement. All folded
+  below.
+- **Next:** re-architect the realism unit (§ Realism-unit vs certification-unit), re-gate the moved identities,
+  then BUILD the executable verifier (6 marginals + S1–S8) per § M3a REVISE before any freeze. M2 fitting stays
+  BLOCKED.
+
+## ★ Realism-unit vs certification-unit — DECISIVE architecture decision (Pi M3a gate)
+
+**Defect Pi caught:** the spent v1 aggregate target defines length as **full content-token sequence length**.
+From the cleared development-seen result: SCID `P(L≤8)=0, min 17, median 350, p90 1084, max 3801`; MIMIC
+`P(L≤8)=0, min 16, median 99, p90 367, max 15475`. A v2 generator that emits variable length by *restricting
+one canonical `L_ITEMS=8` block* necessarily keeps `length_ks=1.0`, and every length-conditioned S1/S5/S6 bin
+is empty ⇒ NOT_EVALUABLE. **M2 would be structurally incapable of passing before it starts.**
+
+**Decision (adopted — the only synthetic-only path; option B needs a future governed gate, see below):** separate
+the two units.
+- **Certification unit** stays ONE fixed eight-item block; certified order applies ONLY within a registered
+  eight-item block. The fixed-L guard (step 2) is unchanged.
+- **Realism unit** is the FULL-sequence unit used by the target: a source-conditioned sequence of zero-or-more
+  fixed-L order blocks plus a final restricted block. **Cross-block precedence is emission structure and
+  carries NO order-certification claim.**
+- Whole-sequence marginals + cross-statistics are computed AFTER block composition.
+- Schema-bind: block count, final-block length, cross-block gap / cluster-merge semantics, and certified-pair
+  eligibility (only within-block pairs are certifiable).
+
+**Option B (NOT taken now):** an eight-item-window realism target is a DIFFERENT target/extraction contract and
+requires a future, separately governed aggregate gate — it cannot silently replace the spent full-sequence
+target. Barred by the stop line without explicit authorization.
+
+**Re-gate:** this moves the common marginal schema, M0b accounting, the bins, the A/D identities, and the M3a
+draft hash. Each must be re-minted explicitly when the re-architecture lands.
+
+## M3a REVISE — folded conditions (Pi M3a gate)
+
+- **Bins:** do NOT cap at 8. Fixed coarse bins with explicit overflow —
+  `length: 1, 2-8, 9-32, 33-128, 129-512, 513-2048, 2049+`; `cluster-size: 1, 2, 3-4, 5-8, 9-16, 17+`;
+  `normalized position: quartiles` (for S8). Freeze a deterministic adjacent-bin coarsening order applied
+  identically to target and candidate; if floors still fail after permitted merges ⇒ NOT_EVALUABLE. S6 uses the
+  frozen length bins (no adaptive "terciles").
+- **Statistic semantics:** every threshold is on **candidate − reference**, not the raw summary; freeze the
+  cross-bin aggregation (conjunction or max-norm) and the independent sampling unit (default: per-sequence
+  statistic, equal-weight sequences — long sequences must NOT dominate via raw pair/cluster pooling); each
+  check states whether its floor counts sequences / clusters / adjacent-cluster pairs / all.
+  - `count_ks` = per-sequence **cluster-count** KS (not event-count).
+  - **S1:** conditional cluster **density** `E[K/L | length-bin]` (max-bin abs Δ ≤0.03) + Kendall τ-b Δ ≤0.05
+    (drop the scale-dependent abs-E[K] 0.25).
+  - **S2:** cluster-size ECDF KS ≤0.05 with an overflow-support convention.
+  - **S3:** score BOTH τ-b Δ ≤0.05 AND a scale-invariant conditional-gap metric (max-bin |log mean-ratio| ≤
+    log 1.10, or conditional KS ≤0.05).
+  - **S4:** `|summary_cand − summary_ref| ≤0.03`; define same-cluster / adjacent-cluster pair weighting.
+  - **S5:** conditional occupancy candidate vs reference (max-bin abs Δ ≤0.03); the M0b `min(L,5)/5` cap is a
+    separate feasibility assertion, NOT the comparison target.
+  - **S6:** difference of candidate−reference length-dependent class-mix (TV Δ ≤0.05); do NOT require raw
+    TV ≤0.05 (that would force independence).
+  - **S7:** max-bin candidate−reference diversity Δ ≤0.03; define large-cluster weighting.
+  - Tolerances are candidate values only: run estimator-precision/power sims at the exact frozen sample sizes;
+    if a threshold lacks power, change the sample size — never the threshold after M2 behaviour is seen.
+- **S8 (NEW, default-required):** normalized-position nonstationarity — candidate−reference differences across
+  frozen position quartiles for at least cluster density (max abs Δ ≤0.03) and C=5 class composition (TV ≤0.05).
+  If S8 is omitted, DECLARE the model position-exchangeable and EXCLUDE phase/nonstationarity from the
+  admissible claim; S1–S7 are then NOT a complete joint-process envelope.
+- **Identifiability:** freeze exact parameter ranges / transform / joint grid / estimator / finite-difference
+  step; CRN seeds for sensitivity; a STANDARDIZED/whitened Jacobian criterion `σ_min/σ_max ≥ 1e-3` (absolute
+  tol only as secondary guard); recovery tol ≤0.05 of each parameter's registered range and ≤ half a grid step;
+  collision = two settings beyond recovery tol whose ALL standardized cross-stat differences stay within
+  acceptance tol; interior low/mid/high dependence profiles for rank; at `copula_zeroed_null` use the
+  active-subset / one-sided boundary rank (do NOT require full rank for inactive params). Define exact numeric
+  `scid_like`/`mimic_like` synthetic profiles NOW — never fitted from M2 output; keep null/independent as
+  negative controls.
+- **Power (TIGHTEN):** 5 seeds cannot establish 0.80 power. Freeze exact per-source sequence count per seed +
+  deterministic seed list; ≥ **25 seeds**; known/self control passes all required checks ≥24/25; each
+  attribution-mapped minimally-misspecified control FAILS its intended check ≥20/25; per-check ablations pass
+  non-attributed checks at the predeclared specificity rate; report empirical rates + binomial uncertainty;
+  aggregate decision conjunctive across sources; median is secondary only.
+- **Escalation:** iteration_cap 3 OK only if exhausting it yields terminal FAIL/park (never informal redesign).
+  Do NOT reuse `PARAM_TO_STATISTIC` as the A→D map — add a separate frozen `CHECK_TO_D_COMPONENTS` including a
+  `length_class_mix` D component for S5/S6. Mint the D identity over the exact ACTIVE component set (not the
+  generic all-components identity); freeze deterministic component order + set-cover tie rule; monotone
+  active-set expansion (never remove a component); no repeated component/identity; ledger fields = parent
+  identity, M3a spec hash, control profile, exact failed statistics, selected active set, decision hash, result
+  hash, seed set.
+- **Executable-verifier condition (BEFORE freeze):** a hash of descriptive dicts is NOT a frozen evaluator.
+  Land pure fail-closed implementations of the six marginals + S1–S8 with: typed I/O schema; exact
+  bin/coarsening/tie/weighting/denominator algorithms; malformed/empty/small-cell refusal; hand-calculated toy
+  fixtures; null / boundary / source-swap / right-marginal-wrong-dependence / per-check-ablation tests;
+  estimator precision/power sims at the exact sizes/seeds; and a code/spec identity binding the implementation
+  (not only prose). Only after that impl passes an M3a final review may the dev version bump to
+  `m3a_spec_frozen_v1` and M2 unblock.
+
+**Scout trigger:** Pi says none — the relevant frontier scout (`20260719T141540Z-jepa-e5b45c1e`) is complete
+and already imported; the realism/certification-unit separation is a refinement of its identifiability warning,
+not a new frontier. No new wave unless Chris asks.
 
 ## Novelty frame (scout)
 
