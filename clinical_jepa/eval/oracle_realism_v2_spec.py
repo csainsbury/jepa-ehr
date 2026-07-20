@@ -28,14 +28,33 @@ from typing import Any
 
 from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_calibration import REQUIRED_SOURCES
-from clinical_jepa.eval.oracle_realism_v2 import (
-    V2_MARGINAL_SCHEMA, V2_VARIANT_A_INDEPENDENT, V2_VARIANT_D_COPULA, M0B_SUPPORT_POLICY,
-    v2_variant_identity, m0b_support_policy_hash,
-)
 from clinical_jepa.eval.rung2_contract import (
     ORACLE_ENV_KS, ORACLE_ENV_TV, ORACLE_ENV_OCCUPANCY_ABS, ORACLE_ENV_DT0_ABS,
     ORACLE_ENV_MIN_DENOM, ORACLE_ENV_N_CLASSES,
 )
+
+# --- FROZEN HISTORICAL SNAPSHOTS (Pi: preserve the old dev hash 57ecfc93 as provenance) ---------------
+# This superseded draft is decoupled from the LIVE schemas (which moved to the full-sequence multi-block unit
+# at the M3a rebuild). These inlined snapshots reproduce the exact values referenced when 57ecfc93 was minted,
+# so `m3a_spec_dev_hash()` stays frozen as a historical record and never tracks the evolving live schema.
+_HIST_MARGINAL_SCHEMA = {
+    "length_law": "source_conditioned_variable_length_via_order_restriction",
+    "class_law": "dirichlet_multinomial_with_hard_structural_zeros",
+    "cluster_size_law": "compound_burst_size_distribution",
+    "gap_law": "source_positive_gap_distribution",
+    "dt0_law": "cluster_size_induced_simultaneity",
+    "required_sources": list(REQUIRED_SOURCES),
+    "n_classes": ORACLE_ENV_N_CLASSES,
+}
+_HIST_M0B_POLICY = {
+    "cell_support_floor": 500, "pair_denom_floor": 500, "occupancy_cap_length": 5,
+    "occupancy_definition": "distinct_classes / C (C=5); L<5 caps occupancy at L/5",
+    "statuses": ["SUPPORTED", "SUPPORT_STARVED", "VACUOUS_ORDER"],
+    "discipline": "never-silent: any floor breach => SUPPORT_STARVED with reasons; L<=1 => VACUOUS_ORDER",
+    "scope": "v2 realism/emission order cores only; restricted cores never reach fixed-L certification",
+}
+_HIST_A_ID = "b299a77977f251784667d42b31dd4bbf9a3a470c69b801f5089bda7692065e20"
+_HIST_D_ID = "43b55944c75571aa4145a3fa147fcae1802b8a10eeb74885b04d891d41af6345"
 
 M3A_SPEC_VERSION = "m3a_spec_draft_dev"     # -> "m3a_spec_frozen_v1" only after Pi rules
 
@@ -143,8 +162,8 @@ SOURCE_CONJUNCTION = {
 
 # ---- escalation discipline + immutable ledger (Pi P-D) ----
 ESCALATION = {
-    "baseline_identity": v2_variant_identity("A_independent"),   # M2 binds A first
-    "escalation_identity": v2_variant_identity("D_copula"),      # controls-driven only
+    "baseline_identity": _HIST_A_ID,                            # M2 binds A first (historical snapshot)
+    "escalation_identity": _HIST_D_ID,                          # controls-driven only (historical snapshot)
     "component_to_check": PARAM_TO_STATISTIC,
     "decision_basis": "known-ground-truth control battery ONLY; TRAIN-target diagnostics are non-decisional",
     "tie_rule": "if >1 component maps to the same failed check, escalate the SMALLEST super-set of components "
@@ -169,8 +188,8 @@ M3A_VERIFICATION_SPEC = {
     "power": POWER,
     "source_conjunction": SOURCE_CONJUNCTION,
     "escalation": ESCALATION,
-    "marginal_schema_ref": V2_MARGINAL_SCHEMA,
-    "m0b_support_policy": M0B_SUPPORT_POLICY,
+    "marginal_schema_ref": _HIST_MARGINAL_SCHEMA,
+    "m0b_support_policy": _HIST_M0B_POLICY,
     "admissible_claim": "matches the declared marginal + cross-statistic envelope; NEVER the joint process",
 }
 

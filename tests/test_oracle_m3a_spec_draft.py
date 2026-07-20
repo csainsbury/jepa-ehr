@@ -1,21 +1,21 @@
-"""Step-5 M3a verification-spec DRAFT — structural integrity (awaiting Pi's ruling before the freeze).
+"""Step-5 M3a verification-spec DRAFT — HISTORICAL structural integrity (SUPERSEDED by the M3a rebuild).
 
-Pins the DEV spec hash and checks the spec is internally complete: every D_copula dependence parameter is
-attributed to a declared cross-statistic, S6 is mandatory, S7 is present, every cross-stat carries a
-denominator floor + refusal rule, and all PROPOSED elements are surfaced by open_pi_rulings(). Numeric
-thresholds are DRAFT (Pi-ruled) — this test guards structure, not the eventual frozen values.
+This module is a frozen HISTORICAL record (Pi: preserve the old dev hash 57ecfc93 as provenance). It is
+decoupled from the LIVE schemas, which moved to the full-sequence multi-block unit. The test therefore checks
+the module's OWN internal consistency (its historical 4-component D set), NOT the evolving live D menu.
 """
 from __future__ import annotations
 
 import unittest
 
-from clinical_jepa.eval.oracle_realism_v2 import V2_VARIANT_D_COPULA
 from clinical_jepa.eval.oracle_realism_v2_spec import (
     CROSS_STATISTICS, MARGINAL_CHECKS, PARAM_TO_STATISTIC, SOURCE_CONJUNCTION, ESCALATION,
     IDENTIFIABILITY_BATTERY, m3a_spec_dev_hash, open_pi_rulings, M3A_SPEC_VERSION,
 )
 
 _M3A_DEV_HASH = "57ecfc9357be972752fcf11f9d45b75e743ca2b57afc38744eea28747fbdc194"
+# the historical D dependence set this superseded draft attributed (pre-length_class_mix).
+_HIST_D_DEPENDENCE = ("burst_count_length", "burst_timing", "mark_burst_tie", "cluster_size_mark_diversity")
 
 
 class M3aSpecStructure(unittest.TestCase):
@@ -24,7 +24,7 @@ class M3aSpecStructure(unittest.TestCase):
         self.assertTrue(M3A_SPEC_VERSION.endswith("_dev"), "M3a spec must remain a DEV draft until Pi rules")
 
     def test_all_dependence_params_attributed(self) -> None:
-        for p in V2_VARIANT_D_COPULA["dependence_params"]:
+        for p in _HIST_D_DEPENDENCE:
             self.assertIn(p, PARAM_TO_STATISTIC, f"unattributed dependence param {p}")
             for stat in PARAM_TO_STATISTIC[p]:
                 self.assertIn(stat, CROSS_STATISTICS, f"{p} -> unknown stat {stat}")
@@ -62,11 +62,11 @@ class M3aSpecStructure(unittest.TestCase):
             realism_v2_schema_hash, v2_certification_boundary_hash, m0b_support_policy_hash,
         )
         self.assertEqual(realism_v2_schema_hash(),
-                         "704b079a6137a9dbadbf9938b031b4af5cedfbaadb81fbfa9d872c6519cd6f85")
+                         "2a7405ddadcdfdf3261a2b18e149c5523298a73d3e765cde78b6611927377673")
         self.assertEqual(v2_certification_boundary_hash(),
                          "b33c2d9f6324c84763ebb85fde8912dbf0b84e94b7ee366e4adb879ceb14e8e4")
         self.assertEqual(m0b_support_policy_hash(),
-                         "876bffb6b79f7a9127616fea1fb5a9231ef48561cc0808ab8512a0c0099317d8")
+                         "c7532ee9cd8629a20e8943c30729263e429f074258c6d7bb069ab104e688cd6d")
 
 
 if __name__ == "__main__":

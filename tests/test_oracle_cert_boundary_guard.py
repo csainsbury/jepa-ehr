@@ -32,7 +32,7 @@ FAMILIES = ("T_hmm_markov", "T_realized_history", "T_latent_factor",
             "E_no_h_exogenous", "E_offgrid_nonlinear")
 NUIS = ("orthogonal", "correlated_leak")
 _V2_BOUNDARY_HASH = "b33c2d9f6324c84763ebb85fde8912dbf0b84e94b7ee366e4adb879ceb14e8e4"
-_DEV_SCAFFOLD_HASH = "704b079a6137a9dbadbf9938b031b4af5cedfbaadb81fbfa9d872c6519cd6f85"
+_DEV_SCAFFOLD_HASH = "2a7405ddadcdfdf3261a2b18e149c5523298a73d3e765cde78b6611927377673"
 _EMISSION_FIELDS = ("future_timestamps", "cluster_ids", "multiplicity", "future_multiset")
 
 

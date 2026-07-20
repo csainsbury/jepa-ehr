@@ -19,7 +19,7 @@ from clinical_jepa.eval.oracle_realism_v2 import (
     realism_v2_schema_hash, v2_certification_boundary_hash,
 )
 
-_M0B_POLICY_HASH = "876bffb6b79f7a9127616fea1fb5a9231ef48561cc0808ab8512a0c0099317d8"
+_M0B_POLICY_HASH = "c7532ee9cd8629a20e8943c30729263e429f074258c6d7bb069ab104e688cd6d"
 
 
 class M0bAccounting(unittest.TestCase):
@@ -95,7 +95,7 @@ class M0bIdentity(unittest.TestCase):
     def test_policy_hash_pinned_and_others_unmoved(self) -> None:
         self.assertEqual(m0b_support_policy_hash(), _M0B_POLICY_HASH)
         self.assertEqual(realism_v2_schema_hash(),
-                         "704b079a6137a9dbadbf9938b031b4af5cedfbaadb81fbfa9d872c6519cd6f85")
+                         "2a7405ddadcdfdf3261a2b18e149c5523298a73d3e765cde78b6611927377673")
         self.assertEqual(v2_certification_boundary_hash(),
                          "b33c2d9f6324c84763ebb85fde8912dbf0b84e94b7ee366e4adb879ceb14e8e4")
         from clinical_jepa.eval.oracle_meta_gen import invariant_hash

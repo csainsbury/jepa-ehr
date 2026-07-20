@@ -27,33 +27,41 @@ from clinical_jepa.eval.rung2_contract import (
 
 REALISM_V2_VERSION = "realism_v2_scaffold_dev"      # bumped when the v2 generator behaviour lands (M2)
 
-# Per-source law structure the v2 envelope emits (declared; parameterization frozen at M2/M3a).
+# Per-source law structure the v2 envelope emits (declared; parameterization frozen at M2/M3a). The realism
+# UNIT is the full content-token sequence (multi-block); certification stays a fixed 8-item block (Pi M3a gate).
 V2_LAW_STRUCTURE = {
-    "length_law": "source_conditioned_variable_length_via_order_restriction",   # M0: restriction-invariant
+    "realism_unit": "full_content_token_sequence (multi-block: L_total = 8*B + R)",
+    "length_law": "source_conditioned_full_sequence_length",   # NOT a restriction of one L=8 block (P(L<=8)=0)
     "class_law": "dirichlet_multinomial_with_hard_structural_zeros",
     "cluster_size_law": "compound_burst_size_distribution",
-    "gap_law": "source_positive_gap_distribution",
-    "dt0_law": "cluster_size_induced_simultaneity",                             # NOT a widened 0.9-clip grid
-    "join": "variant_selected: A_independent baseline (bound first at M2) | D_copula escalation (new identity)",
-    "variant_selection": "see V2_VARIANT_A_INDEPENDENT / V2_VARIANT_D_COPULA — A and D are DISTINCT identities",
-    "order_restriction": "deterministic_restriction_of_canonical_fixed_L_ranking",
-    "certification": "fixed_L, enforced by assert_canonical_certification_cell (NOT the recipe reshape, which "
-                     "reads item_features via _design); variable length is emission-only",
+    "gap_law": "source_positive_gap_distribution (incl. inter-block gaps)",
+    "dt0_law": "cluster_size_induced_simultaneity (clusters may span block boundaries)",
+    "block_composition": "see V2_BLOCK_COMPOSITION",
+    "join": "variant_selected: A_independent baseline (bound first at M2) | D_copula active-set escalation",
+    "variant_selection": "see V2_VARIANT_A_INDEPENDENT / v2_active_d_identity — A and D are DISTINCT identities",
+    "order_restriction": "deterministic_restriction_of_canonical_fixed_L_ranking (final tail only)",
+    "certification": "ONLY complete 8-item blocks are certifiable (each a SEPARATE fixed-L unit), enforced by "
+                     "assert_canonical_certification_cell; the final restricted block + cross-block/tail pairs "
+                     "are emission-only and carry NO order-certification claim",
     "seam": "post_hoc_adapter_only (marks+timestamps); dedicated adapter RNG; never s_true/future_events/nuisance_u",
 }
 
-# Predeclared cross-statistics (S1..S6) — necessary beyond the six marginal checks because aggregates
-# constrain marginals but do NOT identify the joint process (Fable review #2). Bins/thresholds/power are
-# FROZEN at M3a before fitting; NONE are in the committed extraction contract, so every real cross-statistic
-# is a NEW governed field at the M4 locked/external gate.
+# Predeclared cross-statistics (S1..S8) — necessary beyond the six marginal checks because aggregates constrain
+# marginals but do NOT identify the joint process. The AUTHORITATIVE definitions/bins/thresholds live in the
+# EXECUTABLE verifier (rebuild, Pi M3a gate); this dict is the corrected declarative summary. All are scored on
+# CANDIDATE − REFERENCE (never a raw summary). NONE are in the committed extraction contract.
 V2_CROSS_STATISTICS = {
-    "S1": "E[cluster_count K | length_bin] + kendall_tau(L,K)",
-    "S2": "ECDF of Delta_t=0 cluster-run sizes (KS)",
-    "S3": "mean_positive_gap | preceding_cluster_size_class (or tau)",
-    "S4": "P(same_class|same_cluster) - P(same_class|adjacent_clusters)",
-    "S5": "E[occupancy | length_bin]",
-    "S6": "class_TV between length terciles (optional)",
-    "identifiability_rule": "n_dependence_params <= n_independent_cross_statistic_dof; grid-recover each param",
+    "S1": "E[cluster-count density K/L | length-bin] + Kendall tau-b(L,K)",
+    "S2": "ECDF of Delta_t=0 cluster-run sizes (KS, overflow-supported)",
+    "S3": "tau-b(preceding cluster size, gap) AND scale-invariant conditional-gap metric",
+    "S4": "P(same class|same cluster) - P(same class|adjacent clusters)",
+    "S5": "E[occupancy | length-bin] candidate vs reference (M0b cap is a separate feasibility assertion)",
+    "S6": "length-dependent class-mix difference candidate-reference (MANDATORY; not raw TV)",
+    "S7": "E[n_distinct/min(C,5) | cluster-size-bin] candidate-reference (max-bin)",
+    "S8": "normalized-position nonstationarity: candidate-reference across position quartiles (density + class TV)",
+    "scored_on": "candidate - reference, per-sequence equal-weight; overflow bins + frozen coarsening",
+    "identifiability_rule": "n_dependence_params <= n_independent_cross_statistic_dof; standardized-Jacobian rank "
+                            "+ grid-recovery + collision search",
     "admissible_claim": "matches declared marginal+cross-statistic envelope; NEVER the joint process",
 }
 
@@ -210,13 +218,49 @@ def v2_certification_boundary_hash() -> str:
 # step adds NO sampling law / parameter fit / target comparison — the adapter is an INTERFACE STUB only.
 # ==================================================================================================
 
-# The marginals shared by A and D (the join is the ONLY difference between the options).
+# ---- full-sequence multi-block composition (Pi M3a gate: realism unit vs certification unit) ----
+V2_BLOCK_COMPOSITION = {
+    "canonical": "L_total = 8*B + R",
+    "block_len": L_ITEMS,                         # 8
+    "B": "number of COMPLETE canonical 8-item order blocks (B >= 0)",
+    "R": "final restricted-block length in [0, 7]; R=0 => no restricted tail",
+    "empty_forbidden": True,                      # L_total >= 1; empty sequences are invalid
+    "min_L_total": 1,
+    "certifiable_unit": "ONLY complete 8-item blocks, each a SEPARATE fixed-L certification unit",
+    "not_certifiable": ["final_restricted_block", "cross_block_pairs", "restricted_tail_pairs"],
+    "certified_pair_eligibility": "a pair is certifiable ONLY if both items lie in the SAME complete 8-item "
+                                  "block; cross-block and restricted-tail pairs carry no order claim",
+    "per_block_construction": "each complete block is a canonical 8-item order block (context/item/order); the "
+                              "residual tail (length R) is an emission-only RestrictedOrderCore",
+    "cross_block_gap": "strictly-positive inter-block gap by default; a ZERO inter-block gap MERGES the boundary "
+                       "items into one Delta_t=0 cluster",
+    "cluster_merge": "zero-gap clusters MAY span block boundaries; cluster ids/multiplicity computed AFTER "
+                     "whole-sequence composition",
+    "timestamp_order": "nondecreasing over the whole sequence; within a certifiable block order = certified "
+                       "order; across blocks = emission order (block index, then within-block emission position)",
+    "R1_tail": "R=1 tail is a single item => VACUOUS_ORDER (no pairs), emission-only",
+}
+
+# ---- frozen overflow bins (Pi M3a gate: never cap at 8) ----
+V2_FROZEN_BINS = {
+    "length": ((1, 1), (2, 8), (9, 32), (33, 128), (129, 512), (513, 2048), (2049, None)),
+    "cluster_size": ((1, 1), (2, 2), (3, 4), (5, 8), (9, 16), (17, None)),
+    "position_quartiles": 4,
+    "coarsening": "deterministic adjacent-bin merge order, applied IDENTICALLY to target and candidate; if "
+                  "floors still fail after all permitted merges => NOT_EVALUABLE",
+}
+
+# The marginals shared by A and D (the join is the ONLY difference between the options). The realism unit is the
+# full multi-block sequence; length is full-sequence length, NOT a restriction of one L=8 block.
 V2_MARGINAL_SCHEMA = {
-    "length_law": "source_conditioned_variable_length_via_order_restriction",
+    "unit": "full_content_token_sequence (multi-block: L_total = 8*B + R)",
+    "length_law": "source_conditioned_full_sequence_length",
     "class_law": "dirichlet_multinomial_with_hard_structural_zeros",
     "cluster_size_law": "compound_burst_size_distribution",
-    "gap_law": "source_positive_gap_distribution",
-    "dt0_law": "cluster_size_induced_simultaneity",
+    "gap_law": "source_positive_gap_distribution (incl. inter-block gaps)",
+    "dt0_law": "cluster_size_induced_simultaneity (clusters may span block boundaries)",
+    "block_composition": V2_BLOCK_COMPOSITION,
+    "bins": V2_FROZEN_BINS,
     "required_sources": list(REQUIRED_SOURCES),
     "n_classes": ORACLE_ENV_N_CLASSES,
 }
@@ -228,40 +272,63 @@ V2_VARIANT_A_INDEPENDENT = {
     "role": "baseline_bound_first_at_M2",
 }
 
+# D component MENU. Operationally, escalation mints an identity over the exact ACTIVE subset via
+# `v2_active_d_identity` (never the generic all-components identity, Pi). `length_class_mix` is the S5/S6
+# length→composition coupling component.
+V2_D_COMPONENT_MENU = ("burst_count_length", "burst_timing", "mark_burst_tie",
+                       "cluster_size_mark_diversity", "length_class_mix")
+
 V2_VARIANT_D_COPULA = {
     "variant": "D_copula",
     "join": "sparse_compound_burst_copula",               # only the couplings the cross-statistics can see
-    "dependence_params": ["burst_count_length", "burst_timing", "mark_burst_tie", "cluster_size_mark_diversity"],
-    "role": "controls_driven_escalation_only",
+    "dependence_params": list(V2_D_COMPONENT_MENU),
+    "role": "controls_driven_active_set_escalation_only",
     "escalation_precondition": "attribution-mapped marginal/cross-stat failure on known-ground-truth controls",
-    "on_escalation": "mint new identity + escalation-ledger entry; re-run the full battery under the cap",
+    "on_escalation": "mint an ACTIVE-SET identity (v2_active_d_identity) + ledger entry; re-run the full battery",
 }
 
-# Adapter INTERFACE stub only — declares the emission seam contract. NO sampling law, fit, or target
-# comparison exists until M2 (and only after the M3a freeze). Emission-side only; certification never sees it.
+# Adapter INTERFACE stub only — declares the emission seam contract. NO sampling law, fit, or target comparison
+# exists until M2 (after the M3a freeze). Emits the full-sequence multi-block composition; certification never
+# sees the tail or cross-block structure.
 V2_ADAPTER_INTERFACE = {
     "adapter_stub": "realism_v2_adapter_iface_dev",
-    "inputs": ["canonical_full_L_literal_cell", "source_profile", "variant_identity", "frozen_verifier_spec"],
-    "emits": ["marks", "timestamps", "cluster_metadata", "restriction_mask"],
+    "inputs": ["source_profile", "variant_identity", "frozen_verifier_spec", "canonical_full_L_block_cells"],
+    "emits": ["block_sequence (B complete 8-item blocks)", "final_restricted_block (length R, emission-only)",
+              "whole_sequence_marks", "whole_sequence_timestamps", "cross_block_cluster_metadata"],
     "forbidden_pre_m3a": ["sampling_law", "parameter_fit", "target_comparison"],
-    "certification_boundary": "emits only; certification receives unmasked fixed-L cells (see the guard)",
+    "certification_boundary": "ONLY complete 8-item blocks enter fixed-L certification (as separate units); "
+                              "the tail + cross-block pairs are emission-only and never certified (see the guard)",
 }
 
 
 def v2_marginal_schema_hash() -> str:
-    """Identity of the marginal schema SHARED by Option A and Option D."""
+    """Identity of the marginal schema SHARED by Option A and Option D (full-sequence multi-block unit)."""
     return canonical_hash(V2_MARGINAL_SCHEMA)
 
 
 def v2_variant_identity(variant: str, *, final: bool = False) -> str:
     """Distinct identity per option. `final=False` (default) is the DEVELOPMENT identity; the FINAL identity
-    (`final=True`) is minted only at the M3a freeze. `A_independent` and `D_copula` NEVER share a hash, and
-    dev never collides with final (Pi P-D-1)."""
+    (`final=True`) is minted only at the M3a freeze. For D this is the generic MENU identity — escalation must
+    instead use `v2_active_d_identity` over the exact active subset (Pi)."""
     spec = {"A_independent": V2_VARIANT_A_INDEPENDENT, "D_copula": V2_VARIANT_D_COPULA}.get(variant)
     if spec is None:
         raise KeyError(f"unknown v2 variant {variant!r} (expected 'A_independent' or 'D_copula')")
     return canonical_hash({"marginal_schema": V2_MARGINAL_SCHEMA, "variant_spec": spec,
                            "stage": "final_m3a" if final else "dev_scaffold"})
+
+
+def v2_active_d_identity(active_components, *, final: bool = False) -> str:
+    """Mint a D_copula identity over the EXACT active component set (Pi: never the generic all-components
+    identity). Distinct active sets => distinct identities; components must be a non-empty subset of the frozen
+    menu. Escalation expands the active set monotonically, each expansion a new identity + ledger entry."""
+    act = tuple(sorted(set(active_components)))
+    if not act:
+        raise ValueError("active D component set must be non-empty")
+    unknown = [c for c in act if c not in V2_D_COMPONENT_MENU]
+    if unknown:
+        raise KeyError(f"unknown D component(s) {unknown}; menu = {V2_D_COMPONENT_MENU}")
+    return canonical_hash({"marginal_schema": V2_MARGINAL_SCHEMA, "variant": "D_copula_active",
+                           "active_components": list(act), "stage": "final_m3a" if final else "dev_scaffold"})
 
 
 def v2_adapter_interface_hash() -> str:
@@ -350,8 +417,13 @@ M0B_SUPPORT_POLICY = {
     "occupancy_cap_length": M0B_OCCUPANCY_CAP_LENGTH,
     "occupancy_definition": "distinct_classes / C (C=5); L<5 caps occupancy at L/5",
     "statuses": [SUPPORT_OK, SUPPORT_STARVED, VACUOUS_ORDER],
+    # full-sequence multi-block accounting levels (Pi M3a gate): support is tracked separately at each level.
+    "levels": ["sequence", "complete_block", "restricted_tail", "within_block_pair"],
+    "level_floors": {"sequence": M0B_CELL_SUPPORT_FLOOR, "complete_block": M0B_CELL_SUPPORT_FLOOR,
+                     "restricted_tail": M0B_CELL_SUPPORT_FLOOR, "within_block_pair": M0B_PAIR_DENOM_FLOOR},
     "discipline": "never-silent: any floor breach => SUPPORT_STARVED with reasons; L<=1 => VACUOUS_ORDER",
-    "scope": "v2 realism/emission order cores only; restricted cores never reach fixed-L certification",
+    "scope": "v2 full-sequence realism accounting; ONLY complete 8-item blocks are certification support "
+             "(restricted tail + cross-block pairs are emission-only, never certification support)",
 }
 
 

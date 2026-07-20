@@ -56,9 +56,26 @@ as the primary tripwire, and the additive scaffold (no v1 identity moved; indepe
   blocked**. It surfaced a DECISIVE architectural defect (see next section) plus a full REVISE of bins,
   statistic semantics, identifiability, power, escalation, and an executable-verifier requirement. All folded
   below.
-- **Next:** re-architect the realism unit (§ Realism-unit vs certification-unit), re-gate the moved identities,
-  then BUILD the executable verifier (6 marginals + S1–S8) per § M3a REVISE before any freeze. M2 fitting stays
-  BLOCKED.
+- **Rebuild order (Pi CONFIRM-WITH-REORDER, same thread):** (1) re-architect + re-gate DEV schemas only; (2)
+  freeze the draft verifier/control DESIGN before coding; (3) implement the executable verifier + independent
+  fixtures; (4) run estimator-precision/identifiability/power sims; (5) route for M3a final review; (6) only on
+  PASS mint `m3a_spec_frozen_v1` and unblock M2.
+- **Rebuild step 1 (re-architect + re-gate DEV schemas) — DONE**: `V2_BLOCK_COMPOSITION` (L_total=8B+R; only
+  complete 8-item blocks certifiable; final restricted block + cross-block/tail pairs emission-only) +
+  `V2_FROZEN_BINS` (overflow bins, never capped at 8); marginal schema now full-sequence multi-block; M0b
+  extended to per-level accounting (sequence/complete_block/restricted_tail/within_block_pair); D escalation via
+  `v2_active_d_identity` over the exact ACTIVE component set (menu incl. `length_class_mix`). Re-gated DEV
+  identities: realism_v2 `2a7405dd…`, marginal `adfdf975…`, A_dev `d2c36d23…`, D-menu `ee076317…`, adapter
+  `4ff9a5da…`, m0b `c7532ee9…`. Certification boundary (`b33c2d9f…`) + all frozen v1 identities UNMOVED; the
+  superseded `oracle_realism_v2_spec.py` frozen self-contained to preserve its historical hash `57ecfc93…`.
+- **Independent fixture requirement (Pi):** power/recovery controls need a SMALL INDEPENDENT fixture
+  generator/reference constructor with its OWN hash + closed-form profiles — it must NOT reuse the future M2
+  candidate as ground truth (else evaluator + candidate share a bug and self-certify), must not become an
+  alternative realism candidate, and no TRAIN comparisons. Freeze it before implementing M2.
+- **Next:** rebuild step 2 — freeze the draft verifier/control DESIGN (typed full-sequence input schema, exact
+  S1–S8 algorithms + tolerances + bins/coarsening/floors/weighting/ties, exact numeric scid_like/mimic_like/
+  interior/null/boundary/swap/ablation profiles, deterministic seed list + per-source sample sizes, and the
+  independent control-fixture generator identity). M2 fitting stays BLOCKED.
 
 ## ★ Realism-unit vs certification-unit — DECISIVE architecture decision (Pi M3a gate)
 
