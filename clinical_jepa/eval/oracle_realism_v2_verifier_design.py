@@ -1,22 +1,25 @@
-"""Oracle realism v2 — executable-verifier DESIGN FREEZE, rev-2 (M3a rebuild step 2; Pi REVISE folded).
+"""Oracle realism v2 — executable-verifier DESIGN FREEZE, rev-3 (M3a rebuild step 2; Pi NARROW REVISE folded).
 
 The frozen DESIGN rebuild step 3 will implement, codifying Pi's rulings. DEV identity `m3a_design_dev_hash`,
 re-routed to Pi for confirmation BEFORE coding; the FINAL frozen verifier identity is minted only after the
 implemented verifier passes Pi's M3a final review (rebuild step 5).
 
-Rev-2 folds the design-gate REVISE (thread thr-20260720T143304Z):
-  * TWO separate routes: the six REGISTERED marginals keep their EXACT v1 estimands (AggregateStats route,
-    development-seen match = EXPLORATORY only); S1–S9 are synthetic sequence-level recovery (SequenceSample
-    route). Passing both is NOT a real joint-envelope match.
-  * canonical maximal-run fixture law (cluster-size law, K, and Δt=0 are LINKED — not independently sampled);
-  * S9 block-seam invisibility guard (terminal adequacy, no D route);
-  * reference-only coarsening; derive-not-trust input schema; subcheck granularity;
-  * S8 declared TERMINAL/out-of-model (no D route); S2 removed from the D map;
-  * operational marginal-preserving coupling laws + an ablation expected-outcome matrix.
+Rev-2 established: two separate routes (registered marginals vs synthetic S1–S9), canonical maximal-run fixture
+law, whole-sequence timing + S9 seam guard, reference-only coarsening, terminal S8. Rev-3 folds the NARROW
+REVISE (thread thr-20260720T143304Z):
+  * EXACT registered timestamp/cluster semantics (dt==0 raw equality; only positive-gap ECDF support 8dp);
+    L_total==1 dt0 undefined/excluded;
+  * executable S9 conjunction + a 6-step reference-only coarsening algorithm; S1_tau = source-level; S2 =
+    mean-of-per-sequence-ECDFs; S3 adjacent-pair floor per retained bin;
+  * honest EXACT finite-pool coupling constructions (comonotone-cycle burst_count_length); marginal
+    preservation EMPIRICALLY REQUIRED (tested >=24/25) not asserted by construction; recorded S4<->S7
+    cross-loading; concrete SOURCE_SWAP pair; oriented ablation matrix;
+  * identifiability: central FD at all interior incl 0.55, no logit/epsilon, deterministic nearest-grid
+    recovery, explicit covariance ridge + named nuisance profiles + hard compute cap;
+  * two DISTINCT admissible claims (never recombined) + explicit NO-joint/NO-confirmatory negatives.
 
 Synthetic-only. No sampling/fitting/governed access. The fixture performs NO governed read and uses only
-previously cleared development-seen aggregate CONSTANTS (length scale). Admissible claim: "matches the declared
-marginal + cross-statistic envelope," never the joint process.
+previously cleared development-seen aggregate CONSTANTS (length scale).
 """
 from __future__ import annotations
 
@@ -32,7 +35,7 @@ from clinical_jepa.eval.rung2_contract import (
     ORACLE_ENV_MIN_DENOM, ORACLE_ENV_N_CLASSES,
 )
 
-M3A_DESIGN_VERSION = "m3a_verifier_design_dev_rev2"   # -> "..._impl_frozen_v1" after Pi final review
+M3A_DESIGN_VERSION = "m3a_verifier_design_dev_rev3"   # -> "..._impl_frozen_v1" after Pi final review
 _KS, _TV, _OCC, _DT0 = ORACLE_ENV_KS, ORACLE_ENV_TV, ORACLE_ENV_OCCUPANCY_ABS, ORACLE_ENV_DT0_ABS
 DENOM_FLOOR = ORACLE_ENV_MIN_DENOM   # 500
 
@@ -73,13 +76,21 @@ REGISTERED_MARGINALS = {
 # ============================ 2. derive-not-trust input schema (Pi §1) ============================
 INPUT_SCHEMA = {
     "trusted_fields": ["source", "class_ids", "timestamps"],
-    "derived": ["L_total", "cluster_ids (Δt=0 runs on 8dp timestamps)", "K", "residual_R", "block_count_B",
-                "normalized position (index/(L_total-1); L_total==1 => 0.0)"],
+    "derived": ["L_total", "cluster_ids = maximal runs under EXACT raw timestamp equality (dt==0)", "K",
+                "residual_R", "block_count_B", "normalized position (index/(L_total-1); L_total==1 => 0.0)"],
+    "cluster_semantics": "EXACT registered extractor semantics: dt=np.diff(t); zero=(dt==0); boundary=(dt>0). "
+                         "Clusters are maximal runs under EXACT float equality — NOT 8dp-rounded timestamps. "
+                         "Only the positive-gap ECDF SUPPORT is rounded to 8dp (right-continuous).",
     "reconciliation": "if redundant L_total/B/R/cluster_ids are supplied they must EXACTLY reconcile with the "
                       "derived values, else raise",
-    "validation": ["finite timestamps (reject NaN/Inf)", "nondecreasing timestamps", "8dp tie convention "
-                   "(equal rounded ts => same Δt=0 cluster)", "canonical contiguous run IDs if IDs remain",
-                   "exact source in REQUIRED_SOURCES", "all vector lengths equal", "reject booleans-as-integers"],
+    "validation": ["finite timestamps (reject NaN/Inf)", "nondecreasing timestamps",
+                   "every positive adjacency satisfies t[i+1] > t[i] AFTER materialization",
+                   "a generated positive gap lost under cumulative float addition is REJECTED or "
+                   "deterministically nudged BEFORE record issuance",
+                   "canonical contiguous run IDs if IDs remain", "exact source in REQUIRED_SOURCES",
+                   "all vector lengths equal", "reject booleans-as-integers"],
+    "L1_rule": "for L_total==1 there are ZERO adjacencies: dt0 is UNDEFINED — exclude the sequence from dt0 "
+               "estimation and from the adjacency denominator; never evaluate (L-K)/(L-1)",
     "malformed_refusal": "any violation raises; never silently coerce",
 }
 
@@ -88,19 +99,23 @@ INPUT_SCHEMA = {
 # REFERENCE-derived coarsening map. Undefined per-sequence summaries (e.g. undefined tau) => that sequence is
 # ineligible; if the eligible floor fails => NOT_EVALUABLE (never zero-filled).
 S_ALGORITHMS = {
-    "S1": {"def": "per-seq K/L_total by length-bin; max-bin abs-diff of equal-seq means + tau-b(L,K) diff",
+    "S1": {"def": "per-seq K/L_total density by length-bin (max-bin abs-diff of equal-seq means) + ONE "
+                  "SOURCE-LEVEL tau-b(L,K) over independent sequences",
            "subchecks": {"S1_density": {"abs": _OCC}, "S1_tau": {"tau_b": 0.05}},
            "floors": ["eligible_sequences>=500 per retained length-bin"],
-           "notes": "tau-b with exact tie handling; undefined tau => NOT_EVALUABLE"},
-    "S2": {"def": "sequence-equal-weighted ECDF of ALL maximal run sizes (incl. singletons); KS",
+           "notes": "S1_tau is a single source-level tau-b (with ties) over independent sequences — NOT a "
+                    "per-sequence tau (contrast S3); undefined tau => NOT_EVALUABLE"},
+    "S2": {"def": "sequence-equal CDF F(x)=mean_i F_i(x) over eligible sequences (each F_i the sequence's own "
+                  "run-size ECDF, incl. singletons), then KS(F_cand, F_ref)",
            "subchecks": {"S2_ks": {"ks": _KS}},
            "floors": ["eligible_sequences>=500", "clusters>=500"],
-           "notes": "ECDF over unbounded integer support — NOT binned into cluster-size overflow bins"},
+           "notes": "unbounded integer support — NOT binned into cluster-size overflow bins"},
     "S3": {"def": "gap by preceding-cluster-size bin; per-seq bin summaries then equal-weight eligible seqs",
            "subchecks": {"S3_tau": {"tau_b": 0.05}, "S3_loggap": {"abs_E_log_gap": log(1.10)}},
-           "floors": ["eligible_sequences>=500 per retained cluster-size bin", "adjacent_cluster_pairs>=500"],
-           "notes": "abs(E[log gap]_cand - E[log gap]_ref) (NOT log of arithmetic-mean ratio); per-seq tau-b "
-                    "then averaged; undefined => NOT_EVALUABLE"},
+           "floors": ["eligible_sequences>=500 per retained cluster-size bin",
+                      "adjacent_cluster_pairs>=500 PER retained cluster-size bin"],
+           "notes": "abs(E[log gap]_cand - E[log gap]_ref) (NOT log of arithmetic-mean ratio); S3_tau is "
+                    "per-sequence tau-b then averaged over eligible seqs; undefined => NOT_EVALUABLE"},
     "S4": {"def": "P(same|same cluster) - P(same|adjacent clusters) via class-count combinatorics (unordered "
                   "same-cluster pairs + Cartesian adjacent-cluster pairs, avoid O(L^2)); equal-weight seqs",
            "subchecks": {"S4_abs": {"abs": _OCC}},
@@ -123,9 +138,15 @@ S_ALGORITHMS = {
            "floors": ["items>=500 per quartile", "eligible_sequences>=500 per quartile"],
            "escalation": "TERMINAL / out-of-model — NOT a D route (Pi §5)",
            "notes": "position quartiles are NEVER coarsened; missing phase support => NOT_EVALUABLE"},
-    "S9": {"def": "block-seam invisibility: candidate-reference seam-vs-nonseam contrasts at 8-item seams",
-           "subchecks": {"S9_zero": {"abs": _OCC}, "S9_class": {"abs": _OCC}, "S9_gap": {"ks": _KS}},
-           "floors": ["seam_adjacencies>=500", "nonseam_adjacencies>=500"],
+    "S9": {"def": "block-seam invisibility at 8-item seams; per-eligible-sequence seam/nonseam probabilities "
+                  "then equal-weight sequences",
+           "subchecks": {
+               "S9_zero": "|[(P0_seam - P0_non)_cand - (P0_seam - P0_non)_ref]| <= 0.03",
+               "S9_class": "|[(Psame_seam - Psame_non)_cand - (Psame_seam - Psame_non)_ref]| <= 0.03",
+               "S9_gap": "KS(F_cand_seam+, F_cand_nonseam+)<=0.05 AND KS(F_ref_seam+, F_ref_nonseam+)<=0.05 AND "
+                         "max(KS(cand_seam+,ref_seam+), KS(cand_nonseam+,ref_nonseam+))<=0.05"},
+           "floors": ["eligible_sequences>=500", "seam_adjacencies>=500", "nonseam_adjacencies>=500",
+                      "positive_seam_gaps>=500", "positive_nonseam_gaps>=500"],
            "escalation": "TERMINAL implementation/adequacy guard — NOT a D route; failure blocks until the "
                          "composition implementation is corrected",
            "notes": "the maximal-run/timing process is generated over the WHOLE sequence independently of block "
@@ -134,12 +155,19 @@ S_ALGORITHMS = {
 
 CONDITIONAL_COARSENING = {
     "rule": "derive the adjacent-bin merge map from the REFERENCE ONLY, then apply it UNCHANGED to the candidate",
+    "algorithm": [
+        "1. determine sparse bins from the REFERENCE denominators FOR THAT CHECK ONLY",
+        "2. let j = the highest-index sparse bin",
+        "3. if j>0 merge bin j INTO bin j-1; if j==0 merge bin 0 INTO bin 1",
+        "4. recompute reference floors and repeat from (1)",
+        "5. REFUSE (NOT_EVALUABLE) if fewer than three bins remain",
+        "6. apply the final map UNCHANGED to the candidate; any candidate floor failure under it => NOT_EVALUABLE",
+    ],
     "candidate_floor_fail_under_ref_map": "NOT_EVALUABLE (candidate-driven merging could hide candidate tail "
                                           "collapse)",
     "min_retained": {"length_bins": 3, "cluster_size_bins": 3},
-    "merge_direction": "rightmost sparse bin merges LEFT into its neighbour first; repeat; emit the selected "
-                       "map in results",
     "position_quartiles": "NEVER coarsened (S8 requires all four)",
+    "emit": "the selected per-check map is emitted in results",
 }
 SAMPLING_UNIT = "S-statistics only: per-sequence statistic first, equal-weight eligible sequences (the "
 SAMPLING_UNIT += "REGISTERED_MARGINALS keep their exact pooled/seq estimands and are NOT rewritten by this rule)"
@@ -154,13 +182,16 @@ FIXTURE_LAW = {
         "2. sample maximal cluster (run) sizes from the cluster-size law until they sum to EXACTLY L_total, "
         "using the frozen terminal-truncation rule (last run truncated to hit L_total; if truncation would be "
         "0, drop it)",
-        "3. DERIVE K = number of runs, cluster_ids, and dt0 = (L_total - K)/(L_total - 1) from the runs",
+        "3. DERIVE K = number of runs and cluster_ids from the runs; dt0 = zero-adjacencies/adjacencies "
+        "(UNDEFINED for L_total==1 — excluded, per INPUT_SCHEMA.L1_rule)",
         "4. sample ONE strictly-positive inter-cluster gap per boundary from the gap law",
-        "5. derive timestamps (cumulative; Δt=0 within a run) over the WHOLE sequence, independent of 8-item "
-        "block boundaries",
+        "5. derive timestamps by cumulative addition (EXACT Δt==0 within a run) over the WHOLE sequence, "
+        "independent of 8-item block boundaries; if a positive gap collapses to Δt==0 under float addition, "
+        "reject/deterministically nudge before issuance so cluster identity is exact",
         "6. sample class_ids from the class law (with structural zeros); apply the active D coupling(s)",
     ],
-    "dt0_rate": "DERIVED diagnostic only (= (L_total-K)/(L_total-1)); NOT an independent Bernoulli parameter",
+    "dt0_rate": "DERIVED diagnostic only (zero-adjacencies/adjacencies; UNDEFINED and excluded at L_total==1); "
+                "NOT an independent Bernoulli parameter",
     "singletons_in_S2": True,
     "block_seam": "timing/marks generated whole-sequence; the 8-item block grid is a certification overlay only "
                   "and must be statistically invisible (guarded by S9)",
@@ -192,40 +223,89 @@ PROFILES = {
     "boundary_short":   _prof(log(9), 0.30, [0.3, 0.25, 0.2, 0.15, 0.1], [], 0.5, (log(1.2), 0.85), _NO_DEP),
 }
 
-# Operational, MARGINAL-PRESERVING coupling laws (strength s in [0,0.6]); every transform is applied AFTER base
-# sampling with a dedicated coupling RNG, preserves the six registered marginals BY CONSTRUCTION, breaks ties by
-# item index, and clips s to the range.
+# Coupling laws: EXACT finite-pool constructions with a dedicated coupling RNG (seed derived from the profile
+# identity + component + seed), applied in V2_D_COMPONENT_MENU order. Strength s in [0,0.6] converts to an
+# INTEGER number of transformed units. Preservation of the six registered marginals is EMPIRICALLY REQUIRED
+# (tested >=24/25 in the ablation battery), NOT asserted "by construction" unless the construction proves it;
+# any preservation failure => DESIGN FAIL / re-gate, never threshold tuning.
+COUPLING_PROTOCOL = {
+    "per_component_freeze": ["exact pre-state and post-state", "integer conversion of s -> #transformed units",
+                             "stable tie-breaks + infeasibility/refusal", "dedicated RNG seed derivation + "
+                             "draw order", "component composition order = V2_D_COMPONENT_MENU",
+                             "whether preservation is EXACT or EMPIRICALLY-REQUIRED",
+                             "behaviour with structural-zero classes and short sequences"],
+    "preservation_discipline": "intended marginal preservation is TESTED at >=24/25 seeds; any failure returns "
+                               "DESIGN FAIL / re-gate — never post-hoc threshold tuning",
+}
 COUPLING_LAWS = {
-    "burst_count_length": "pool-neutral boundary reallocation by length-bin: for a fraction s of high-L-bin "
-                          "sequences MERGE a randomly chosen adjacent run pair; for a MATCHED fraction of "
-                          "low-L-bin sequences SPLIT a run — chosen so the POOLED cluster-size distribution and "
-                          "K totals are unchanged (moves S1 only)",
-    "burst_timing": "rank copula on positive gaps within each sequence: reorder the sequence's gaps so a "
-                    "fraction s follow the rank of the preceding cluster size; the MULTISET of gaps (hence the "
-                    "pooled positive-gap ECDF) is unchanged (moves S3 only)",
-    "mark_burst_tie": "within-sequence class relabelling that raises same-cluster same-class probability by a "
-                      "fraction s while HOLDING each sequence's per-class counts fixed (pooled class_tv "
-                      "preserved) (moves S4 only)",
-    "cluster_size_mark_diversity": "within-sequence, class-count-preserving relabelling that concentrates "
-                                   "(large clusters) / diversifies (small clusters) class diversity by a "
-                                   "fraction s; pooled class proportions and cluster-size marginal unchanged "
-                                   "(moves S7 only)",
-    "length_class_mix": "length-bin-dependent, POOL-BALANCED class relabelling: shift conditional class mix by "
-                        "length bin by a fraction s while keeping the POOLED class proportions fixed (moves "
-                        "S5/S6 only; explicitly does NOT move pooled class_tv)",
+    # honest exact construction (Pi's acceptable route): preserves the L and K MULTISETS exactly; S2 + the six
+    # registered marginals are preservation-REQUIRED (tested), NOT claimed preserved by construction.
+    "burst_count_length": {
+        "construction": "generate the independent finite pool; retain the exact L and K multisets; build the "
+                        "COMONOTONE feasible assignment of sorted K values to sorted L values (K<=L, stable "
+                        "index tie-breaks); s activates a frozen fraction of whole permutation CYCLES between "
+                        "the original and comonotone assignments (preserving the L and K multisets exactly); "
+                        "reconstruct positive run compositions under a separately frozen conditional rule",
+        "preserves_exactly": ["L multiset", "K multiset"],
+        "preservation_required_tested": ["S2", "the six registered marginals"],
+        "moves": ["S1_density", "S1_tau"]},
+    "burst_timing": {
+        "construction": "rank copula on the sequence's positive gaps: a fraction s of gaps are reassigned to "
+                        "follow the rank of the preceding cluster size, holding the sequence's gap MULTISET "
+                        "fixed (pooled positive-gap ECDF exact)",
+        "preserves_exactly": ["per-sequence gap multiset => pooled positive-gap ECDF"],
+        "preservation_required_tested": ["the six registered marginals"],
+        "moves": ["S3_tau", "S3_loggap"]},
+    "mark_burst_tie": {
+        "construction": "within-sequence class relabelling holding per-class counts fixed; a fraction s of "
+                        "eligible same-cluster adjacencies are made same-class by count-preserving swaps",
+        "preserves_exactly": ["per-sequence class counts => pooled class_tv"],
+        "preservation_required_tested": ["S7 (cross-loading recorded, see below)"],
+        "moves": ["S4_abs"]},
+    "cluster_size_mark_diversity": {
+        "construction": "within-sequence, class-count-preserving relabelling concentrating (large clusters) / "
+                        "diversifying (small clusters) by a fraction s",
+        "preserves_exactly": ["per-sequence class counts => pooled class_tv", "cluster-size multiset"],
+        "preservation_required_tested": ["S4 (cross-loading recorded, see below)"],
+        "moves": ["S7_abs"]},
+    "length_class_mix": {
+        "construction": "length-bin-dependent POOL-BALANCED class relabelling: conditional class mix shifted by "
+                        "length bin by a fraction s with a per-bin balancing constraint that holds the POOLED "
+                        "class proportions fixed",
+        "preserves_exactly": ["pooled class proportions (class_tv)"],
+        "preservation_required_tested": ["the six registered marginals"],
+        "moves": ["S5_abs", "S6_tv"]},
+}
+# S4<->S7 cross-loading is REAL (diversity-by-cluster-size and within-cluster homogeneity are related). We do
+# NOT claim orthogonality; the predeclared cross-loading is recorded and the Jacobian/collision tests decide
+# identifiability.
+CROSS_LOADING = {"mark_burst_tie<->cluster_size_mark_diversity": "S4 and S7 share within-cluster class "
+                 "structure; predeclared, not orthogonalized; identifiability decided by Jacobian + collision"}
+
+# SOURCE_SWAP is a concrete pair; it can NEVER trigger D.
+SOURCE_SWAP = {
+    "reference": "mimic_scale_control",
+    "candidate": "mimic length law PLUS the exact named scid_scale_control class/run/gap laws",
+    "expected_failures": ["class_tv", "count_ks", "positive_gap_ks", "S1_density"],
+    "never_triggers_D": True,
 }
 
-# source_swap is now operational; each ablation is an explicit expected-outcome row.
-SOURCE_SWAP = "emit scid_scale_control CLASS/timing/burst marginals under mimic_scale_control LENGTH scale; " \
-              "must FAIL a NON-degenerate check (e.g. count_ks/positive_gap_ks/S1), not only class_tv"
-# expected-outcome matrix: each ablation sets exactly ONE component to 0.5 on null_independent and must fail its
-# mapped subcheck(s) while passing all non-attributed checks at specificity.
+# Ablation orientation (Pi): reference has ONE component at 0.5; candidate A (null-independent) must FAIL the
+# mapped row; candidate D-recovery (independent impl at 0.5) must PASS the full row. All non-attributed checks +
+# six marginals + S2 + S8 + S9 pass >=24/25 unless listed.
 ABLATION_MATRIX = {
-    "burst_count_length":          {"fails": ["S1_density"], "passes": "all others incl. six marginals"},
-    "burst_timing":                {"fails": ["S3_tau", "S3_loggap"], "passes": "all others"},
-    "mark_burst_tie":              {"fails": ["S4_abs"], "passes": "all others"},
-    "cluster_size_mark_diversity": {"fails": ["S7_abs"], "passes": "all others"},
-    "length_class_mix":            {"fails": ["S5_abs", "S6_tv"], "passes": "all others incl. pooled class_tv"},
+    "burst_count_length":          {"primary_fail": ["S1_density"], "allowed_sensitive": ["S1_tau"]},
+    "burst_timing":                {"primary_fail": ["S3_tau", "S3_loggap"], "allowed_sensitive": []},
+    "mark_burst_tie":              {"primary_fail": ["S4_abs"], "allowed_sensitive": ["S7_abs"]},
+    "cluster_size_mark_diversity": {"primary_fail": ["S7_abs"], "allowed_sensitive": ["S4_abs"]},
+    "length_class_mix":            {"primary_fail": ["S5_abs", "S6_tv"], "allowed_sensitive": []},
+}
+ABLATION_ORIENTATION = {
+    "reference": "independent fixture with exactly one component at 0.5",
+    "candidate_A": "matched null_independent fixture — MUST FAIL the primary_fail row",
+    "candidate_D_recovery": "independent implementation at component 0.5 — MUST PASS the full row",
+    "specificity": "all non-attributed checks + six marginals + S2 + S8 + S9 pass >=24/25 (allowed_sensitive "
+                   "checks are exempt from the specificity requirement for that component only)",
 }
 
 # ============================ 6. simulation (provisional; step-4 must demonstrate) ============================
@@ -257,21 +337,27 @@ FIXTURE_GENERATOR = {
 # ============================ 8. identifiability (Pi §4) ============================
 IDENTIFIABILITY = {
     "param_ranges": {c: [0.0, 0.6] for c in V2_D_COMPONENT_MENU},
-    "standardization": "AFFINE range standardization (no logit — undefined at endpoints); epsilon clip 1e-6",
+    "standardization": "AFFINE range standardization (no logit); NO epsilon clipping (no denominator needs it)",
     "statistic_vector": "the frozen S1–S7 subcheck scalars (S8/S9 are terminal guards, excluded from the "
                         "identifiability vector)",
-    "whitening_reference": "covariance estimated at null_independent under CRN; ridge-regularized (lambda 1e-3)",
-    "grid": "3^k joint grid over active components at 0.10/0.35/0.55, with the marginal nuisance grid varied",
-    "finite_difference": "central CRN at interior points; FORWARD one-sided active-subset at 0.0; BACKWARD "
-                         "one-sided at the top profile (0.55) so no evaluation leaves [0,0.6]; step 0.02",
+    "whitening_reference": "Sigma estimated at null_independent under CRN (seeds = SIMULATION.seed_list); ridge "
+                           "Sigma_lambda = Sigma + 1e-3 * trace(Sigma)/d * I",
+    "grid": "3^k joint grid over active components at 0.10/0.35/0.55; nuisance profiles = the exact named list "
+            "NUISANCE_PROFILES",
+    "finite_difference": "CENTRAL CRN at all interior grid points (incl. 0.55: 0.53/0.57 stay in [0,0.6]); "
+                         "FORWARD one-sided active-subset at 0.0; BACKWARD one-sided ONLY at the 0.60 boundary; "
+                         "step 0.02",
     "rank_criterion": "standardized Jacobian sigma_min/sigma_max >= 1e-3 (abs tol secondary)",
-    "recovery": "inverse via nearest-grid + local least squares on the whitened vector; recover_tol <= 0.05 of "
-                "range AND <= half a grid step; grid tie-break by lowest L2 then lowest component index",
+    "recovery": "DETERMINISTIC nearest-grid recovery on the exact registered grid under a whitened-L2 objective; "
+                "lexicographic menu-order tie-break; recover_tol <= 0.05 of range AND <= half a grid step "
+                "(no local least-squares solver)",
     "collision": "two settings beyond recover_tol COLLIDE iff ALL whitened cross-stat diffs stay within "
                  "acceptance tol",
-    "compute_budget": "staged runtime gate: run k<=2 active-component grids first, estimate cost, and only "
-                      "expand to higher k within the frozen budget (never silently reduce after results)",
+    "compute_budget": "explicit cap: <= 8 CPU-hours wall-time, <= 32 GB RAM; staged (k<=2 grids first, then "
+                      "expand within the cap); on cap exceed => terminal PARTIAL result, NO adaptive grid "
+                      "reduction after results",
 }
+NUISANCE_PROFILES = ["scid_scale_control", "mimic_scale_control", "structural_zero_control", "boundary_short"]
 
 # ============================ 9. escalation (Pi §5) ============================
 # CHECK/subcheck -> D components. S2 (cluster-size marginal) and the six marginals + source-swap NEVER trigger
@@ -320,15 +406,26 @@ M3A_VERIFIER_DESIGN = {
     "block_composition": V2_BLOCK_COMPOSITION,
     "fixture_law": FIXTURE_LAW,
     "profiles": PROFILES,
+    "coupling_protocol": COUPLING_PROTOCOL,
     "coupling_laws": COUPLING_LAWS,
+    "cross_loading": CROSS_LOADING,
     "source_swap": SOURCE_SWAP,
     "ablation_matrix": ABLATION_MATRIX,
+    "ablation_orientation": ABLATION_ORIENTATION,
     "simulation": SIMULATION,
     "fixture_generator": FIXTURE_GENERATOR,
     "identifiability": IDENTIFIABILITY,
+    "nuisance_profiles": NUISANCE_PROFILES,
     "escalation": ESCALATION,
     "m0b_support_policy_hash": m0b_support_policy_hash(),
-    "admissible_claim": "matches the declared marginal + cross-statistic envelope; NEVER the joint process",
+    # two DISTINCT claims (never recombined into a joint-envelope claim), per ROUTES:
+    "admissible_claims": {
+        "marginal_route": "development-seen aggregate-marginal match — EXPLORATORY ONLY",
+        "sequence_route": "synthetic known-profile cross-statistic recovery",
+        "explicit_negatives": "NO real joint-envelope claim; NO confirmatory realism claim; NO joint-process "
+                              "claim. The independent fixture is synthetic-recovery infrastructure, NOT evidence "
+                              "that development-seen TRAIN has these dependencies.",
+    },
 }
 
 

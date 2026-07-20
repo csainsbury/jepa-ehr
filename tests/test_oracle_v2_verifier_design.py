@@ -17,7 +17,7 @@ from clinical_jepa.eval.oracle_realism_v2_verifier_design import (
     m3a_design_dev_hash, M3A_DESIGN_VERSION,
 )
 
-_DESIGN_DEV_HASH = "4b9e76ccd9a604f1f0cd3e758a731c55271f22de786fbd341bd0f0db86168e2a"
+_DESIGN_DEV_HASH = "60c85b648f03959a73324b6523f54d1cb5bb9483f75d25e190d3f61197ccf85a"
 
 
 class VerifierDesignRev2(unittest.TestCase):
@@ -62,7 +62,7 @@ class VerifierDesignRev2(unittest.TestCase):
     def test_ablation_matrix_covers_every_component(self) -> None:
         self.assertEqual(set(ABLATION_MATRIX), set(V2_D_COMPONENT_MENU))
         for comp, row in ABLATION_MATRIX.items():
-            self.assertTrue(row["fails"], comp)
+            self.assertTrue(row["primary_fail"], comp)
 
     def test_reference_only_coarsening(self) -> None:
         self.assertIn("REFERENCE ONLY", CONDITIONAL_COARSENING["rule"])
