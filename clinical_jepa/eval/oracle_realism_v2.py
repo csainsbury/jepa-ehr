@@ -21,7 +21,9 @@ import numpy as np
 from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_calibration import REQUIRED_SOURCES
 from clinical_jepa.eval.oracle_literal_gen import LiteralCell, L_ITEMS
-from clinical_jepa.eval.rung2_contract import ORACLE_ENV_N_CLASSES
+from clinical_jepa.eval.rung2_contract import (
+    ORACLE_ENV_N_CLASSES, ORACLE_ENV_MIN_DENOM, ORDER_SUPPORT_FLOOR,
+)
 
 REALISM_V2_VERSION = "realism_v2_scaffold_dev"      # bumped when the v2 generator behaviour lands (M2)
 
@@ -265,3 +267,94 @@ def v2_variant_identity(variant: str, *, final: bool = False) -> str:
 def v2_adapter_interface_hash() -> str:
     """Identity of the adapter INTERFACE stub (no behaviour). Bumps when the M2 adapter behaviour lands."""
     return canonical_hash(V2_ADAPTER_INTERFACE)
+
+
+# ==================================================================================================
+# M0b — support-floor / min-length accounting for the v2 order core (blueprint step 4; Pi P-A owns L=1).
+#
+# The v2 realism layer emits VARIABLE realized lengths. Every restricted order core must be classified
+# EXPLICITLY (never silently): a vacuous L<=1 order, a support-starved cell / pair, and the structural
+# occupancy cap at L<5. This is an ACCOUNTING layer for the v2 realism/emission side ONLY — restricted
+# cores never reach fixed-L certification (the guard rejects them). Occupancy is `distinct classes / C`
+# (C=5), so a realized length L<5 caps occupancy at L/5 by construction; that is an accounting FLAG, not a
+# realism miss (a downstream occupancy check must compare against the capped ceiling, not 1.0).
+# ==================================================================================================
+
+M0B_OCCUPANCY_CAP_LENGTH = 5                 # occupancy = distinct/C(=5); L below this caps occupancy at L/5
+M0B_PAIR_DENOM_FLOOR = ORACLE_ENV_MIN_DENOM  # per-pair eligible (non-tied) denominator floor (500)
+M0B_CELL_SUPPORT_FLOOR = ORDER_SUPPORT_FLOOR # per-cell sequence-support floor (500)
+_M0B_TIE_ATOL = 1e-9
+
+SUPPORT_OK = "SUPPORTED"
+SUPPORT_STARVED = "SUPPORT_STARVED"
+VACUOUS_ORDER = "VACUOUS_ORDER"              # L<=1: order undefined, no adjacency
+
+
+@dataclass(frozen=True)
+class OrderSupportAccounting:
+    """Explicit, never-silent M0b classification of a (candidate or realized) v2 order core."""
+    realized_length: int
+    n_sequences: int
+    status: str                              # SUPPORTED | SUPPORT_STARVED | VACUOUS_ORDER
+    occupancy_cap: float                     # min(L, 5)/5 — structural occupancy ceiling at this length
+    occupancy_capped: bool                   # L < 5
+    per_pair_min_denom: int                  # smallest eligible (non-tied) pair denominator (n if no pairs)
+    reasons: tuple[str, ...]                 # human-readable accounting reasons (always populated when off-nominal)
+
+
+def account_order_support(realized_length: int, n_sequences: int, per_pair_min_denom: int, *,
+                          cell_floor: int = M0B_CELL_SUPPORT_FLOOR,
+                          pair_floor: int = M0B_PAIR_DENOM_FLOOR) -> OrderSupportAccounting:
+    """Classify a v2 order core by realized length + support counts. L<=1 is VACUOUS (undefined order);
+    below the per-cell or per-pair floor is SUPPORT_STARVED; L<5 flags the structural occupancy cap L/5
+    (an accounting flag, not a starvation). NEVER returns a silent SUPPORTED when a floor is breached."""
+    L = int(realized_length)
+    occ_cap = min(max(L, 0), M0B_OCCUPANCY_CAP_LENGTH) / float(M0B_OCCUPANCY_CAP_LENGTH)
+    occ_capped = L < M0B_OCCUPANCY_CAP_LENGTH
+    if L <= 1:
+        return OrderSupportAccounting(L, int(n_sequences), VACUOUS_ORDER, occ_cap, occ_capped,
+                                      int(per_pair_min_denom),
+                                      ("L<=1: vacuous order, no adjacency — NOT evaluable for order",))
+    reasons: list[str] = []
+    if int(n_sequences) < cell_floor:
+        reasons.append(f"per-cell support {int(n_sequences)} < floor {cell_floor}")
+    if int(per_pair_min_denom) < pair_floor:
+        reasons.append(f"per-pair min eligible denom {int(per_pair_min_denom)} < floor {pair_floor}")
+    status = SUPPORT_STARVED if reasons else SUPPORT_OK
+    if occ_capped:                            # accounting flag regardless of starvation status
+        reasons.append(f"L={L}<{M0B_OCCUPANCY_CAP_LENGTH}: occupancy structurally capped at {L}/5")
+    return OrderSupportAccounting(L, int(n_sequences), status, occ_cap, occ_capped,
+                                  int(per_pair_min_denom), tuple(reasons))
+
+
+def restricted_core_support(core: "RestrictedOrderCore", *, cell_floor: int = M0B_CELL_SUPPORT_FLOOR,
+                            pair_floor: int = M0B_PAIR_DENOM_FLOOR) -> OrderSupportAccounting:
+    """M0b accounting computed from an actual `RestrictedOrderCore`: the per-pair eligible denominator is the
+    count of sequences whose pair is non-tied, minimised over surviving pairs (continuous scores ⇒ typically
+    n, but computed honestly)."""
+    if not isinstance(core, RestrictedOrderCore):
+        raise TypeError(f"restricted_core_support requires a RestrictedOrderCore, got {type(core).__name__}")
+    s = np.asarray(core.s_true_subset)
+    n, k = s.shape
+    min_denom = n
+    for a in range(k):
+        for b in range(a + 1, k):
+            elig = int(np.count_nonzero(np.abs(s[:, a] - s[:, b]) > _M0B_TIE_ATOL))
+            min_denom = min(min_denom, elig)
+    return account_order_support(core.realized_length, n, min_denom, cell_floor=cell_floor, pair_floor=pair_floor)
+
+
+M0B_SUPPORT_POLICY = {
+    "cell_support_floor": M0B_CELL_SUPPORT_FLOOR,
+    "pair_denom_floor": M0B_PAIR_DENOM_FLOOR,
+    "occupancy_cap_length": M0B_OCCUPANCY_CAP_LENGTH,
+    "occupancy_definition": "distinct_classes / C (C=5); L<5 caps occupancy at L/5",
+    "statuses": [SUPPORT_OK, SUPPORT_STARVED, VACUOUS_ORDER],
+    "discipline": "never-silent: any floor breach => SUPPORT_STARVED with reasons; L<=1 => VACUOUS_ORDER",
+    "scope": "v2 realism/emission order cores only; restricted cores never reach fixed-L certification",
+}
+
+
+def m0b_support_policy_hash() -> str:
+    """Additive identity of the M0b support/min-length policy (folded into the M3a freeze later)."""
+    return canonical_hash(M0B_SUPPORT_POLICY)

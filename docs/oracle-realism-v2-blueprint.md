@@ -46,7 +46,13 @@ as the primary tripwire, and the additive scaffold (no v1 identity moved; indepe
   INTERFACE stub (`463dd88f…`, behaviour forbidden pre-M3a). The umbrella dev-scaffold hash bumped
   INTENTIONALLY `ffb4f3d8… → 704b079a…` (A/D split + corrected certification rationale); boundary + frozen
   v1 identities unmoved.
-- **Next:** step 4 (M0b), then step 5 (full M3a freeze), then step 6 (M2 Option A fit).
+- **Step 4 (M0b support/min-length accounting) — DONE**: `account_order_support` / `restricted_core_support`
+  → `OrderSupportAccounting` with never-silent statuses (`SUPPORTED`/`SUPPORT_STARVED`/`VACUOUS_ORDER`),
+  per-cell + per-pair denominator floors (500), and the L<5 occupancy cap L/5 as an explicit accounting flag;
+  bound into the additive `m0b_support_policy_hash = 876bffb6…`. Restricted cores are classifiable here but
+  still rejected by the certification guard (complementary roles).
+- **Next:** step 5 (full M3a freeze — 6 marginals + S1–S7, identifiability battery, escalation ledger), then
+  step 6 (M2 Option A fit). M3a is the BLOCKING freeze before any M2 fitting.
 
 ## Novelty frame (scout)
 
