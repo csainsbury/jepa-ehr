@@ -32,9 +32,11 @@ V2_LAW_STRUCTURE = {
     "cluster_size_law": "compound_burst_size_distribution",
     "gap_law": "source_positive_gap_distribution",
     "dt0_law": "cluster_size_induced_simultaneity",                             # NOT a widened 0.9-clip grid
-    "join": "sparse_compound_burst_copula",       # only the couplings the cross-statistics can see
+    "join": "variant_selected: A_independent baseline (bound first at M2) | D_copula escalation (new identity)",
+    "variant_selection": "see V2_VARIANT_A_INDEPENDENT / V2_VARIANT_D_COPULA — A and D are DISTINCT identities",
     "order_restriction": "deterministic_restriction_of_canonical_fixed_L_ranking",
-    "certification": "fixed_L (recipe predict_latent is context-only, hard-coded to training L)",
+    "certification": "fixed_L, enforced by assert_canonical_certification_cell (NOT the recipe reshape, which "
+                     "reads item_features via _design); variable length is emission-only",
     "seam": "post_hoc_adapter_only (marks+timestamps); dedicated adapter RNG; never s_true/future_events/nuisance_u",
 }
 
@@ -194,3 +196,72 @@ def v2_certification_boundary_hash() -> str:
     """Additive v2 boundary identity for the fail-hard certification guard. Separate from
     `realism_v2_schema_hash` (unchanged) and from every frozen v1 identity."""
     return canonical_hash(V2_CERTIFICATION_BOUNDARY)
+
+
+# ==================================================================================================
+# Option-A / Option-D identity split (blueprint step 3; Pi P-D-1).
+#
+# The v2 envelope shares ONE marginal schema across both options; the OPTIONS differ ONLY in the join.
+# M2 binds `A_independent` FIRST as a falsifiable baseline. Entering `D_copula` is a controls-driven M3
+# escalation that mints a NEW identity + escalation-ledger entry — never a silent switch. Both are
+# DEVELOPMENT identities (behaviour lands at M2; the FINAL identities are minted at the M3a freeze). This
+# step adds NO sampling law / parameter fit / target comparison — the adapter is an INTERFACE STUB only.
+# ==================================================================================================
+
+# The marginals shared by A and D (the join is the ONLY difference between the options).
+V2_MARGINAL_SCHEMA = {
+    "length_law": "source_conditioned_variable_length_via_order_restriction",
+    "class_law": "dirichlet_multinomial_with_hard_structural_zeros",
+    "cluster_size_law": "compound_burst_size_distribution",
+    "gap_law": "source_positive_gap_distribution",
+    "dt0_law": "cluster_size_induced_simultaneity",
+    "required_sources": list(REQUIRED_SOURCES),
+    "n_classes": ORACLE_ENV_N_CLASSES,
+}
+
+V2_VARIANT_A_INDEPENDENT = {
+    "variant": "A_independent",
+    "join": "independent_source_conditioned_marginals",   # NO cross-item coupling
+    "dependence_params": [],                               # empty by construction — the falsifiable baseline
+    "role": "baseline_bound_first_at_M2",
+}
+
+V2_VARIANT_D_COPULA = {
+    "variant": "D_copula",
+    "join": "sparse_compound_burst_copula",               # only the couplings the cross-statistics can see
+    "dependence_params": ["burst_count_length", "burst_timing", "mark_burst_tie", "cluster_size_mark_diversity"],
+    "role": "controls_driven_escalation_only",
+    "escalation_precondition": "attribution-mapped marginal/cross-stat failure on known-ground-truth controls",
+    "on_escalation": "mint new identity + escalation-ledger entry; re-run the full battery under the cap",
+}
+
+# Adapter INTERFACE stub only — declares the emission seam contract. NO sampling law, fit, or target
+# comparison exists until M2 (and only after the M3a freeze). Emission-side only; certification never sees it.
+V2_ADAPTER_INTERFACE = {
+    "adapter_stub": "realism_v2_adapter_iface_dev",
+    "inputs": ["canonical_full_L_literal_cell", "source_profile", "variant_identity", "frozen_verifier_spec"],
+    "emits": ["marks", "timestamps", "cluster_metadata", "restriction_mask"],
+    "forbidden_pre_m3a": ["sampling_law", "parameter_fit", "target_comparison"],
+    "certification_boundary": "emits only; certification receives unmasked fixed-L cells (see the guard)",
+}
+
+
+def v2_marginal_schema_hash() -> str:
+    """Identity of the marginal schema SHARED by Option A and Option D."""
+    return canonical_hash(V2_MARGINAL_SCHEMA)
+
+
+def v2_variant_identity(variant: str, *, final: bool = False) -> str:
+    """Distinct identity per option. `final=False` (default) is the DEVELOPMENT identity; the FINAL identity
+    (`final=True`) is minted only at the M3a freeze. `A_independent` and `D_copula` NEVER share a hash, and
+    dev never collides with final (Pi P-D-1)."""
+    spec = {"A_independent": V2_VARIANT_A_INDEPENDENT, "D_copula": V2_VARIANT_D_COPULA}.get(variant)
+    if spec is None:
+        raise KeyError(f"unknown v2 variant {variant!r} (expected 'A_independent' or 'D_copula')")
+    return canonical_hash({"marginal_schema": V2_MARGINAL_SCHEMA, "variant_spec": spec,
+                           "stage": "final_m3a" if final else "dev_scaffold"})
+
+
+def v2_adapter_interface_hash() -> str:
+    """Identity of the adapter INTERFACE stub (no behaviour). Bumps when the M2 adapter behaviour lands."""
+    return canonical_hash(V2_ADAPTER_INTERFACE)

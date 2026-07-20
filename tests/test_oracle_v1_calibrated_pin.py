@@ -75,7 +75,8 @@ _FROZEN_IDENTITIES = {
 }
 
 # DEVELOPMENT scaffold identity — explicitly NOT the final frozen M3a verification identity.
-_DEV_SCAFFOLD_HASH = "ffb4f3d8a8b50bd350b46e71994a868fa3795432b4be18513b8a465b5b0c0827"
+# Bumped intentionally at step 3 (A/D identity split + corrected certification rationale); still a dev hash.
+_DEV_SCAFFOLD_HASH = "704b079a6137a9dbadbf9938b031b4af5cedfbaadb81fbfa9d872c6519cd6f85"
 
 
 def _cell_digest(c) -> str:

@@ -35,6 +35,19 @@ as the primary tripwire, and the additive scaffold (no v1 identity moved; indepe
 - **P-D** (M3a): **separate Option-A and Option-D identities** (common marginal schema + distinct
   `A_independent`/`D_copula` hashes; M2 binds A first). See M2/M3a and the nine preconditions.
 
+### Work-order progress (Pi-assented order)
+- **Step 1 (pins) — DONE** (`7df490f`): v1 calibrated-path golden digests (SCID/MIMIC × 5 families × 2
+  nuisance), dev-scaffold pin, frozen-v1-identity asserts.
+- **Step 2 (M0 order-core boundary) — DONE** (`dae191b`): `RestrictedOrderCore`/`restrict_order_core`
+  (emission-free) + `assert_canonical_certification_cell` fail-hard guard at all reference/verdict
+  entrypoints, bound into the additive `v2_certification_boundary_hash = b33c2d9f…`. Full suite 518 passed.
+- **Step 3 (identity split) — DONE**: shared `V2_MARGINAL_SCHEMA` (`9dc5a2ac…`) + distinct dev/final
+  identities `A_independent` (`b299a779…`/`c0d9f136…`) and `D_copula` (`43b55944…`/`4fb65d5e…`), adapter
+  INTERFACE stub (`463dd88f…`, behaviour forbidden pre-M3a). The umbrella dev-scaffold hash bumped
+  INTENTIONALLY `ffb4f3d8… → 704b079a…` (A/D split + corrected certification rationale); boundary + frozen
+  v1 identities unmoved.
+- **Next:** step 4 (M0b), then step 5 (full M3a freeze), then step 6 (M2 Option A fit).
+
 ## Novelty frame (scout)
 
 The contribution is the **frozen-contract semi-synthetic order-recovery oracle with a certified realism
