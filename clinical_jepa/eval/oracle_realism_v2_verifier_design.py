@@ -294,11 +294,10 @@ SOURCE_SWAP = {
 # mapped row; candidate D-recovery (independent impl at 0.5) must PASS the full row. All non-attributed checks +
 # six marginals + S2 + S8 + S9 pass >=24/25 unless listed.
 ABLATION_MATRIX = {
-    "burst_count_length":          {"primary_fail": ["S1_density"], "allowed_sensitive": ["S1_tau"]},
     "burst_timing":                {"primary_fail": ["S3_tau", "S3_loggap"], "allowed_sensitive": []},
     "mark_burst_tie":              {"primary_fail": ["S4_abs"], "allowed_sensitive": ["S7_abs"]},
     "cluster_size_mark_diversity": {"primary_fail": ["S7_abs"], "allowed_sensitive": ["S4_abs"]},
-    "length_class_mix":            {"primary_fail": ["S5_abs", "S6_tv"], "allowed_sensitive": []},
+    "length_class_mix":            {"primary_fail": ["S6_tv"], "allowed_sensitive": []},  # S5 terminal (Pi F2)
 }
 ABLATION_ORIENTATION = {
     "reference": "independent fixture with exactly one component at 0.5",
@@ -335,11 +334,14 @@ FIXTURE_GENERATOR = {
 }
 
 # ============================ 8. identifiability (Pi §4) ============================
+# Identifiability vector = only the D-parameter-sensitive scalars (Pi F1/F2). S1/S2/S5/S8/S9 stay mandatory
+# adequacy checks but are EXCLUDED from the D Jacobian/recovery objective.
+IDENTIFIABILITY_VECTOR = ["S3_tau", "S3_loggap", "S4_abs", "S6_tv", "S7_abs"]
 IDENTIFIABILITY = {
     "param_ranges": {c: [0.0, 0.6] for c in V2_D_COMPONENT_MENU},
     "standardization": "AFFINE range standardization (no logit); NO epsilon clipping (no denominator needs it)",
-    "statistic_vector": "the frozen S1–S7 subcheck scalars (S8/S9 are terminal guards, excluded from the "
-                        "identifiability vector)",
+    "statistic_vector": IDENTIFIABILITY_VECTOR,   # S3_tau/S3_loggap/S4_abs/S6_tv/S7_abs only (Pi); S1/S2/S5/
+                        # S8/S9 remain mandatory adequacy checks but are excluded from the D Jacobian/recovery",
     "whitening_reference": "Sigma estimated at null_independent under CRN (seeds = SIMULATION.seed_list); ridge "
                            "Sigma_lambda = Sigma + 1e-3 * trace(Sigma)/d * I",
     "grid": "3^k joint grid over active components at 0.10/0.35/0.55; nuisance profiles = the exact named list "
@@ -362,17 +364,17 @@ NUISANCE_PROFILES = ["scid_scale_control", "mimic_scale_control", "structural_ze
 # ============================ 9. escalation (Pi §5) ============================
 # CHECK/subcheck -> D components. S2 (cluster-size marginal) and the six marginals + source-swap NEVER trigger
 # D. S8 and S9 are TERMINAL adequacy guards with NO D route.
+# Revised D-eligible map (Pi F1/F2 rulings): S1 (density+tau) and S5 are TERMINAL/structural (no D route);
+# burst_count_length dropped. Every remaining component maps 1:1 from a subcheck.
 CHECK_TO_D_COMPONENTS = {
-    "S1_density": {"components": ["burst_count_length"], "semantics": "single"},
-    "S1_tau":     {"components": ["burst_count_length"], "semantics": "single"},
     "S3_tau":     {"components": ["burst_timing"], "semantics": "single"},
     "S3_loggap":  {"components": ["burst_timing"], "semantics": "single"},
     "S4_abs":     {"components": ["mark_burst_tie"], "semantics": "single"},
-    "S5_abs":     {"components": ["length_class_mix"], "semantics": "single"},
     "S6_tv":      {"components": ["length_class_mix"], "semantics": "single"},
     "S7_abs":     {"components": ["cluster_size_mark_diversity"], "semantics": "single"},
 }
-TERMINAL_CHECKS = ["S2_ks", "S8_density", "S8_class", "S9_zero", "S9_class", "S9_gap",
+TERMINAL_CHECKS = ["S1_density", "S1_tau", "S2_ks", "S5_abs", "S8_density", "S8_class",
+                   "S9_zero", "S9_class", "S9_gap",
                    "length_ks", "class_tv", "count_ks", "occupancy_abs", "delta_t_zero_abs", "positive_gap_ks"]
 ESCALATION = {
     "baseline": "A_independent (bound first at M2)",

@@ -294,8 +294,9 @@ _PER_SEQUENCE = {
     "mark_burst_tie": _couple_mark_burst_tie,
     "cluster_size_mark_diversity": _couple_cluster_size_mark_diversity,
 }
+# burst_count_length is REJECTED as an active D component (Pi F1); its construction is retained above as a
+# historical diagnostic but is NOT dispatched — apply_coupling raises KeyError (it is not in the menu).
 _SAMPLE_LEVEL = {
-    "burst_count_length": _couple_burst_count_length,
     "length_class_mix": _couple_length_class_mix,
 }
 
@@ -324,12 +325,12 @@ COUPLING_IMPL = {
     "strength_range": [0.0, 0.6],
     "rng": "sha256(coupling|component|seed) -> default_rng",
     "exact_invariants": {
-        "burst_count_length": "pooled L multiset + pooled K multiset",
         "burst_timing": "per-sequence positive-gap multiset",
         "mark_burst_tie": "per-sequence class counts",
         "cluster_size_mark_diversity": "per-sequence class counts + cluster sizes",
         "length_class_mix": "pooled class counts",
     },
+    "rejected": {"burst_count_length": "Pi F1 — S1 is structural under the maximal-run law (not separable D)"},
     "empirically_required": "other registered marginals + S2 tested >=24/25; failure => DESIGN FAIL / re-gate",
 }
 

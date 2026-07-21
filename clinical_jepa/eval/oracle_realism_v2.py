@@ -275,10 +275,18 @@ V2_VARIANT_A_INDEPENDENT = {
 }
 
 # D component MENU. Operationally, escalation mints an identity over the exact ACTIVE subset via
-# `v2_active_d_identity` (never the generic all-components identity, Pi). `length_class_mix` is the S5/S6
-# length→composition coupling component.
-V2_D_COMPONENT_MENU = ("burst_count_length", "burst_timing", "mark_burst_tie",
-                       "cluster_size_mark_diversity", "length_class_mix")
+# `v2_active_d_identity` (never the generic all-components identity, Pi). `length_class_mix` is the length→
+# class-mix (S6) coupling component. `burst_count_length` was REJECTED (Pi F1 ruling): under the canonical
+# maximal-run law L, K, and run sizes are structurally linked (baseline tau(L,K)~0.92), so it is not a
+# separable dependence and S1 is a terminal/structural check — see REJECTED_D_COMPONENTS.
+V2_D_COMPONENT_MENU = ("burst_timing", "mark_burst_tie", "cluster_size_mark_diversity", "length_class_mix")
+
+# Components tried and rejected as Option-D knobs (kept as historical diagnostics; NEVER selectable by D).
+REJECTED_D_COMPONENTS = {
+    "burst_count_length": "F1 (Pi): baseline maximal-run process already induces tau(L,K)~0.92; K/L density "
+                          "cannot move without breaking the S2 run-size marginal (K/L/run-size linked). S1 is "
+                          "terminal/structural, not a separable dependence.",
+}
 
 V2_VARIANT_D_COPULA = {
     "variant": "D_copula",

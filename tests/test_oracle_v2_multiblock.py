@@ -72,14 +72,14 @@ class ActiveSetDIdentity(unittest.TestCase):
         self.assertIn("length_class_mix", v2.V2_D_COMPONENT_MENU)
 
     def test_active_sets_are_distinct_and_ordered(self) -> None:
-        a = v2.v2_active_d_identity(["burst_count_length"])
-        b = v2.v2_active_d_identity(["burst_count_length", "length_class_mix"])
+        a = v2.v2_active_d_identity(["burst_timing"])
+        b = v2.v2_active_d_identity(["burst_timing", "length_class_mix"])
         self.assertNotEqual(a, b)
         # order-independent (set semantics)
-        self.assertEqual(v2.v2_active_d_identity(["length_class_mix", "burst_count_length"]), b)
+        self.assertEqual(v2.v2_active_d_identity(["length_class_mix", "burst_timing"]), b)
         # dev != final
-        self.assertNotEqual(v2.v2_active_d_identity(["burst_count_length"]),
-                            v2.v2_active_d_identity(["burst_count_length"], final=True))
+        self.assertNotEqual(v2.v2_active_d_identity(["burst_timing"]),
+                            v2.v2_active_d_identity(["burst_timing"], final=True))
 
     def test_empty_and_unknown_rejected(self) -> None:
         with self.assertRaises(ValueError):

@@ -13,7 +13,7 @@ import unittest
 from clinical_jepa.eval import oracle_realism_v2_fixture as fx
 from clinical_jepa.eval import oracle_realism_v2_coupling as cp
 
-_COUPLING_IMPL_ID = "7e5d34913abe793283864cf727722b1d3587f1cf74c43f167caee11a53895048"
+_COUPLING_IMPL_ID = "cafb239c5625db8efe5f274ac8fe038ca39c74c61ab4257d6d65151a16af22e3"
 _PROF = {"length": {"family": "discretized_lognormal", "mu": log(120), "sigma": 0.9, "min": 1},
          "class_prior": [0.3, 0.25, 0.2, 0.15, 0.1], "structural_zero_classes": [],
          "cluster_size": {"family": "geometric", "p": 0.5},
@@ -55,10 +55,12 @@ class CouplingInvariants(unittest.TestCase):
         for comp in cp.V2_D_COMPONENT_MENU:
             self.assertTrue(_changed(cp.apply_coupling(self.s, comp, 0.5, seed=1), self.s), comp)
 
-    def test_burst_count_length_preserves_L_and_K_multisets(self) -> None:
-        out = cp.apply_coupling(self.s, "burst_count_length", 0.5, seed=1)
-        self.assertTrue(np.array_equal(_pooled_L(out), _pooled_L(self.s)))
-        self.assertTrue(np.array_equal(_pooled_K(out), _pooled_K(self.s)))
+    def test_burst_count_length_rejected_as_D_component(self) -> None:  # Pi F1: dropped from active D
+        from clinical_jepa.eval.oracle_realism_v2 import REJECTED_D_COMPONENTS
+        self.assertIn("burst_count_length", REJECTED_D_COMPONENTS)
+        self.assertNotIn("burst_count_length", cp.V2_D_COMPONENT_MENU)
+        with self.assertRaises(KeyError):
+            cp.apply_coupling(self.s, "burst_count_length", 0.5, seed=1)
 
     def test_burst_timing_preserves_per_sequence_gap_multiset(self) -> None:
         out = cp.apply_coupling(self.s, "burst_timing", 0.5, seed=1)

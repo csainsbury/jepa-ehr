@@ -64,11 +64,10 @@ class CouplingDirection(unittest.TestCase):
         self.assertNotEqual(c["S5_abs"].status, vf.FAIL)           # occupancy NOT moved by class relabel
         self.assertEqual(c["class_tv"].status, vf.PASS)             # pooled class counts exact
 
-    def test_burst_count_length_is_weak_S1_mover(self) -> None:     # finding F1
-        c = self._checks("burst_count_length", 0.6, 7)
-        self.assertNotEqual(c["S1_density"].status, vf.FAIL)       # cannot move without breaking S2
-        self.assertNotEqual(c["S1_tau"].status, vf.FAIL)          # ~no headroom over baseline tau(L,K)~0.92
-        self.assertIn(c["S2_ks"].status, (vf.PASS, vf.NOT_EVALUABLE))
+    def test_burst_count_length_dropped(self) -> None:             # finding F1 -> Pi dropped it (fast, no verifier)
+        self.assertNotIn("burst_count_length", cp.V2_D_COMPONENT_MENU)
+        with self.assertRaises(KeyError):
+            cp.apply_coupling(self.ref, "burst_count_length", 0.6, seed=1)
 
 
 if __name__ == "__main__":
