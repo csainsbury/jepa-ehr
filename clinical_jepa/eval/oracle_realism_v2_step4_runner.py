@@ -32,7 +32,7 @@ CAP = {"workers": 1, "wall_clock_hours": 8, "ram_gb": 32,
 _CLOSURE_MODULES = (
     "oracle_realism_v2", "oracle_realism_v2_fixture", "oracle_realism_v2_verifier",
     "oracle_realism_v2_coupling", "oracle_realism_v2_battery", "oracle_realism_v2_verifier_design",
-    "oracle_contracts",
+    "oracle_realism_v2_identifiability", "oracle_contracts",
 )
 
 
@@ -55,12 +55,14 @@ def _identity_bindings() -> dict:
     from clinical_jepa.eval.oracle_realism_v2_verifier import verifier_impl_identity
     from clinical_jepa.eval.oracle_realism_v2_coupling import coupling_impl_identity
     from clinical_jepa.eval.oracle_realism_v2_verifier_design import m3a_design_dev_hash
+    from clinical_jepa.eval.oracle_realism_v2_identifiability import identifiability_impl_identity
     return {
         "fixture": fixture_impl_identity(),
         "verifier": verifier_impl_identity(),
         "coupling": coupling_impl_identity(),
         "battery": battery_impl_identity(),
         "design": m3a_design_dev_hash(),
+        "identifiability": identifiability_impl_identity(),
         "code_closure": code_closure_identity(),
     }
 
@@ -81,6 +83,7 @@ def build_manifest(*, reviewed_commit: str) -> dict:
         "verdict": {"primary_fail_min": PRIMARY_FAIL_MIN, "specificity_min": SPECIFICITY_MIN,
                     "not_evaluable": "always non-passing", "source_conjunction": True},
         "identifiability_vector": list(IDENTIFIABILITY_VECTOR),
+        "identifiability": _identifiability_binding(),
         "cap": CAP,
         "atomic_result_path": "state/realism-v2/step4/<run_id>/result.json (write-temp-then-rename)",
         "checkpoint": "per (component, source, seed) replicate; deterministic resume by manifest_hash + index",
@@ -88,6 +91,12 @@ def build_manifest(*, reviewed_commit: str) -> dict:
     }
     manifest["manifest_hash"] = canonical_hash({k: v for k, v in manifest.items() if k != "manifest_hash"})
     return manifest
+
+
+def _identifiability_binding() -> dict:
+    from clinical_jepa.eval.oracle_realism_v2_identifiability import cost_forecast, GRID, RANK_MIN
+    return {"grid": list(GRID), "rank_min": RANK_MIN, "cost_forecast": cost_forecast(n=REGISTERED_N),
+            "cap_note": "full grid may exceed the cap => PARTIAL / non-pass / re-gate; never silent reduction"}
 
 
 def verify_identities(manifest: dict) -> dict:

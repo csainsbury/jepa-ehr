@@ -24,7 +24,9 @@ class ManifestBinding(unittest.TestCase):
         self.assertEqual(self.m["seeds"][-1], 1024)
         self.assertEqual(self.m["registered_n"], 4000)
         self.assertEqual(set(self.m["identities"]),
-                         {"fixture", "verifier", "coupling", "battery", "design", "code_closure"})
+                         {"fixture", "verifier", "coupling", "battery", "design", "identifiability", "code_closure"})
+        self.assertIn("identifiability", self.m)
+        self.assertIn("cost_forecast", self.m["identifiability"])
         self.assertEqual(set(self.m["source_profiles"]), {"scid_scale_control", "mimic_scale_control"})
         self.assertEqual(self.m["identifiability_vector"],
                          ["S3_tau", "S3_loggap", "S4_abs", "S6_tv", "S7_abs"])
