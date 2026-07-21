@@ -443,3 +443,45 @@ target," never a joint-process, latent-mechanism, or causal claim.
 Until an M4 pre-registered gate separately passes: `APPROVED_ORACLE_POLICY` empty; aggregate-read policy
 retired; TEST sealed; no sealed certification, oracle-T4 training, manifest issuance, governed T4, or any
 governed aggregate read. The v1 FAIL is never reinterpreted as a pass.
+
+## Step-4 execution-hardening contract (Pi step-4 manifest gate, thread thr-20260720T143304Z)
+
+Pi ACCEPTED: the two-job strategy and registered N=4000 with distinct scid/mimic_scale_control profiles and
+source/role-derived RNG. Pi REVISE (no launch): neither job is executable under the fail-closed contract yet.
+Two reviewed jobs (separate manifest/hash/checkpoint/result, each ≤8 wall-clock h / 1 worker / ≤32 GB; default
+SEQUENTIAL; one job's PASS cannot compensate the other's PARTIAL/FAIL):
+- `m3a-step4-power-v1` (ablation power/controls battery);
+- `m3a-step4-ident-v1` (identifiability battery).
+
+Required before launch:
+1. **Fail-closed manifest verification against a STATIC in-code trust root** (current preflight is fail-OPEN —
+   passes with tampered reviewed_commit/seeds/N): recompute+verify manifest_hash; compare the WHOLE manifest to
+   trusted in-code registered constants (seeds 1000–1024, N=4000, profiles, components, verdict thresholds, cap,
+   RNG derivation, job kind, output schema); verify live git HEAD == reviewed_commit; include the runner + all
+   result/checkpoint helpers in the code closure; after review, pin an exact trusted manifest hash per job (any
+   other refuses). Do not treat an arbitrary reviewed_commit as its own trust root.
+2. **Real runner behavior** (not a dict return): wall-clock (time.monotonic) + RSS enforcement at deterministic
+   replicate boundaries; per-replicate checkpoint/resume; atomic result writing; env/runtime/denominator-map
+   files + hashes; partial-state persistence; output-path derivation; the full 25-seed
+   null/boundary/structural-zero/source-swap execution; cap-exceed or resumed identity mismatch → atomic
+   PARTIAL/non-pass. Preserve+serialize `CheckResult.detail` per replicate (`_status_map` currently discards it,
+   so the denominator-map hash cannot be produced).
+3. **Full power/control verdict** executed over 25 seeds: primary FAIL ≥20/25, non-attributed PASS ≥24/25,
+   repeatability PASS ≥24/25, null PASS ≥24/25 — each PER CHECK, per source; exact boundary expected-status map
+   (NOT_EVALUABLE where predeclared, PASS elsewhere — not either/or); structural-zero absence + required PASS;
+   source-swap non-degenerate rate + explicit no-D; conjunction across distinct sources; report per-check
+   PASS/FAIL/NOT_EVALUABLE counts. Use canonical hashed control profiles (no duplicated local dicts).
+4. **Benchmark-bound forecast** (record benchmark commit/profile/N/event-cluster-pair counts/elapsed/hardware;
+   derive per-job forecast from volume — a prose estimate is not a manifest field).
+5. **Full identifiability runner** (module is machinery only): grid generation/eval + persisted vectors; exact
+   seed aggregation; STRICT 25-row null covariance (do NOT silently drop NOT_EVALUABLE rows / proceed with 2);
+   whitening APPLIED to nearest-grid recovery; held-out recovery decisions + recovery-tolerance verdict; a FIXED
+   collision tolerance vector aligned to (S3_tau,S3_loggap,S4_abs,S6_tv,S7_abs) = [0.05, log 1.10, 0.03, 0.05,
+   0.03]; per-profile/source rank conjunction; cap/checkpoint/result; exact NOT_EVALUABLE behavior. **Nuisance
+   profiles: SCID scale, MIMIC scale, AND structural-zero (3, not the silently-used 2); boundary-short stays a
+   terminal support control (its stats can be NOT_EVALUABLE), NOT a Jacobian nuisance.** Bind the 3-profile
+   choice into BOTH design and impl identities. Fix cost forecast to include the seed multiplier.
+
+Then route both exact manifest hashes + CLI commands + adversarial tests + mechanical dry-run artifacts; only
+then may launch be authorized (no further scientific redesign). M3a final review occurs after BOTH complete
+result packages. Stop line unchanged: no launch, no freeze, no M2.
