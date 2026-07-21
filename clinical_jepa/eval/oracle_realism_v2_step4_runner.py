@@ -32,7 +32,8 @@ CAP = {"workers": 1, "wall_clock_hours": 8, "ram_gb": 32,
 _CLOSURE_MODULES = (
     "oracle_realism_v2", "oracle_realism_v2_fixture", "oracle_realism_v2_verifier",
     "oracle_realism_v2_coupling", "oracle_realism_v2_battery", "oracle_realism_v2_verifier_design",
-    "oracle_realism_v2_identifiability", "oracle_realism_v2_step4_runner", "oracle_contracts",
+    "oracle_realism_v2_identifiability", "oracle_realism_v2_step4_runner", "oracle_realism_v2_step4_exec",
+    "oracle_contracts",
 )
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
@@ -205,21 +206,19 @@ def _registered_forecast_sampler():
     return registered_base_sampler(n=REGISTERED_N)
 
 
-def run_full_battery(manifest: dict, *, run_id: str):
-    """The actual registered step-4 run (guarded). NOT invoked in step 3; runs only after Pi approves the
-    manifest + dry-run. Fail-closed identity check, then the full 25-seed source-conjunction rate battery under
-    the cap; a cap-exceed or identity mismatch returns a NON-passing PARTIAL result. Left unbound here on
-    purpose — launched by the reviewed step-4 job, not by import."""
-    v = verify_manifest(manifest, require_git_head=True)
-    if not v["ok"]:
-        return {"run_id": run_id, "status": "REFUSED", "reason": "manifest verification failed",
-                "problems": v["problems"]}
-    base = registered_base_sampler(n=manifest["registered_n"])
-    rates = rate_battery(manifest["components"], manifest["seeds"], base_sampler=base,
-                         source_profiles=tuple(manifest["source_profiles"]))
-    conj = all(rates[c]["verdict"]["conjunctive_pass"] for c in manifest["components"])
-    return {"run_id": run_id, "status": "PASS" if conj else "FAIL", "rates": rates,
-            "reviewed_commit": manifest["reviewed_commit"], "manifest_hash": manifest["manifest_hash"]}
+def run_full_battery(manifest: dict, *, run_id: str, out_base: str):
+    """The actual registered power/control run (guarded — launched only by the reviewed step-4 job, not by
+    import). Delegates to the fail-closed execution engine: manifest verification (git HEAD on), then the full
+    25-seed source-conjunction battery + controls under the cap, with per-replicate checkpoint/resume, atomic
+    result writing, and persisted denominator/runtime hashes. A cap-exceed or resume mismatch yields
+    NON-passing PARTIAL."""
+    from clinical_jepa.eval.oracle_realism_v2_step4_exec import execute
+    return execute(manifest, run_id, out_base,
+                   base_sampler=registered_base_sampler(n=manifest["registered_n"]),
+                   seeds=manifest["seeds"], sources=tuple(manifest["source_profiles"]),
+                   components=manifest["components"],
+                   cap_hours=manifest["cap"]["wall_clock_hours"], cap_gb=manifest["cap"]["ram_gb"],
+                   verify=lambda mm: verify_manifest(mm, require_git_head=True))
 
 
 def env_hash() -> str:
