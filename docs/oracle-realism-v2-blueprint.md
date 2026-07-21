@@ -485,3 +485,47 @@ Required before launch:
 Then route both exact manifest hashes + CLI commands + adversarial tests + mechanical dry-run artifacts; only
 then may launch be authorized (no further scientific redesign). M3a final review occurs after BOTH complete
 result packages. Stop line unchanged: no launch, no freeze, no M2.
+
+## Step-4 LAUNCH re-gate (Pi, thread thr-20260720T143304Z) — REVISE, launch NOT authorized
+
+Two-job/sequential strategy still approved in principle; 62 tests pass; strict null covariance, 3-profile
+nuisance, fixed tolerance vector all accepted. But the execution route does not yet meet its advertised trust
+root / evidence / cap contract. Announced manifest hashes did NOT reproduce at a clean HEAD (my build used a
+working tree whose code_closure differed) — the fix is a pinned approved hash, not recompute-and-self-authorize.
+
+Required before launch (final pre-launch commit):
+1. **Whole-manifest STATIC trust root + policy-data approval map.** verify_manifest checks selected fields only
+   (omitted fields runner_version/stratum_allocation/identifiability/atomic_result_path/checkpoint/
+   completion_hashes can be modified + hash recomputed and still pass). Reconstruct the COMPLETE expected
+   manifest from trusted constants and require DEEP EQUALITY (reject missing AND extra fields). Add a SEPARATE
+   policy-data trust root (EXCLUDED from the code closure, like the aggregate-read policy) holding the exact
+   full commit, exact manifest hash, job kind, approved run ID, gate event; reject any job/hash/run-ID not in
+   it. Bind the identifiability structured-computation params (ref_seed=1000, heldout_seed=1024, cov seeds,
+   grid, rank points) IN the manifest — no caller override.
+2. **Output path / run ID.** Derive output root internally from repo + approved run ID (e.g.
+   `m3a-step4-power-v1-run1`); strict safe regex + realpath containment under `state/realism-v2/step4/`; no
+   caller-selected out_base. Each entrypoint requires its EXACT job kind (power ≠ ident).
+3. **Persist full evidence.** `_status_value_detail` is unused; replicates serialize only status strings.
+   Persist full CheckResult records (values/thresholds/candidate+reference denominators/retained-coarsened
+   bins/S9 KS/status) for candidate A, repeatability, null, controls. Implement the promised separate
+   `result_sha256`/`runtime_json_sha256`/`env_sha256` (or drop the promise); `denominator_map_sha256` is
+   currently a hash of status records only — misnamed.
+4. **Verdict diagnostics.** Persist per-check known-profile PASS/FAIL/NOT_EVALUABLE rates + NE counts (not an
+   all-check boolean). Generic controls run once per source over the SAME MIMIC data — do not present them as
+   independent source conjunctions; make boundary/structural-zero source-specific with source-derived seeds OR
+   register once as global controls excluded from conjunction. Source-swap is one MIMIC negative control.
+5. **Cumulative cap.** `t0` resets each invocation => resume grants a fresh 8h. Persist cumulative monotonic
+   elapsed in checkpoint; add prior on resume; check cap BEFORE and AFTER every unit AND before PASS issuance;
+   persist cap/RSS evidence in final + PARTIAL; include job kind/run ID in checkpoint identity. Identifiability:
+   add checkpoint/cap boundaries INSIDE covariance seeds / grid points / held-out points / rank evals (a
+   profile is too large a unit).
+6. **Identifiability evidence.** Persist/hash the strict covariance + whitening matrix; per-rank-point singular
+   values/ratios; each recovery truth/prediction/error + failed settings; collision pairs + raw diff vectors;
+   exact grid theta ordering + vector hashes; any NOT_EVALUABLE location/reason.
+7. **Benchmark wording.** Rename the "hardware" hash `environment_hash` (it covers Python/NumPy/SciPy) or add
+   real CPU/RAM/OS/worker info.
+8. **Adversarial tests:** omitted-field tampering, extra fields, cross-job manifest use, path traversal,
+   resume-cap accumulation, final-unit overrun.
+
+Then populate the two policy-data approvals only AFTER the revised hashes get PASS. Default sequential launch.
+Stop line unchanged: no launch, no freeze, no M2.
