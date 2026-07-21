@@ -88,10 +88,15 @@ def _identity_bindings() -> dict:
     }
 
 
-def build_manifest(*, reviewed_commit: str) -> dict:
-    """Bind the full step-4 run contract. `reviewed_commit` is the git commit this run is authorised against."""
+def build_manifest(*, reviewed_commit: str, job_kind: str = "m3a-step4-power-v1") -> dict:
+    """Bind ONE step-4 JOB's run contract (Pi §6). `job_kind` is one of TRUSTED_JOB_KINDS; the two jobs
+    (power / ident) get DISTINCT manifest hashes and separate checkpoints/results. `reviewed_commit` is the git
+    commit this run is authorised against."""
+    if job_kind not in TRUSTED_JOB_KINDS:
+        raise ValueError(f"unknown job_kind {job_kind!r}; expected one of {TRUSTED_JOB_KINDS}")
     manifest = {
         "runner_version": RUNNER_VERSION,
+        "job_kind": job_kind,
         "reviewed_commit": reviewed_commit,
         "identities": _identity_bindings(),
         "source_profiles": {sp: canonical_hash(PROFILES[sp]) for sp in SOURCE_PROFILES},
@@ -162,6 +167,8 @@ def verify_manifest(manifest: dict, *, require_git_head: bool = True) -> dict:
         problems.append("rng_derivation")
     if manifest.get("identifiability_vector") != list(IDENTIFIABILITY_VECTOR):
         problems.append("identifiability_vector")
+    if manifest.get("job_kind") not in TRUSTED_JOB_KINDS:
+        problems.append("job_kind")
     # (c) git HEAD == reviewed commit (short or full)
     if require_git_head:
         head = _git_head()
@@ -236,6 +243,27 @@ def run_full_identifiability(manifest: dict, *, run_id: str, out_base: str):
                                    cov_seeds=manifest["seeds"],
                                    cap_hours=manifest["cap"]["wall_clock_hours"], cap_gb=manifest["cap"]["ram_gb"],
                                    verify=lambda mm: verify_manifest(mm, require_git_head=True))
+
+
+def benchmark(*, source_profile: str = "mimic_scale_control", seed: int = 1000) -> dict:
+    """§4 benchmark-BOUND forecast evidence: record the benchmark commit + hardware, the DETERMINISTIC
+    event/cluster/adjacent-pair volume at N per source, and a MEASURED seconds-per-verifier-call. The per-job
+    wall-clock forecast is then derived from volume x measured rate (a prose estimate is not a manifest field).
+    Timing is evidence, routed alongside the manifest — NOT hashed into the trusted manifest."""
+    import time
+    from clinical_jepa.eval.oracle_realism_v2_verifier import sequence_route_checks, marginal_route_checks
+    base = registered_base_sampler(n=REGISTERED_N)
+    vol = {}
+    for sp in SOURCE_PROFILES:
+        s = base(sp, seed, "benchmark")
+        vol[sp] = {"n": len(s), "events": int(sum(r.L_total for r in s)),
+                   "clusters": int(sum(r.K for r in s)), "adjacent_pairs": int(sum(max(0, r.K - 1) for r in s))}
+    ref = base(source_profile, seed, "benchmark"); cand = base(source_profile, seed + 1, "benchmark")
+    t0 = time.monotonic(); sequence_route_checks(cand, ref); marginal_route_checks(cand, ref)
+    secs = round(time.monotonic() - t0, 2)
+    return {"git_head": _git_head(), "hardware": env_hash(), "registered_n": REGISTERED_N,
+            "volume_per_source": vol, "benchmark_source": source_profile,
+            "seconds_per_verifier_call": secs}
 
 
 def env_hash() -> str:

@@ -42,6 +42,17 @@ class ManifestBinding(unittest.TestCase):
         m3 = rn.build_manifest(reviewed_commit="other")
         self.assertNotEqual(self.m["manifest_hash"], m3["manifest_hash"])   # commit is bound
 
+    def test_two_jobs_distinct_and_job_kind_verified(self) -> None:  # Pi §6
+        power = rn.build_manifest(reviewed_commit="c", job_kind="m3a-step4-power-v1")
+        ident = rn.build_manifest(reviewed_commit="c", job_kind="m3a-step4-ident-v1")
+        self.assertEqual(power["job_kind"], "m3a-step4-power-v1")
+        self.assertNotEqual(power["manifest_hash"], ident["manifest_hash"])   # distinct job hashes
+        with self.assertRaises(ValueError):
+            rn.build_manifest(reviewed_commit="c", job_kind="bogus")
+        # verify refuses a tampered job_kind
+        bad = dict(power, job_kind="bogus")
+        self.assertIn("job_kind", rn.verify_manifest(bad, require_git_head=False)["problems"])
+
 
 class FailClosedVerify(unittest.TestCase):
     def test_verify_ok_against_trust_root(self) -> None:
@@ -64,6 +75,17 @@ class FailClosedVerify(unittest.TestCase):
     def test_runner_in_code_closure(self) -> None:
         self.assertIn("oracle_realism_v2_step4_runner", rn._CLOSURE_MODULES)
         self.assertEqual(rn.code_closure_identity(), rn.code_closure_identity())
+
+
+class Benchmark(unittest.TestCase):
+    def test_benchmark_binds_volume_time_hardware(self) -> None:  # Pi §4
+        b = rn.benchmark()
+        for k in ("git_head", "hardware", "registered_n", "volume_per_source", "seconds_per_verifier_call"):
+            self.assertIn(k, b)
+        self.assertEqual(set(b["volume_per_source"]), {"scid_scale_control", "mimic_scale_control"})
+        for v in b["volume_per_source"].values():
+            self.assertGreater(v["events"], v["n"])              # forecast scales by event volume, not N
+        self.assertGreater(b["seconds_per_verifier_call"], 0.0)
 
 
 class DryRun(unittest.TestCase):
