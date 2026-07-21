@@ -170,39 +170,64 @@ def _couple_mark_burst_tie(rec, s, rng):
 # ==================================================================================================
 # cluster_size_mark_diversity — per-seq class counts + cluster sizes preserved; couple diversity to size
 # ==================================================================================================
+def _quartile_of(rec) -> np.ndarray:
+    return np.minimum(3, (rec.positions * 4).astype(int))
+
+
 def _diversity_target(rec) -> np.ndarray:
-    """Target labels (permutation of the multiset): LARGE clusters made monochromatic (low diversity), SMALL
-    clusters made maximally diverse (distinct labels). Reassigns labels across clusters; cluster sizes and
-    per-sequence counts preserved => couples class diversity to cluster SIZE (S7)."""
-    counts = np.bincount(rec.class_ids, minlength=C).astype(int)
+    """POSITION-BALANCED target labels (Pi F3): relabelling is constrained WITHIN each sequence x canonical
+    position quartile, preserving the exact C=5 class-count vector in every quartile (=> S8_class invariant by
+    construction) while, within that constraint, concentrating LARGE clusters / diversifying SMALL clusters
+    (=> couples class diversity to cluster SIZE, S7). Clusters spanning a quartile boundary are handled
+    per-segment (each item assigned by its own quartile)."""
     runs = _runs(rec)
     med = float(np.median(runs)) if runs.size else 1.0
+    quart = _quartile_of(rec)
     target = np.full(rec.L_total, -1, dtype=int)
-    # SMALL clusters first: spread distinct labels; then LARGE clusters: fill monochromatic
-    for big in (False, True):
-        clusters = [c for c in range(rec.K) if (runs[c] >= med) == big]
-        for c in clusters:
-            pos = np.where(rec.cluster_ids == c)[0]; need = pos.shape[0]
-            if not big:                                    # diversify: cycle distinct available labels
-                filled = 0
-                while filled < need:
-                    avail = [cl for cl in np.argsort(-counts) if counts[cl] > 0]
-                    for cl in avail:
-                        if filled >= need:
-                            break
-                        target[pos[filled]] = cl; counts[cl] -= 1; filled += 1
-            else:                                          # concentrate: whole cluster one label if possible
-                filled = 0
-                while filled < need:
-                    cl = int(np.argmax(counts)); take = min(need - filled, counts[cl])
-                    target[pos[filled:filled + take]] = cl; counts[cl] -= take; filled += take
+    for qi in range(4):
+        qmask = quart == qi
+        if not qmask.any():
+            continue
+        counts = np.bincount(rec.class_ids[qmask], minlength=C).astype(int)   # this quartile's own multiset
+        # cluster segments intersecting this quartile, big (concentrate) after small (diversify)
+        segs = []
+        for c in range(rec.K):
+            seg = np.where(qmask & (rec.cluster_ids == c))[0]
+            if seg.shape[0] > 0:
+                segs.append((runs[c] >= med, seg))
+        for big in (False, True):
+            for is_big, seg in [(b, s) for (b, s) in segs if b == big]:
+                need = seg.shape[0]; filled = 0
+                if not big:                                # diversify: cycle distinct available labels
+                    while filled < need:
+                        for cl in [x for x in np.argsort(-counts) if counts[x] > 0]:
+                            if filled >= need:
+                                break
+                            target[seg[filled]] = cl; counts[cl] -= 1; filled += 1
+                else:                                      # concentrate: whole segment one label if possible
+                    while filled < need:
+                        cl = int(np.argmax(counts)); take = min(need - filled, counts[cl])
+                        target[seg[filled:filled + take]] = cl; counts[cl] -= take; filled += take
     return target
 
 
 def _couple_cluster_size_mark_diversity(rec, s, rng):
     if rec.K < 1 or rec.L_total < 2:
         return rec
-    sigma = _perm_from_target(rec.class_ids, _diversity_target(rec))
+    quart = _quartile_of(rec)
+    target = _diversity_target(rec)
+    # build sigma WITHIN each quartile so cycle-activation never moves labels across quartiles => per-quartile
+    # class counts are preserved at EVERY strength (S8_class invariant by construction).
+    sigma = np.arange(rec.L_total)
+    for qi in range(4):
+        qidx = np.where(quart == qi)[0]
+        if qidx.size == 0:
+            continue
+        o = rec.class_ids[qidx]; t = target[qidx]
+        local = np.empty(qidx.size, dtype=int)
+        for cl in range(C):
+            local[np.where(t == cl)[0]] = np.where(o == cl)[0]
+        sigma[qidx] = qidx[local]
     new_labels = rec.class_ids[_activate(sigma, s, rng)]
     return derive_record(rec.source, new_labels, rec.timestamps.copy())
 
@@ -327,7 +352,8 @@ COUPLING_IMPL = {
     "exact_invariants": {
         "burst_timing": "per-sequence positive-gap multiset",
         "mark_burst_tie": "per-sequence class counts",
-        "cluster_size_mark_diversity": "per-sequence class counts + cluster sizes",
+        "cluster_size_mark_diversity": "per-sequence x position-QUARTILE class counts + cluster sizes "
+                                       "(position-balanced; S8_class invariant by construction, Pi F3)",
         "length_class_mix": "pooled class counts",
     },
     "rejected": {"burst_count_length": "Pi F1 — S1 is structural under the maximal-run law (not separable D)"},

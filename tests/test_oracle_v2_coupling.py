@@ -13,7 +13,7 @@ import unittest
 from clinical_jepa.eval import oracle_realism_v2_fixture as fx
 from clinical_jepa.eval import oracle_realism_v2_coupling as cp
 
-_COUPLING_IMPL_ID = "cafb239c5625db8efe5f274ac8fe038ca39c74c61ab4257d6d65151a16af22e3"
+_COUPLING_IMPL_ID = "839204245178abe069b6d4f959600054d4474d2cf71df809fb1e9fae695ee85c"
 _PROF = {"length": {"family": "discretized_lognormal", "mu": log(120), "sigma": 0.9, "min": 1},
          "class_prior": [0.3, 0.25, 0.2, 0.15, 0.1], "structural_zero_classes": [],
          "cluster_size": {"family": "geometric", "p": 0.5},

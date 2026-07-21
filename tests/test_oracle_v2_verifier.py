@@ -14,7 +14,7 @@ import unittest
 from clinical_jepa.eval import oracle_realism_v2_fixture as fx
 from clinical_jepa.eval import oracle_realism_v2_verifier as vf
 
-_VERIFIER_IMPL_ID = "952f3477035871401b2b9bc99043669e9ba980f5456633b95231cf65c3186099"
+_VERIFIER_IMPL_ID = "7e97bf3712618fb896da243cc4be583526ff51307ff58a81ecabb69f12305dcb"
 
 
 def _profile(mu, gap_mu=log(1.2)):

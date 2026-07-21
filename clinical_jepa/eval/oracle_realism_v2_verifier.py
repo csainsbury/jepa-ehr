@@ -365,30 +365,40 @@ def _quartile(pos):
 
 
 def s8(cand, ref) -> dict:
+    """WITHIN-SEQUENCE CENTERED phase profile (Pi F3 ruling): each sequence's quartile class vector / cluster
+    density is centered by the sequence's OWN whole-sequence value, so S8 measures PHASE nonstationarity and
+    does NOT conflate permitted global/length-conditioned movement. Terminal (no D route)."""
     def per_q(sample):
-        dens = [[] for _ in range(4)]; vecs = [[] for _ in range(4)]; items = [0, 0, 0, 0]
+        vecs = [[] for _ in range(4)]; dens = [[] for _ in range(4)]; items = [0, 0, 0, 0]; seqs = [0, 0, 0, 0]
         for r in sample:
             q = _quartile(r.positions)
             starts = np.concatenate([[True], np.diff(r.cluster_ids) == 1]) if r.L_total > 1 else np.array([True])
+            p_i = np.bincount(r.class_ids, minlength=C) / r.L_total     # whole-sequence class vector
+            base_i = r.K / r.L_total                                    # whole-sequence cluster density
             for qi in range(4):
                 m = q == qi
                 n = int(m.sum())
                 if n > 0:
-                    items[qi] += n
-                    dens[qi].append(float(starts[m].sum()) / n)
-                    vecs[qi].append(np.bincount(r.class_ids[m], minlength=C) / n)
-        return dens, vecs, items
-    dc, vc, ic = per_q(cand); dr, vr, ir = per_q(ref)
+                    items[qi] += n; seqs[qi] += 1
+                    vecs[qi].append(np.bincount(r.class_ids[m], minlength=C) / n - p_i)          # phase class
+                    dens[qi].append(float(starts[m].sum()) / n - base_i)                         # phase density
+        return dens, vecs, items, seqs
+    dc, vc, ic, sc = per_q(cand); dr, vr, ir, sr = per_q(ref)
     ddiffs = []; cdiffs = []
     for qi in range(4):
-        if (len(dc[qi]) < FLOOR or len(dr[qi]) < FLOOR or ic[qi] < FLOOR or ir[qi] < FLOOR):
-            res = CheckResult("S8", NOT_EVALUABLE, None, _OCC, {"reason": f"quartile {qi} floor"})
-            return {"S8_density": res, "S8_class": dataclasses.replace(res, name="S8_class", threshold=_TV)}
-        ddiffs.append(abs(float(np.mean(dc[qi])) - float(np.mean(dr[qi]))))
-        cdiffs.append(0.5 * float(np.sum(np.abs(np.mean(vc[qi], axis=0) - np.mean(vr[qi], axis=0)))))
+        if (sc[qi] < FLOOR or sr[qi] < FLOOR or ic[qi] < FLOOR or ir[qi] < FLOOR):
+            res = CheckResult("S8", NOT_EVALUABLE, None, _OCC,
+                              {"reason": f"quartile {qi} floor", "seq_cand": sc[qi], "seq_ref": sr[qi],
+                               "items_cand": ic[qi], "items_ref": ir[qi]})
+            return {"S8_density": dataclasses.replace(res, name="S8_density"),
+                    "S8_class": dataclasses.replace(res, name="S8_class", threshold=_TV)}
+        ddiffs.append(abs(float(np.mean(dc[qi])) - float(np.mean(dr[qi]))))                       # |Δ mean phase density|
+        cdiffs.append(0.5 * float(np.sum(np.abs(np.mean(vc[qi], axis=0) - np.mean(vr[qi], axis=0)))))  # L1 phase-vec Δ
     dv, cv = float(max(ddiffs)), float(max(cdiffs))
-    return {"S8_density": CheckResult("S8_density", PASS if dv <= _OCC else FAIL, dv, _OCC, {"terminal": True}),
-            "S8_class": CheckResult("S8_class", PASS if cv <= _TV else FAIL, cv, _TV, {"terminal": True})}
+    det = {"terminal": True, "centered": "within-sequence phase", "per_quartile_density": [round(x, 5) for x in ddiffs],
+           "per_quartile_class": [round(x, 5) for x in cdiffs]}
+    return {"S8_density": CheckResult("S8_density", PASS if dv <= _OCC else FAIL, dv, _OCC, det),
+            "S8_class": CheckResult("S8_class", PASS if cv <= _TV else FAIL, cv, _TV, det)}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -498,6 +508,8 @@ VERIFIER_IMPL = {
     },
     "source_partition": "every sequence-route entry point rejects mixed/mismatched sources (MixedSourceError); "
                         "candidate/reference denominators reported in each CheckResult.detail",
+    "S8_construct": "within-sequence CENTERED phase profile (Pi F3): quartile class vector / cluster density "
+                    "centered by the sequence's own whole-sequence value; measures phase, not global movement",
     "S9_emits": ["ks_within_cand", "ks_within_ref", "ks_cross_seam", "ks_cross_nonseam"],
     "terminal_no_D": ["S1_density", "S1_tau", "S2_ks", "S5_abs", "S8_density", "S8_class",
                       "S9_zero", "S9_class", "S9_gap"],

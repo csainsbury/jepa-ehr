@@ -132,12 +132,15 @@ S_ALGORITHMS = {
            "subchecks": {"S7_abs": {"abs": _OCC}},
            "floors": ["eligible_sequences>=500 per retained cluster-size bin", "clusters>=500"],
            "notes": "equal-SEQUENCE weighting (not raw cluster-count weighting)"},
-    "S8": {"def": "by canonical half-open position quartile: cluster density = cluster-starts/items; and 5-class "
-                  "mix; per-seq then equal-weight eligible seqs",
+    "S8": {"def": "WITHIN-SEQUENCE CENTERED phase profile (Pi F3): per canonical half-open position quartile, "
+                  "phase_class = quartile 5-class vector - whole-sequence 5-class vector; phase_density = "
+                  "quartile cluster-starts/items - whole-sequence K/L; equal-weight eligible sequences; "
+                  "S8_class = max_q 0.5*||mean phase_class diff||_1; S8_density = max_q |mean phase_density diff|",
            "subchecks": {"S8_density": {"abs": _OCC}, "S8_class": {"tv": _TV}},
            "floors": ["items>=500 per quartile", "eligible_sequences>=500 per quartile"],
            "escalation": "TERMINAL / out-of-model — NOT a D route (Pi §5)",
-           "notes": "position quartiles are NEVER coarsened; missing phase support => NOT_EVALUABLE"},
+           "notes": "position quartiles are NEVER coarsened; missing phase support => NOT_EVALUABLE; centering "
+                    "removes stationary global/length-conditioned class movement so S8 measures PHASE"},
     "S9": {"def": "block-seam invisibility at 8-item seams; per-eligible-sequence seam/nonseam probabilities "
                   "then equal-weight sequences",
            "subchecks": {
