@@ -47,6 +47,25 @@ class CheckResult:
     detail: dict = dataclasses.field(default_factory=dict)
 
 
+class MixedSourceError(ValueError):
+    """A sequence-route sample mixed sources, or candidate/reference sources did not match."""
+
+
+def _sample_source(sample, which: str) -> str:
+    srcs = {r.source for r in sample}
+    if len(srcs) != 1:
+        raise MixedSourceError(f"{which} sample mixes sources {sorted(srcs)}; the sequence route is per-source")
+    return next(iter(srcs))
+
+
+def _validate_sources(cand, ref) -> str:
+    """Reject mixed/mismatched sources at every sequence-route entry point (Pi). Returns the shared source."""
+    sc, sr = _sample_source(cand, "candidate"), _sample_source(ref, "reference")
+    if sc != sr:
+        raise MixedSourceError(f"candidate source {sc!r} != reference source {sr!r}")
+    return sc
+
+
 def _bin_index(v: int, bins) -> int | None:
     for i, (lo, hi) in enumerate(bins):
         if v >= lo and (hi is None or v <= hi):
@@ -83,22 +102,32 @@ def _grouped(per_bin_values: list[list[float]], groups) -> list[np.ndarray]:
     return out
 
 
-def _conditional_maxbin(name, cand_per_bin, ref_per_bin, bins, threshold, *, reducer):
-    """Generic conditional check: coarsen on reference sequence-counts, refuse on candidate floor breach, then
-    max-group |reducer(cand) - reducer(ref)| vs threshold. `*_per_bin` are lists (len=#bins) of per-sequence
-    value arrays."""
+def _conditional_maxbin(name, cand_per_bin, ref_per_bin, bins, threshold, *, reducer,
+                        cand_extra=None, ref_extra=None, extra_label="unit"):
+    """Generic conditional check: coarsen on reference SEQUENCE-counts, refuse on any floor breach (sequences,
+    and the optional secondary `extra` unit — pairs/clusters — PER retained group, for BOTH samples), then
+    max-group |reducer(cand) - reducer(ref)| vs threshold. Reports candidate/reference denominators."""
     ref_counts = np.asarray([len(v) for v in ref_per_bin])
     groups = coarsen_reference(ref_counts)
     if groups is None:
         return CheckResult(name, NOT_EVALUABLE, None, threshold, {"reason": "reference coarsening refused"})
     cand_g = _grouped(cand_per_bin, groups)
     ref_g = _grouped(ref_per_bin, groups)
-    if any(len(v) < FLOOR for v in cand_g) or any(len(v) < FLOOR for v in ref_g):
-        return CheckResult(name, NOT_EVALUABLE, None, threshold, {"reason": "floor breach under reference map"})
+    seq_c = [len(v) for v in cand_g]; seq_r = [len(v) for v in ref_g]
+    detail = {"n_groups": len(groups), "seq_cand": seq_c, "seq_ref": seq_r}
+    if any(v < FLOOR for v in seq_c) or any(v < FLOOR for v in seq_r):
+        return CheckResult(name, NOT_EVALUABLE, None, threshold, {**detail, "reason": "sequence floor under map"})
+    if cand_extra is not None:
+        ex_c = [int(sum(cand_extra[i] for i in g)) for g in groups]
+        ex_r = [int(sum(ref_extra[i] for i in g)) for g in groups]
+        detail[f"{extra_label}_cand"] = ex_c; detail[f"{extra_label}_ref"] = ex_r
+        if any(v < FLOOR for v in ex_c) or any(v < FLOOR for v in ex_r):
+            return CheckResult(name, NOT_EVALUABLE, None, threshold,
+                               {**detail, "reason": f"{extra_label} floor under map"})
     diffs = [abs(reducer(c) - reducer(r)) for c, r in zip(cand_g, ref_g)]
     val = float(max(diffs))
     return CheckResult(name, PASS if val <= threshold else FAIL, val, threshold,
-                       {"n_groups": len(groups), "per_group": [round(d, 5) for d in diffs]})
+                       {**detail, "per_group": [round(d, 5) for d in diffs]})
 
 
 # --------------------------------------------------------------------------------------------------
@@ -140,12 +169,17 @@ def s1(cand, ref) -> dict:
         L = np.asarray([r.L_total for r in sample], float); K = np.asarray([r.K for r in sample], float)
         t, _ = kendalltau(L, K)
         return t
-    tc, tr = tau(cand), tau(ref)
-    if not (np.isfinite(tc) and np.isfinite(tr)):
-        tau_res = CheckResult("S1_tau", NOT_EVALUABLE, None, _TAU, {"reason": "undefined tau"})
+    if len(cand) < FLOOR or len(ref) < FLOOR:            # source-level sequence floor
+        tau_res = CheckResult("S1_tau", NOT_EVALUABLE, None, _TAU,
+                              {"reason": "source-level sequence floor", "seq_cand": len(cand), "seq_ref": len(ref)})
     else:
-        v = abs(float(tc) - float(tr))
-        tau_res = CheckResult("S1_tau", PASS if v <= _TAU else FAIL, v, _TAU, {})
+        tc, tr = tau(cand), tau(ref)
+        if not (np.isfinite(tc) and np.isfinite(tr)):
+            tau_res = CheckResult("S1_tau", NOT_EVALUABLE, None, _TAU, {"reason": "undefined tau"})
+        else:
+            v = abs(float(tc) - float(tr))
+            tau_res = CheckResult("S1_tau", PASS if v <= _TAU else FAIL, v, _TAU,
+                                  {"seq_cand": len(cand), "seq_ref": len(ref)})
     return {"S1_density": dens, "S1_tau": tau_res}
 
 
@@ -156,8 +190,12 @@ def s2(cand, ref) -> dict:
     def seq_ecdfs(sample):
         return [np.sort(_runs(r)) for r in sample if r.L_total >= 1]
     ec, er = seq_ecdfs(cand), seq_ecdfs(ref)
+    clus_c = int(sum(s.shape[0] for s in ec)); clus_r = int(sum(s.shape[0] for s in er))
+    dn = {"seq_cand": len(ec), "seq_ref": len(er), "clusters_cand": clus_c, "clusters_ref": clus_r}
     if len(ec) < FLOOR or len(er) < FLOOR:
-        return {"S2_ks": CheckResult("S2_ks", NOT_EVALUABLE, None, _KS, {"reason": "sequence floor"})}
+        return {"S2_ks": CheckResult("S2_ks", NOT_EVALUABLE, None, _KS, {**dn, "reason": "sequence floor"})}
+    if clus_c < FLOOR or clus_r < FLOOR:                  # cluster floor, both samples (Pi)
+        return {"S2_ks": CheckResult("S2_ks", NOT_EVALUABLE, None, _KS, {**dn, "reason": "cluster floor"})}
     support = np.unique(np.concatenate([np.concatenate(ec), np.concatenate(er)]))
 
     def meanF(ecdfs, x):
@@ -166,8 +204,7 @@ def s2(cand, ref) -> dict:
     Fc = np.asarray([meanF(ec, x) for x in support])
     Fr = np.asarray([meanF(er, x) for x in support])
     v = float(np.max(np.abs(Fc - Fr)))
-    return {"S2_ks": CheckResult("S2_ks", PASS if v <= _KS else FAIL, v, _KS,
-                                 {"n_clusters_cand": int(sum(s.shape[0] for s in ec))})}
+    return {"S2_ks": CheckResult("S2_ks", PASS if v <= _KS else FAIL, v, _KS, dn)}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -175,7 +212,7 @@ def s2(cand, ref) -> dict:
 # --------------------------------------------------------------------------------------------------
 def s3(cand, ref) -> dict:
     def per_bin_logmean(sample):
-        pb = [[] for _ in CLUSTER_BINS]
+        pb = [[] for _ in CLUSTER_BINS]; pairs = [0 for _ in CLUSTER_BINS]   # adjacent-cluster pairs per bin
         for r in sample:
             g, ps = _positive_gaps_and_prev_size(r)
             if g.shape[0] == 0:
@@ -184,10 +221,12 @@ def s3(cand, ref) -> dict:
             for b in range(len(CLUSTER_BINS)):
                 mask = np.asarray([_bin_index(int(s), CLUSTER_BINS) == b for s in ps])
                 if mask.any():
-                    pb[b].append(float(np.mean(lg[mask])))
-        return pb
-    loggap = _conditional_maxbin("S3_loggap", per_bin_logmean(cand), per_bin_logmean(ref), CLUSTER_BINS,
-                                 _LOGGAP, reducer=lambda v: float(np.mean(v)))
+                    pb[b].append(float(np.mean(lg[mask]))); pairs[b] += int(mask.sum())
+        return pb, pairs
+    cpb, cpr = per_bin_logmean(cand); rpb, rpr = per_bin_logmean(ref)
+    loggap = _conditional_maxbin("S3_loggap", cpb, rpb, CLUSTER_BINS, _LOGGAP,
+                                 reducer=lambda v: float(np.mean(v)),
+                                 cand_extra=cpr, ref_extra=rpr, extra_label="adj_pairs")
 
     def per_seq_tau(sample):
         taus = []
@@ -227,17 +266,26 @@ def _s4_contrast(rec):
         adj_same += int(np.sum(a * b))
     if same_pairs == 0 or adj_pairs == 0:
         return None
-    return (same_same / same_pairs) - (adj_same / adj_pairs)
+    return (same_same / same_pairs) - (adj_same / adj_pairs), same_pairs, adj_pairs
 
 
 def s4(cand, ref) -> dict:
     def vals(sample):
-        return np.asarray([x for x in (_s4_contrast(r) for r in sample) if x is not None])
-    vc, vr = vals(cand), vals(ref)
+        contrasts, sp, ap = [], 0, 0
+        for r in sample:
+            x = _s4_contrast(r)
+            if x is not None:
+                contrasts.append(x[0]); sp += x[1]; ap += x[2]
+        return np.asarray(contrasts), sp, ap
+    vc, spc, apc = vals(cand); vr, spr, apr = vals(ref)
+    dn = {"seq_cand": vc.shape[0], "seq_ref": vr.shape[0], "same_pairs_cand": spc, "same_pairs_ref": spr,
+          "adj_pairs_cand": apc, "adj_pairs_ref": apr}
     if vc.shape[0] < FLOOR or vr.shape[0] < FLOOR:
-        return {"S4_abs": CheckResult("S4_abs", NOT_EVALUABLE, None, _OCC, {"reason": "eligible-sequence floor"})}
+        return {"S4_abs": CheckResult("S4_abs", NOT_EVALUABLE, None, _OCC, {**dn, "reason": "eligible-sequence floor"})}
+    if min(spc, spr) < FLOOR or min(apc, apr) < FLOOR:    # same-cluster + adjacent-cluster pair floors (Pi)
+        return {"S4_abs": CheckResult("S4_abs", NOT_EVALUABLE, None, _OCC, {**dn, "reason": "pair floor"})}
     v = abs(float(np.mean(vc)) - float(np.mean(vr)))
-    return {"S4_abs": CheckResult("S4_abs", PASS if v <= _OCC else FAIL, v, _OCC, {})}
+    return {"S4_abs": CheckResult("S4_abs", PASS if v <= _OCC else FAIL, v, _OCC, dn)}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -290,7 +338,7 @@ def s6(cand, ref) -> dict:
 # --------------------------------------------------------------------------------------------------
 def s7(cand, ref) -> dict:
     def per_bin_div(sample):
-        pb = [[] for _ in CLUSTER_BINS]
+        pb = [[] for _ in CLUSTER_BINS]; clus = [0 for _ in CLUSTER_BINS]   # clusters per bin
         for r in sample:
             by_bin = [[] for _ in CLUSTER_BINS]
             for c in range(r.K):
@@ -301,9 +349,12 @@ def s7(cand, ref) -> dict:
             for b in range(len(CLUSTER_BINS)):
                 if by_bin[b]:
                     pb[b].append(float(np.mean(by_bin[b])))     # within-seq average clusters in bin
-        return pb
-    return {"S7_abs": _conditional_maxbin("S7_abs", per_bin_div(cand), per_bin_div(ref), CLUSTER_BINS,
-                                          _OCC, reducer=lambda v: float(np.mean(v)))}
+                    clus[b] += len(by_bin[b])
+        return pb, clus
+    cpb, cc = per_bin_div(cand); rpb, rc = per_bin_div(ref)
+    return {"S7_abs": _conditional_maxbin("S7_abs", cpb, rpb, CLUSTER_BINS, _OCC,
+                                          reducer=lambda v: float(np.mean(v)),
+                                          cand_extra=cc, ref_extra=rc, extra_label="clusters")}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -378,18 +429,26 @@ def s9(cand, ref) -> dict:
                 "S9_gap": dataclasses.replace(r0, name="S9_gap", threshold=_KS)}
     zv = abs(float(np.mean(zc)) - float(np.mean(zr)))
     cv = abs(float(np.mean(cc)) - float(np.mean(cr)))
-    gap_ok = (ks_2samp(sgc, ngc).statistic <= _KS and ks_2samp(sgr, ngr).statistic <= _KS
-              and max(ks_2samp(sgc, sgr).statistic, ks_2samp(ngc, ngr).statistic) <= _KS)
-    gv = float(max(ks_2samp(sgc, sgr).statistic, ks_2samp(ngc, ngr).statistic))
+    ks_within_cand = float(ks_2samp(sgc, ngc).statistic)     # seam vs nonseam WITHIN candidate
+    ks_within_ref = float(ks_2samp(sgr, ngr).statistic)      # seam vs nonseam WITHIN reference
+    ks_cross_seam = float(ks_2samp(sgc, sgr).statistic)      # candidate vs reference on seam gaps
+    ks_cross_non = float(ks_2samp(ngc, ngr).statistic)       # candidate vs reference on nonseam gaps
+    gap_ok = max(ks_within_cand, ks_within_ref, ks_cross_seam, ks_cross_non) <= _KS
+    gv = float(max(ks_within_cand, ks_within_ref, ks_cross_seam, ks_cross_non))
+    gap_detail = {"terminal": True, "ks_within_cand": round(ks_within_cand, 5),
+                  "ks_within_ref": round(ks_within_ref, 5), "ks_cross_seam": round(ks_cross_seam, 5),
+                  "ks_cross_nonseam": round(ks_cross_non, 5), "seam_adj_cand": sa, "seam_adj_ref": sar,
+                  "nonseam_adj_cand": na, "nonseam_adj_ref": nar}
     return {"S9_zero": CheckResult("S9_zero", PASS if zv <= _OCC else FAIL, zv, _OCC, {"terminal": True}),
             "S9_class": CheckResult("S9_class", PASS if cv <= _OCC else FAIL, cv, _OCC, {"terminal": True}),
-            "S9_gap": CheckResult("S9_gap", PASS if gap_ok else FAIL, gv, _KS, {"terminal": True})}
+            "S9_gap": CheckResult("S9_gap", PASS if gap_ok else FAIL, gv, _KS, gap_detail)}
 
 
 # --------------------------------------------------------------------------------------------------
 # six registered marginals (AggregateStats route) — exact v1 estimands
 # --------------------------------------------------------------------------------------------------
 def marginal_route_checks(cand, ref) -> dict:
+    _validate_sources(cand, ref)             # reject mixed/mismatched sources at the entry point
     out = {}
     out["length_ks"] = _ks_check("length_ks", reg_lengths(cand), reg_lengths(ref), _KS)
     out["count_ks"] = _ks_check("count_ks", reg_cluster_counts(cand), reg_cluster_counts(ref), _KS)
@@ -415,6 +474,7 @@ def _ks_check(name, a, b, thr):
 
 
 def sequence_route_checks(cand, ref) -> dict:
+    _validate_sources(cand, ref)             # reject mixed/mismatched sources at the entry point
     out = {}
     for fn in (s1, s2, s3, s4, s5, s6, s7, s8, s9):
         out.update(fn(cand, ref))
@@ -429,7 +489,20 @@ VERIFIER_IMPL = {
     "thresholds": {"ks": _KS, "tv": _TV, "abs": _OCC, "dt0": _DT0, "tau": _TAU, "loggap": round(_LOGGAP, 6)},
     "floor": FLOOR, "min_bins": MIN_BINS, "scored_on": "candidate - reference; per-sequence equal-weight",
     "coarsening": "reference-only 6-step; candidate floor breach => NOT_EVALUABLE",
-    "terminal_no_D": ["S2_ks", "S8_density", "S8_class", "S9_zero", "S9_class", "S9_gap"],
+    "floor_units": {
+        "S1_tau": "source-level sequences", "S2_ks": "sequences + clusters (both samples)",
+        "S3": "eligible sequences + adjacent-cluster pairs PER retained bin (both samples)",
+        "S4_abs": "eligible sequences + same-cluster pairs + adjacent-cluster pairs (both samples)",
+        "S7_abs": "eligible sequences + clusters PER retained bin (both samples)",
+        "S8": "items + sequences per quartile", "S9": "sequences + seam/nonseam adjacencies + positive gaps",
+    },
+    "source_partition": "every sequence-route entry point rejects mixed/mismatched sources (MixedSourceError); "
+                        "candidate/reference denominators reported in each CheckResult.detail",
+    "S9_emits": ["ks_within_cand", "ks_within_ref", "ks_cross_seam", "ks_cross_nonseam"],
+    "terminal_no_D": ["S1_density", "S1_tau", "S2_ks", "S5_abs", "S8_density", "S8_class",
+                      "S9_zero", "S9_class", "S9_gap"],
+    "two_route_boundary": "registered marginals on AggregateStats route; S-stats on SequenceSample route; "
+                          "no S-statistic reconstruction from spent aggregates",
 }
 
 

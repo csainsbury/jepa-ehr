@@ -14,7 +14,7 @@ import unittest
 from clinical_jepa.eval import oracle_realism_v2_fixture as fx
 from clinical_jepa.eval import oracle_realism_v2_verifier as vf
 
-_VERIFIER_IMPL_ID = "902f230b8313d9d7854cd51f45d18a2f2bb08214a093df5a1a2aea2bf0b92136"
+_VERIFIER_IMPL_ID = "952f3477035871401b2b9bc99043669e9ba980f5456633b95231cf65c3186099"
 
 
 def _profile(mu, gap_mu=log(1.2)):
@@ -91,7 +91,8 @@ class VerifierIdentity(unittest.TestCase):
     def test_impl_identity_pinned(self) -> None:
         self.assertEqual(vf.verifier_impl_identity(), _VERIFIER_IMPL_ID)
         self.assertIn("S9_gap", vf.VERIFIER_IMPL["terminal_no_D"])
-        self.assertNotIn("S1_density", vf.VERIFIER_IMPL["terminal_no_D"])
+        self.assertIn("S1_density", vf.VERIFIER_IMPL["terminal_no_D"])   # S1 terminal (Pi F1)
+        self.assertIn("S5_abs", vf.VERIFIER_IMPL["terminal_no_D"])       # S5 terminal (Pi F2)
 
 
 if __name__ == "__main__":
