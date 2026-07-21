@@ -44,24 +44,33 @@ class ManifestBinding(unittest.TestCase):
 
 
 class FailClosedVerify(unittest.TestCase):
-    def test_verify_ok_and_tamper_refuses(self) -> None:
+    def test_verify_ok_against_trust_root(self) -> None:
         m = rn.build_manifest(reviewed_commit="c")
-        self.assertTrue(rn.verify_identities(m)["ok"])
-        m2 = dict(m, identities=dict(m["identities"], verifier="deadbeef"))
-        v = rn.verify_identities(m2)
-        self.assertFalse(v["ok"])
-        self.assertIn("verifier", v["mismatches"])
+        self.assertTrue(rn.verify_manifest(m, require_git_head=False)["ok"])   # fields match the trust root
 
-    def test_code_closure_identity_stable(self) -> None:
+    def test_tampered_fields_refuse(self) -> None:  # the old fail-OPEN reproductions must now refuse (Pi §1)
+        m = rn.build_manifest(reviewed_commit="c")
+        m2 = dict(m, seeds=[1], registered_n=1)
+        v = rn.verify_manifest(m2, require_git_head=False)
+        self.assertFalse(v["ok"])
+        self.assertIn("seeds", v["problems"]); self.assertIn("registered_n", v["problems"])
+        # tampered identity
+        m3 = dict(m, identities=dict(m["identities"], verifier="deadbeef"))
+        self.assertFalse(rn.verify_manifest(m3, require_git_head=False)["ok"])
+        # arbitrary reviewed_commit is NOT its own trust root: git-head check refuses a bogus commit
+        self.assertIn("reviewed_commit_vs_git_head",
+                      rn.verify_manifest(rn.build_manifest(reviewed_commit="evil"))["problems"])
+
+    def test_runner_in_code_closure(self) -> None:
+        self.assertIn("oracle_realism_v2_step4_runner", rn._CLOSURE_MODULES)
         self.assertEqual(rn.code_closure_identity(), rn.code_closure_identity())
 
 
 class DryRun(unittest.TestCase):
     def test_mechanical_dry_run(self) -> None:
         m = rn.build_manifest(reviewed_commit="c")
-        d = rn.dry_run(m, n=600, seeds=(1000,), components=["burst_timing"])
-        self.assertFalse(d["refused"])
-        self.assertIn("burst_timing", d["ablation"])
+        d = rn.dry_run(m, n=600, seeds=(1000,), components=["burst_timing"], require_git_head=False)
+        self.assertFalse(d["refused"], d.get("problems"))
         self.assertTrue(d["ablation"]["burst_timing"]["A_fails_primary"])
         self.assertTrue(d["ablation"]["burst_timing"]["known_profile_repeatability"])
         for c in ("null", "boundary", "structural_zero", "source_swap"):
@@ -71,9 +80,8 @@ class DryRun(unittest.TestCase):
     def test_dry_run_refuses_on_mismatch(self) -> None:
         m = rn.build_manifest(reviewed_commit="c")
         m2 = dict(m, identities=dict(m["identities"], fixture="deadbeef"))
-        d = rn.dry_run(m2, n=200)
+        d = rn.dry_run(m2, n=200, require_git_head=False)
         self.assertTrue(d["refused"])
-        self.assertEqual(d["reason"], "identity mismatch")
 
 
 if __name__ == "__main__":

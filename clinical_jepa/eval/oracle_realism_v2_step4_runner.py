@@ -32,8 +32,28 @@ CAP = {"workers": 1, "wall_clock_hours": 8, "ram_gb": 32,
 _CLOSURE_MODULES = (
     "oracle_realism_v2", "oracle_realism_v2_fixture", "oracle_realism_v2_verifier",
     "oracle_realism_v2_coupling", "oracle_realism_v2_battery", "oracle_realism_v2_verifier_design",
-    "oracle_realism_v2_identifiability", "oracle_contracts",
+    "oracle_realism_v2_identifiability", "oracle_realism_v2_step4_runner", "oracle_contracts",
 )
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+
+def _git_head() -> str | None:
+    import subprocess
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=_REPO_ROOT, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+# STATIC in-code trust root: a manifest is trusted ONLY if the WHOLE thing matches these registered constants
+# (never caller-supplied fields). Any deviation refuses (Pi §1 — the old preflight was fail-OPEN).
+TRUSTED_JOB_KINDS = ("m3a-step4-power-v1", "m3a-step4-ident-v1")
+_TRUSTED_VERDICT = {"primary_fail_min": PRIMARY_FAIL_MIN, "specificity_min": SPECIFICITY_MIN,
+                    "not_evaluable": "always non-passing", "source_conjunction": True}
+_TRUSTED_RNG = {"fixture": "(source,profile,replicate_seed,role)",
+                "coupling": "(source,component,replicate_seed,role)"}
 
 
 def code_closure_identity() -> str:
@@ -100,23 +120,63 @@ def _identifiability_binding() -> dict:
 
 
 def verify_identities(manifest: dict) -> dict:
-    """FAIL-CLOSED pre-flight: recompute every bound identity and compare. Any mismatch => refuse."""
+    """Identity sub-check: recompute every bound identity + source-profile hash and compare (fail-closed)."""
     live = _identity_bindings()
-    mism = {k: {"manifest": manifest["identities"][k], "live": live[k]}
-            for k in manifest["identities"] if manifest["identities"][k] != live[k]}
-    for sp, h in manifest["source_profiles"].items():
-        if canonical_hash(PROFILES[sp]) != h:
-            mism[f"profile:{sp}"] = {"manifest": h, "live": canonical_hash(PROFILES[sp])}
+    mism = {k: {"manifest": manifest["identities"].get(k), "live": live[k]}
+            for k in live if manifest["identities"].get(k) != live[k]}
+    for sp in SOURCE_PROFILES:
+        if manifest.get("source_profiles", {}).get(sp) != canonical_hash(PROFILES[sp]):
+            mism[f"profile:{sp}"] = {"manifest": manifest.get("source_profiles", {}).get(sp),
+                                     "live": canonical_hash(PROFILES[sp])}
     return {"ok": not mism, "mismatches": mism}
 
 
-def dry_run(manifest: dict, *, n: int = 600, seeds=(1000,), components=None) -> dict:
-    """Small MECHANICAL dry-run proving the pipeline end-to-end WITHOUT the full grid. Fail-closed identity
-    check first; then one small-N ablation + the four controls; returns statuses + a volume forecast. This is
-    what is routed to Pi for approval; it does NOT establish power (that is the full registered run)."""
-    v = verify_identities(manifest)
+def verify_manifest(manifest: dict, *, require_git_head: bool = True) -> dict:
+    """FAIL-CLOSED preflight against the STATIC in-code trust root (Pi §1). Verifies the WHOLE manifest —
+    manifest_hash integrity, every registered field against trusted constants, identities, and (optionally) that
+    live git HEAD equals the reviewed commit. ANY deviation refuses. Caller-supplied fields are NEVER trusted."""
+    problems = []
+    # (a) manifest_hash integrity
+    recomputed = canonical_hash({k: v for k, v in manifest.items() if k != "manifest_hash"})
+    if manifest.get("manifest_hash") != recomputed:
+        problems.append("manifest_hash")
+    # (b) whole manifest vs trusted registered constants
+    if manifest.get("seeds") != list(SEEDS):
+        problems.append("seeds")
+    if manifest.get("registered_n") != REGISTERED_N:
+        problems.append("registered_n")
+    if manifest.get("components") != list(V2_D_COMPONENT_MENU):
+        problems.append("components")
+    if set(manifest.get("source_profiles", {})) != set(SOURCE_PROFILES):
+        problems.append("source_profiles")
+    if manifest.get("verdict") != _TRUSTED_VERDICT:
+        problems.append("verdict")
+    if manifest.get("cap") != CAP:
+        problems.append("cap")
+    if manifest.get("rng_derivation") != _TRUSTED_RNG:
+        problems.append("rng_derivation")
+    if manifest.get("identifiability_vector") != list(IDENTIFIABILITY_VECTOR):
+        problems.append("identifiability_vector")
+    # (c) git HEAD == reviewed commit (short or full)
+    if require_git_head:
+        head = _git_head()
+        rc = str(manifest.get("reviewed_commit", ""))
+        if not head or not rc or not (head == rc or head.startswith(rc)):
+            problems.append("reviewed_commit_vs_git_head")
+    # (d) identities + source-profile hashes
+    idv = verify_identities(manifest)
+    if not idv["ok"]:
+        problems.append("identities")
+    return {"ok": not problems, "problems": problems, "identity_mismatches": idv["mismatches"]}
+
+
+def dry_run(manifest: dict, *, n: int = 600, seeds=(1000,), components=None, require_git_head: bool = True) -> dict:
+    """Small MECHANICAL dry-run proving the pipeline end-to-end WITHOUT the full grid. FAIL-CLOSED manifest
+    verification first (whole manifest vs trust root); then one small-N ablation + the four controls; returns
+    statuses + a volume forecast. It does NOT establish power (that is the full registered run)."""
+    v = verify_manifest(manifest, require_git_head=require_git_head)
     if not v["ok"]:
-        return {"refused": True, "reason": "identity mismatch", "mismatches": v["mismatches"]}
+        return {"refused": True, "reason": "manifest verification failed", "problems": v["problems"]}
     base = _smoke_sampler(n)
     comps = components or [V2_D_COMPONENT_MENU[0]]
     abl = {}
@@ -150,9 +210,10 @@ def run_full_battery(manifest: dict, *, run_id: str):
     manifest + dry-run. Fail-closed identity check, then the full 25-seed source-conjunction rate battery under
     the cap; a cap-exceed or identity mismatch returns a NON-passing PARTIAL result. Left unbound here on
     purpose — launched by the reviewed step-4 job, not by import."""
-    v = verify_identities(manifest)
+    v = verify_manifest(manifest, require_git_head=True)
     if not v["ok"]:
-        return {"run_id": run_id, "status": "REFUSED", "reason": "identity mismatch", "mismatches": v["mismatches"]}
+        return {"run_id": run_id, "status": "REFUSED", "reason": "manifest verification failed",
+                "problems": v["problems"]}
     base = registered_base_sampler(n=manifest["registered_n"])
     rates = rate_battery(manifest["components"], manifest["seeds"], base_sampler=base,
                          source_profiles=tuple(manifest["source_profiles"]))
