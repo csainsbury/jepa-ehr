@@ -16,13 +16,15 @@ grid runs only under the reviewed step-4 job.
 """
 from __future__ import annotations
 
+from math import log
+
 import numpy as np
 
 from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_realism_v2 import V2_D_COMPONENT_MENU
 from clinical_jepa.eval.oracle_realism_v2_coupling import apply_coupling
 from clinical_jepa.eval.oracle_realism_v2_verifier import sequence_route_checks, NOT_EVALUABLE
-from clinical_jepa.eval.oracle_realism_v2_verifier_design import IDENTIFIABILITY_VECTOR
+from clinical_jepa.eval.oracle_realism_v2_verifier_design import IDENTIFIABILITY_VECTOR, IDENTIFIABILITY_NUISANCE
 
 COMPONENTS = tuple(V2_D_COMPONENT_MENU)                    # 4 D params, composition order
 D_VECTOR = tuple(IDENTIFIABILITY_VECTOR)                   # 5 sensitive scalars
@@ -32,7 +34,10 @@ FD_STEP = 0.02
 RIDGE = 1e-3
 RANK_MIN = 1e-3                                            # sigma_min / sigma_max
 RECOVER_TOL = 0.05 * (PARAM_RANGE[1] - PARAM_RANGE[0])    # 0.03 of the raw range
-NUISANCE_PROFILES = ("scid_scale_control", "mimic_scale_control")
+# 3-profile Jacobian nuisance (Pi §5); boundary-short is a terminal support control, not a grid nuisance.
+NUISANCE_PROFILES = tuple(IDENTIFIABILITY_NUISANCE)
+# FIXED raw collision tolerance vector aligned to D_VECTOR (S3_tau,S3_loggap,S4_abs,S6_tv,S7_abs), Pi §5.
+ACCEPT_TOL = np.asarray([0.05, log(1.10), 0.03, 0.05, 0.03])
 
 
 def _cseed(component, tag) -> int:
@@ -71,13 +76,13 @@ def f_theta(theta, *, base_sampler, source_profile, seed):
 
 
 def null_covariance(base_sampler, seeds, *, source_profile):
-    """Ridge-regularised covariance of the 5-vector under NULL (theta=0) replicates (Pi)."""
+    """STRICT ridge-regularised covariance of the 5-vector under NULL (theta=0) replicates (Pi §5): EVERY seed
+    must evaluate — any NOT_EVALUABLE row => None (the profile is non-pass, never silently dropped)."""
     zero = {c: 0.0 for c in COMPONENTS}
-    rows = [v for v in (f_theta(zero, base_sampler=base_sampler, source_profile=source_profile, seed=s)
-                        for s in seeds) if v is not None]
-    X = np.asarray(rows)
-    if X.shape[0] < 2:
+    rows = [f_theta(zero, base_sampler=base_sampler, source_profile=source_profile, seed=s) for s in seeds]
+    if any(r is None for r in rows) or len(rows) < 2:
         return None
+    X = np.asarray(rows)
     Sigma = np.cov(X, rowvar=False)
     d = Sigma.shape[0]
     return Sigma + RIDGE * (np.trace(Sigma) / d) * np.eye(d)
@@ -117,38 +122,61 @@ def standardized_rank(J, Sigma_lambda):
             "rank_ok": ratio >= RANK_MIN}
 
 
-def nearest_grid_recovery(vec, grid_thetas, grid_vectors):
-    """Deterministic nearest-grid recovery on the whitened-L2 objective (lexicographic menu-order tie-break)."""
+def whitening_matrix(Sigma_lambda):
+    """Sigma_lambda^{-1/2} (symmetric) — the whitening applied to BOTH the query and grid vectors in recovery."""
+    w, V = np.linalg.eigh(Sigma_lambda)
+    return V @ np.diag(1.0 / np.sqrt(np.maximum(w, 1e-12))) @ V.T
+
+
+def nearest_grid_recovery(vec, grid_thetas, grid_vectors, *, W=None):
+    """Deterministic nearest-grid recovery under the WHITENED-L2 objective (W = whitening_matrix; identity if
+    None). Lexicographic menu-order tie-break. The whitening is APPLIED to the query and grid vectors (Pi §5)."""
+    qv = vec if W is None else W @ vec
     best = None
     for gt, gv in zip(grid_thetas, grid_vectors):
-        d = float(np.sum((vec - gv) ** 2))
-        key = (d,) + tuple(gt[c] for c in COMPONENTS)      # tie-break by lowest L2 then menu-order theta
+        d = float(np.sum((qv - (gv if W is None else W @ gv)) ** 2))
+        key = (d,) + tuple(gt[c] for c in COMPONENTS)      # tie-break by lowest whitened-L2 then menu-order theta
         if best is None or key < best[0]:
             best = (key, gt)
     return best[1]
 
 
-def collision_search(grid_thetas, grid_vectors, *, accept_tol):
-    """Two settings separated beyond RECOVER_TOL COLLIDE iff all cross-stat diffs stay within accept_tol."""
+def recovered_within_tol(true_theta, rec_theta) -> bool:
+    """A recovery succeeds iff every component is within RECOVER_TOL of the true setting (Pi recovery verdict)."""
+    return all(abs(true_theta[c] - rec_theta[c]) <= RECOVER_TOL for c in COMPONENTS)
+
+
+def collision_search(grid_thetas, grid_vectors, *, accept_tol=None):
+    """Two settings separated beyond RECOVER_TOL COLLIDE iff EVERY cross-stat diff stays within the FIXED
+    ACCEPT_TOL vector (aligned to D_VECTOR). Returns the colliding pairs."""
+    tol = ACCEPT_TOL if accept_tol is None else np.asarray(accept_tol)
     collisions = []
     for i in range(len(grid_thetas)):
         for j in range(i + 1, len(grid_thetas)):
             sep = max(abs(grid_thetas[i][c] - grid_thetas[j][c]) for c in COMPONENTS)
-            if sep > RECOVER_TOL and np.all(np.abs(grid_vectors[i] - grid_vectors[j]) <= accept_tol):
+            if sep > RECOVER_TOL and np.all(np.abs(grid_vectors[i] - grid_vectors[j]) <= tol):
                 collisions.append((grid_thetas[i], grid_thetas[j]))
     return collisions
 
 
-def cost_forecast(n=4000, *, seconds_per_eval=None) -> dict:
-    """The full grid is 3^4 x nuisance-profiles x seeds; each f-eval is one verifier call at N. Report the eval
-    count so the runner can compare to the cap (may exceed => PARTIAL/re-gate, never silent reduction)."""
+def cost_forecast(n=4000, *, cov_seeds=25, ref_seeds=1, heldout_seeds=1, rank_points=3,
+                  seconds_per_eval=None) -> dict:
+    """Structural forecast matching the runner (seeds replicate where they actually multiply, Pi §5): null
+    covariance = cov_seeds x nuisance; grid vectors = grid_points x (ref+heldout) x nuisance; Jacobian rank =
+    rank_points x (2*k) x nuisance. A NAIVE seeds-at-every-grid-point cross would be far larger and over cap —
+    the runner never does that; if the structural forecast still exceeds the cap it returns PARTIAL/re-gate."""
     grid_points = len(GRID) ** len(COMPONENTS)            # 81
-    # jacobian at each grid point costs ~2 evals per component (8) + the point itself
-    evals = grid_points * len(NUISANCE_PROFILES) * (1 + 2 * len(COMPONENTS))
-    return {"grid_points": grid_points, "nuisance_profiles": len(NUISANCE_PROFILES),
-            "f_evals_full_grid": evals, "n_per_eval": n,
+    k, nuis = len(COMPONENTS), len(NUISANCE_PROFILES)
+    cov = cov_seeds * nuis
+    grid = grid_points * (ref_seeds + heldout_seeds) * nuis
+    jac = rank_points * (2 * k) * nuis
+    evals = cov + grid + jac
+    naive = grid_points * nuis * (1 + 2 * k) * cov_seeds  # the infeasible naive cross, for contrast
+    return {"grid_points": grid_points, "nuisance_profiles": nuis, "cov_seeds": cov_seeds,
+            "f_evals": {"null_covariance": cov, "grid_vectors": grid, "jacobian_rank": jac, "total": evals},
+            "naive_cross_evals": naive, "n_per_eval": n,
             "est_wall_hours": None if seconds_per_eval is None else round(evals * seconds_per_eval / 3600, 1),
-            "note": "if > cap => PARTIAL / non-pass / re-gate; do NOT silently reduce the grid"}
+            "note": "structural runner cost; if total > cap => PARTIAL / non-pass / re-gate (no silent reduction)"}
 
 
 IDENTIFIABILITY_IMPL = {
@@ -161,11 +189,16 @@ IDENTIFIABILITY_IMPL = {
     "ridge": RIDGE,
     "rank_min": RANK_MIN,
     "recover_tol": RECOVER_TOL,
-    "nuisance_profiles": list(NUISANCE_PROFILES),
+    "nuisance_profiles": list(NUISANCE_PROFILES),          # 3 (SCID/MIMIC/structural-zero); no boundary-short
+    "accept_tol": [round(float(x), 6) for x in ACCEPT_TOL],
     "fd_rule": "central CRN interior; forward one-sided at 0.0; backward one-sided at 0.60",
     "rank_rule": "standardized (null-covariance-whitened) Jacobian sigma_min/sigma_max >= 1e-3",
-    "recovery": "deterministic nearest-grid, whitened-L2, lexicographic menu-order tie-break",
-    "collision": "sep > recover_tol AND all cross-stat diffs <= accept_tol",
+    "null_covariance": "STRICT: every seed must evaluate; any NOT_EVALUABLE row => profile non-pass",
+    "recovery": "deterministic nearest-grid, whitening APPLIED to query+grid vectors, menu-order tie-break; "
+                "recovered iff every component within recover_tol",
+    "collision": "sep > recover_tol AND every cross-stat diff <= FIXED accept_tol vector",
+    "cost_forecast": "structural: null_cov(cov_seeds x nuis) + grid((ref+heldout) x 81 x nuis) + "
+                     "jac(rank_points x 2*4 x nuis); naive seeds-at-every-grid cross is over cap",
     "cap_behaviour": "grid may exceed cap => PARTIAL / non-pass / re-gate; never silent reduction",
 }
 

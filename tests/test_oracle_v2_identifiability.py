@@ -12,7 +12,7 @@ import unittest
 from clinical_jepa.eval import oracle_realism_v2_identifiability as idf
 from clinical_jepa.eval import oracle_realism_v2_battery as bat
 
-_IMPL_ID = "b81baac98da76e6810243ac7aad98d76bdc8232042b4191470f262556e730c0a"
+_IMPL_ID = "01a3df7e87a7d3bd5ea87b49aa528a31d8124a5a09da5ece10969b9df4370dd1"
 
 
 class FrozenParams(unittest.TestCase):
@@ -55,10 +55,19 @@ class PureNumerics(unittest.TestCase):
         distinct = [np.zeros(5), np.full(5, 1.0)]
         self.assertFalse(idf.collision_search(far, distinct, accept_tol=0.01))
 
-    def test_cost_forecast(self) -> None:
-        f = idf.cost_forecast(seconds_per_eval=8.6)
+    def test_frozen_nuisance_and_accept_tol(self) -> None:
+        self.assertEqual(idf.NUISANCE_PROFILES,
+                         ("scid_scale_control", "mimic_scale_control", "structural_zero_control"))  # 3, no boundary
+        import numpy as np
+        self.assertTrue(np.allclose(idf.ACCEPT_TOL, [0.05, np.log(1.10), 0.03, 0.05, 0.03]))
+
+    def test_cost_forecast_structural(self) -> None:
+        f = idf.cost_forecast(cov_seeds=25, ref_seeds=1, heldout_seeds=1, rank_points=3)
         self.assertEqual(f["grid_points"], 81)
-        self.assertEqual(f["f_evals_full_grid"], 81 * 2 * (1 + 2 * 4))
+        self.assertEqual(f["nuisance_profiles"], 3)
+        # structural: null_cov(25*3) + grid(81*2*3) + jac(3*8*3) = 75 + 486 + 72 = 633
+        self.assertEqual(f["f_evals"]["total"], 75 + 486 + 72)
+        self.assertGreater(f["naive_cross_evals"], f["f_evals"]["total"])   # naive cross far larger
         self.assertIn("PARTIAL", f["note"])
 
 

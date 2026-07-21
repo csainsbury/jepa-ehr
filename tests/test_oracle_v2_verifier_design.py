@@ -17,7 +17,7 @@ from clinical_jepa.eval.oracle_realism_v2_verifier_design import (
     m3a_design_dev_hash, M3A_DESIGN_VERSION,
 )
 
-_DESIGN_DEV_HASH = "84da70415e1103413b04fe0494f16337727ca1b92ab92455473b92a82c8588aa"
+_DESIGN_DEV_HASH = "043f1c45ed9d117c311e279e0a18461bc668d2d938e355d5682c684c513a08fe"
 
 
 class VerifierDesignRev2(unittest.TestCase):

@@ -358,10 +358,16 @@ IDENTIFIABILITY = {
                 "(no local least-squares solver)",
     "collision": "two settings beyond recover_tol COLLIDE iff ALL whitened cross-stat diffs stay within "
                  "acceptance tol",
-    "compute_budget": "explicit cap: <= 8 CPU-hours wall-time, <= 32 GB RAM; staged (k<=2 grids first, then "
-                      "expand within the cap); on cap exceed => terminal PARTIAL result, NO adaptive grid "
-                      "reduction after results",
+    "compute_budget": "explicit cap: ONE worker, <= 8 WALL-CLOCK hours, <= 32 GB RAM; staged (k<=2 grids "
+                      "first, then expand within the cap); on cap exceed => terminal PARTIAL result, NO "
+                      "adaptive grid reduction after results",
+    "nuisance": "IDENTIFIABILITY_NUISANCE (SCID/MIMIC/structural-zero); boundary-short is a terminal support "
+                "control, NOT a Jacobian/grid nuisance (its statistics can be NOT_EVALUABLE) — Pi §5",
+    "collision_tolerance_vector": "fixed, aligned to (S3_tau,S3_loggap,S4_abs,S6_tv,S7_abs) = "
+                                  "[0.05, log(1.10), 0.03, 0.05, 0.03]",
 }
+# Jacobian/grid nuisance for identifiability (Pi §5): three profiles; boundary-short excluded (terminal support).
+IDENTIFIABILITY_NUISANCE = ["scid_scale_control", "mimic_scale_control", "structural_zero_control"]
 NUISANCE_PROFILES = ["scid_scale_control", "mimic_scale_control", "structural_zero_control", "boundary_short"]
 
 # ============================ 9. escalation (Pi §5) ============================

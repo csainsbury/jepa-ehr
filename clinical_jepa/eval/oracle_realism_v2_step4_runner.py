@@ -32,8 +32,8 @@ CAP = {"workers": 1, "wall_clock_hours": 8, "ram_gb": 32,
 _CLOSURE_MODULES = (
     "oracle_realism_v2", "oracle_realism_v2_fixture", "oracle_realism_v2_verifier",
     "oracle_realism_v2_coupling", "oracle_realism_v2_battery", "oracle_realism_v2_verifier_design",
-    "oracle_realism_v2_identifiability", "oracle_realism_v2_step4_runner", "oracle_realism_v2_step4_exec",
-    "oracle_contracts",
+    "oracle_realism_v2_identifiability", "oracle_realism_v2_ident_runner", "oracle_realism_v2_step4_runner",
+    "oracle_realism_v2_step4_exec", "oracle_contracts",
 )
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
@@ -115,8 +115,12 @@ def build_manifest(*, reviewed_commit: str) -> dict:
 
 
 def _identifiability_binding() -> dict:
-    from clinical_jepa.eval.oracle_realism_v2_identifiability import cost_forecast, GRID, RANK_MIN
-    return {"grid": list(GRID), "rank_min": RANK_MIN, "cost_forecast": cost_forecast(n=REGISTERED_N),
+    from clinical_jepa.eval.oracle_realism_v2_identifiability import (
+        cost_forecast, GRID, RANK_MIN, NUISANCE_PROFILES, ACCEPT_TOL, RECOVER_TOL,
+    )
+    return {"grid": list(GRID), "rank_min": RANK_MIN, "recover_tol": RECOVER_TOL,
+            "nuisance_profiles": list(NUISANCE_PROFILES), "accept_tol": [round(float(x), 6) for x in ACCEPT_TOL],
+            "cost_forecast": cost_forecast(n=REGISTERED_N),
             "cap_note": "full grid may exceed the cap => PARTIAL / non-pass / re-gate; never silent reduction"}
 
 
@@ -219,6 +223,19 @@ def run_full_battery(manifest: dict, *, run_id: str, out_base: str):
                    components=manifest["components"],
                    cap_hours=manifest["cap"]["wall_clock_hours"], cap_gb=manifest["cap"]["ram_gb"],
                    verify=lambda mm: verify_manifest(mm, require_git_head=True))
+
+
+def run_full_identifiability(manifest: dict, *, run_id: str, out_base: str):
+    """The registered identifiability run (guarded — reviewed `m3a-step4-ident-v1` job only). Delegates to the
+    fail-closed identifiability engine: manifest verification (git HEAD on), then per-nuisance-profile grid
+    evaluation (strict null covariance, whitened recovery, rank, collisions) with checkpoint/resume + cap; a
+    cap-exceed or resume mismatch yields NON-passing PARTIAL."""
+    from clinical_jepa.eval.oracle_realism_v2_ident_runner import execute_identifiability
+    return execute_identifiability(manifest, run_id, out_base,
+                                   base_sampler=registered_base_sampler(n=manifest["registered_n"]),
+                                   cov_seeds=manifest["seeds"],
+                                   cap_hours=manifest["cap"]["wall_clock_hours"], cap_gb=manifest["cap"]["ram_gb"],
+                                   verify=lambda mm: verify_manifest(mm, require_git_head=True))
 
 
 def env_hash() -> str:
