@@ -1,33 +1,52 @@
-"""Control / ablation battery for the realism-v2 verifier (rebuild step 3, final increment; Pi F3 fold).
+"""Control / ablation battery for the realism-v2 verifier (rebuild step 3; Pi F3 + run-contract fold).
 
-FAIL-CLOSED (Pi): a required check is satisfied ONLY on PASS; NOT_EVALUABLE is non-passing and reported
-separately. For each active D component the REFERENCE carries the component at 0.5; a null-independent
-`candidate_A` must FAIL every primary subcheck and PASS every required non-attributed check; an independent
-`candidate_D_recovery` (component at 0.5, distinct seed) must PASS every required check. Controls: null/self,
-boundary-short, structural-zero, source-swap (negative, never D). Rate-based multi-seed harness reports
-PER-CHECK PASS/FAIL/NOT_EVALUABLE rates with Wilson CIs and a source-wise conjunction — the step-4 power object.
+FAIL-CLOSED: a required check is satisfied ONLY on PASS; NOT_EVALUABLE is non-passing and reported separately.
+For each active D component the REFERENCE carries the component at 0.5; a null-independent `candidate_A` must
+FAIL every primary subcheck and PASS every required non-attributed check; an independent-sample
+`candidate_D` (same frozen constructor, distinct RNG) establishes KNOWN-PROFILE REPEATABILITY (not
+implementation recovery — that is the M2 adapter comparison later). Controls: null/self, boundary-short,
+structural-zero, source-swap (negative, never D). A rate-based multi-seed harness reports PER-CHECK
+PASS/FAIL/NOT_EVALUABLE rates with Wilson CIs and a source-wise CONJUNCTIVE verdict against the registered
+thresholds — the step-4 power object.
 
-Synthetic-only; uses the INDEPENDENT fixture + coupling constructions; no candidate adapter, no governed read.
-The base sampler is injected (source, seed) so step 4 registers exact profiles/sizes without changing logic.
+Source blocks are GENUINELY DISTINCT canonical controls (design `PROFILES`); fixture and coupling RNG are
+derived deterministically from (source, profile, replicate_seed, role) / (source, component, replicate_seed,
+role). The registered per-source/profile/seed sample size is 4000 (design); tests exercise the machinery at a
+small mechanical size. Synthetic-only; no candidate adapter, no governed read.
 """
 from __future__ import annotations
 
 import dataclasses
-from math import log
+import hashlib
 
 import numpy as np
 
 from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_realism_v2 import V2_D_COMPONENT_MENU
 from clinical_jepa.eval.oracle_realism_v2_coupling import apply_coupling
-from clinical_jepa.eval.oracle_realism_v2_fixture import sample_fixture, C
+from clinical_jepa.eval.oracle_realism_v2_fixture import sample_fixture
 from clinical_jepa.eval.oracle_realism_v2_verifier import (
     sequence_route_checks, marginal_route_checks, FAIL, PASS, NOT_EVALUABLE,
 )
-from clinical_jepa.eval.oracle_realism_v2_verifier_design import ABLATION_MATRIX
+from clinical_jepa.eval.oracle_realism_v2_verifier_design import ABLATION_MATRIX, PROFILES
 
-_ABL_S = 0.5             # ablation strength — the design fixes "one component at 0.5"
+_ABL_S = 0.5
+REGISTERED_N = 4000                                   # design per-source/profile/seed sample size
+SOURCE_PROFILES = ("scid_scale_control", "mimic_scale_control")
+PRIMARY_FAIL_MIN = 20                                 # misspecified control FAILs its primary >=20/25
+SPECIFICITY_MIN = 24                                  # non-attributed / repeatability / null PASS >=24/25
 _NONDEGENERATE = ["count_ks", "positive_gap_ks", "class_tv", "S1_density", "S1_tau"]
+# boundary-short PREDECLARED refusals: length-conditioned checks (a single length bin) AND the block-seam
+# checks (sequences shorter than an 8-item block have no seams). Everything else must PASS.
+_BOUNDARY_EXPECTED_NE = {"S1_density", "S5_abs", "S6_tv", "S9_zero", "S9_class", "S9_gap"}
+
+
+def _derive_seed(*parts) -> int:
+    return int.from_bytes(hashlib.sha256("|".join(str(p) for p in parts).encode()).digest()[:8], "big")
+
+
+def _source_key(profile_name: str) -> str:
+    return "SCID" if "scid" in profile_name else "MIMIC"
 
 
 def _status_map(cand, ref) -> dict:
@@ -39,95 +58,141 @@ def _status_map(cand, ref) -> dict:
 @dataclasses.dataclass(frozen=True)
 class AblationOutcome:
     component: str
-    seed: int
-    source: str
-    A_status: dict                 # candidate_A vs reference — per-check status
-    D_status: dict                 # candidate_D_recovery vs reference — per-check status
-    A_fails_primary: bool          # every primary subcheck == FAIL
-    A_specificity: dict            # per non-attributed check: True iff PASS (fail-closed)
-    A_specificity_ok: bool         # every non-attributed check == PASS
-    D_recovers: bool               # every required check == PASS
+    replicate_seed: int
+    source_profile: str
+    A_status: dict
+    D_status: dict
+    A_fails_primary: bool                  # every primary subcheck == FAIL
+    A_specificity: dict                    # per non-attributed check: True iff PASS (fail-closed)
+    A_specificity_ok: bool
+    known_profile_repeatability: bool      # candidate_D: every required check == PASS (NOT recovery)
 
 
-def component_ablation(component, seed, *, base_sampler, source="MIMIC", coupling_seed=7) -> AblationOutcome:
+def component_ablation(component, replicate_seed, *, base_sampler, source_profile) -> AblationOutcome:
     if component not in V2_D_COMPONENT_MENU:
         raise KeyError(component)
     primary = ABLATION_MATRIX[component]["primary_fail"]
     allowed = set(ABLATION_MATRIX[component]["allowed_sensitive"])
-    reference = apply_coupling(base_sampler(source, seed), component, _ABL_S, seed=coupling_seed)
-    candidate_A = base_sampler(source, seed + 10_000)
-    candidate_D = apply_coupling(base_sampler(source, seed + 20_000), component, _ABL_S, seed=coupling_seed + 1)
+    src = _source_key(source_profile)
+
+    def cseed(role):
+        return _derive_seed("coupling", src, component, replicate_seed, role)
+    reference = apply_coupling(base_sampler(source_profile, replicate_seed, "reference"),
+                               component, _ABL_S, seed=cseed("reference"))
+    candidate_A = base_sampler(source_profile, replicate_seed, "candidate_A")
+    candidate_D = apply_coupling(base_sampler(source_profile, replicate_seed, "candidate_D"),
+                                 component, _ABL_S, seed=cseed("candidate_D"))
     A = _status_map(candidate_A, reference)
     D = _status_map(candidate_D, reference)
-    A_fails_primary = all(A[p] == FAIL for p in primary)                # PASS/NOT_EVALUABLE both fail this
+    A_fails_primary = all(A[p] == FAIL for p in primary)
     non_attr = [k for k in A if k not in primary and k not in allowed]
-    A_spec = {k: A[k] == PASS for k in non_attr}                        # fail-closed: NOT_EVALUABLE is False
-    D_recovers = all(v == PASS for v in D.values())                    # every required check PASS only
-    return AblationOutcome(component, seed, source, A, D, A_fails_primary, A_spec,
-                           all(A_spec.values()), D_recovers)
+    A_spec = {k: A[k] == PASS for k in non_attr}
+    return AblationOutcome(component, replicate_seed, source_profile, A, D, A_fails_primary, A_spec,
+                           all(A_spec.values()), all(v == PASS for v in D.values()))
 
 
-def null_control(seed, *, base_sampler, source="MIMIC") -> dict:
-    """Independent vs independent — every required check must PASS (fail-closed false-positive control)."""
-    st = _status_map(base_sampler(source, seed + 30_000), base_sampler(source, seed))
+# ---------------------------------------------------------------------------------------------------
+# controls (fail-closed, self-contained, with exact expected-status maps)
+# ---------------------------------------------------------------------------------------------------
+from math import log as _log
+
+_MIMIC_PROF = {"length": {"family": "discretized_lognormal", "mu": _log(60), "sigma": 0.35, "min": 1},
+               "class_prior": [0.10, 0.15, 0.20, 0.25, 0.30], "structural_zero_classes": [],
+               "cluster_size": {"family": "geometric", "p": 0.45},
+               "gap": {"family": "lognormal", "mu": _log(1.5), "sigma": 0.85}, "dependence": {}}
+_SWAP_PROF = {**_MIMIC_PROF, "class_prior": [0.55, 0.20, 0.15, 0.07, 0.03],
+              "cluster_size": {"family": "geometric", "p": 0.55},
+              "gap": {"family": "lognormal", "mu": _log(1.0), "sigma": 0.85}}   # mimic length x SCID class/run/gap
+_ZERO_PROF = {**_MIMIC_PROF, "class_prior": [0.40, 0.35, 0.25, 0.0, 0.0], "structural_zero_classes": [3, 4]}
+_SHORT_PROF = {**_MIMIC_PROF, "length": {"family": "discretized_lognormal", "mu": _log(6), "sigma": 0.3, "min": 1}}
+
+
+def _multiscale(prof, source_key, tag, seed, n_each):
+    recs = []
+    for i, mu in enumerate((_log(18), _log(60), _log(250))):
+        p = dict(prof, length={**prof["length"], "mu": mu})
+        recs += sample_fixture(source_key, p, n_each, seed=_derive_seed(tag, seed, i))
+    return recs
+
+
+def null_control(replicate_seed, *, base_sampler, source_profile) -> dict:
+    st = _status_map(base_sampler(source_profile, replicate_seed, "null_cand"),
+                     base_sampler(source_profile, replicate_seed, "null_ref"))
     return {"all_pass": all(v == PASS for v in st.values()), "status": st,
             "fails": [k for k, v in st.items() if v == FAIL],
             "not_evaluable": [k for k, v in st.items() if v == NOT_EVALUABLE]}
 
 
-def boundary_control(seed, *, source="MIMIC", n_each=600) -> dict:
-    """Boundary-short self-recovery: must NOT FALSELY FAIL (NOT_EVALUABLE is acceptable at the support edge)."""
-    prof = _profile(log(6), [0.3, 0.25, 0.2, 0.15, 0.1], 0.5, log(1.2), sigma=0.3)
-    ref = _multiscale_from(prof, seed, n_each); cand = _multiscale_from(prof, seed + 50_000, n_each)
+def boundary_control(replicate_seed, *, n_each=600) -> dict:
+    """Boundary-short (single-scale short) self-recovery: predeclared length-conditioned refusals
+    (NOT_EVALUABLE) are successful; every OTHER check must PASS (no broad 'anything except FAIL')."""
+    ref = [r for i in range(3) for r in sample_fixture("MIMIC", _SHORT_PROF, n_each, seed=_derive_seed("b_ref", replicate_seed, i))]
+    cand = [r for i in range(3) for r in sample_fixture("MIMIC", _SHORT_PROF, n_each, seed=_derive_seed("b_cand", replicate_seed, i))]
     st = _status_map(cand, ref)
-    return {"no_false_fail": not any(v == FAIL for v in st.values()), "status": st}
+    unexpected = [k for k in st if (k in _BOUNDARY_EXPECTED_NE and st[k] == FAIL)
+                  or (k not in _BOUNDARY_EXPECTED_NE and st[k] != PASS)]
+    return {"ok": not unexpected, "status": st, "unexpected": unexpected}
 
 
-def structural_zero_control(seed, *, n_each=600) -> dict:
-    """Structural-zero self-recovery: no false FAIL AND the zeroed classes never appear."""
-    prof = _profile(log(60), [0.40, 0.35, 0.25, 0.0, 0.0], 0.5, log(1.2)); prof["structural_zero_classes"] = [3, 4]
-    ref = _multiscale_from(prof, seed, n_each); cand = _multiscale_from(prof, seed + 60_000, n_each)
+def structural_zero_control(replicate_seed, *, n_each=600) -> dict:
+    ref = _multiscale(_ZERO_PROF, "MIMIC", "z_ref", replicate_seed, n_each)
+    cand = _multiscale(_ZERO_PROF, "MIMIC", "z_cand", replicate_seed, n_each)
     st = _status_map(cand, ref)
     present = set(np.unique(np.concatenate([r.class_ids for r in ref + cand])).tolist())
-    return {"no_false_fail": not any(v == FAIL for v in st.values()),
-            "zeros_absent": present.issubset({0, 1, 2}), "status": st}
+    required_pass = all(v == PASS for v in st.values())     # normal lengths => every check must PASS
+    return {"zeros_absent": present.issubset({0, 1, 2}), "required_pass": required_pass, "status": st,
+            "ok": present.issubset({0, 1, 2}) and required_pass}
 
 
-def source_swap_control(seed, *, n_each=600) -> dict:
-    """Reference = mimic-scale marginals; candidate = mimic length x SCID-scale class/run/gap. Must FAIL a
-    NON-degenerate check; NEVER triggers D (negative control, no coupling)."""
-    mimic = _profile(log(60), [0.10, 0.15, 0.20, 0.25, 0.30], 0.45, log(1.5))
-    swap = _profile(log(60), [0.55, 0.20, 0.15, 0.07, 0.03], 0.55, log(1.0))
-    st = _status_map(_multiscale_from(swap, seed + 40_000, n_each), _multiscale_from(mimic, seed, n_each))
+def source_swap_control(replicate_seed, *, n_each=600) -> dict:
+    ref = _multiscale(_MIMIC_PROF, "MIMIC", "swap_ref", replicate_seed, n_each)
+    cand = _multiscale(_SWAP_PROF, "MIMIC", "swap_cand", replicate_seed, n_each)
+    st = _status_map(cand, ref)
     return {"fails_nondegenerate": any(st.get(k) == FAIL for k in _NONDEGENERATE),
             "fails": [k for k, v in st.items() if v == FAIL], "status": st}
 
 
 # ---------------------------------------------------------------------------------------------------
-# rate-based aggregation (step-4 power object) — PER-CHECK rates + Wilson CI + source conjunction
+# rate-based aggregation + conjunctive verdict (step-4 power object)
 # ---------------------------------------------------------------------------------------------------
-def rate_battery(components, seeds, *, base_sampler, sources=("MIMIC", "SCID")) -> dict:
+def rate_battery(components, seeds, *, base_sampler, source_profiles=SOURCE_PROFILES) -> dict:
     out = {}
     for comp in components:
+        primary = ABLATION_MATRIX[comp]["primary_fail"]
         per_source = {}
-        for src in sources:
-            res = [component_ablation(comp, s, base_sampler=base_sampler, source=src) for s in seeds]
-            primary = ABLATION_MATRIX[comp]["primary_fail"]
-            per_source[src] = {
-                "A_fails_primary_rate": _rate([r.A_fails_primary for r in res]),
-                "A_specificity_per_check": _per_check_rate([r.A_specificity for r in res]),
-                "D_recovery_rate": _rate([r.D_recovers for r in res]),
-                "primary": primary,
+        for sp in source_profiles:
+            res = [component_ablation(comp, s, base_sampler=base_sampler, source_profile=sp) for s in seeds]
+            per_source[sp] = {
+                "primary_fail_per_check": _per_check_rate([{p: r.A_status.get(p) == FAIL for p in primary}
+                                                           for r in res]),
+                "specificity_per_check": _per_check_rate([r.A_specificity for r in res]),
+                "repeatability_rate": _rate([r.known_profile_repeatability for r in res]),
+                "not_evaluable_per_check": _per_check_ne([r.A_status for r in res]),
             }
-        out[comp] = {"per_source": per_source,
-                     "conjunction_A_fails_primary": all(per_source[s]["A_fails_primary_rate"]["k"] ==
-                                                        per_source[s]["A_fails_primary_rate"]["n"] for s in sources)}
+        out[comp] = {"per_source": per_source, "verdict": _component_verdict(comp, per_source, source_profiles)}
     return out
+
+
+def _component_verdict(comp, per_source, source_profiles) -> dict:
+    primary = ABLATION_MATRIX[comp]["primary_fail"]
+    def ok_source(sp):
+        ps = per_source[sp]
+        prim = all(ps["primary_fail_per_check"][p]["k"] >= PRIMARY_FAIL_MIN for p in primary)
+        spec = all(v["k"] >= SPECIFICITY_MIN for v in ps["specificity_per_check"].values())
+        rep = ps["repeatability_rate"]["k"] >= SPECIFICITY_MIN
+        return prim and spec and rep
+    per = {sp: ok_source(sp) for sp in source_profiles}
+    return {"per_source_ok": per, "conjunctive_pass": all(per.values())}
 
 
 def _per_check_rate(list_of_maps) -> dict:
     keys = set().union(*[set(m) for m in list_of_maps]) if list_of_maps else set()
     return {k: _rate([m.get(k, False) for m in list_of_maps]) for k in sorted(keys)}
+
+
+def _per_check_ne(list_of_status_maps) -> dict:
+    keys = set().union(*[set(m) for m in list_of_status_maps]) if list_of_status_maps else set()
+    return {k: sum(1 for m in list_of_status_maps if m.get(k) == NOT_EVALUABLE) for k in sorted(keys)}
 
 
 def _rate(bools) -> dict:
@@ -140,58 +205,63 @@ def _rate(bools) -> dict:
     return {"k": k, "n": n, "rate": round(p, 4), "ci95": [round(centre - half, 4), round(centre + half, 4)]}
 
 
-def forecast(base_sampler, *, source="MIMIC", seed=1, per_call_secs_at_4k=13.0) -> dict:
-    """Event-volume / runtime forecast for the full run (Pi): sequences, mean length, total events, and a
-    verifier-call estimate scaled from the measured ~13s/4000-sequence cost."""
-    s = base_sampler(source, seed)
-    n = len(s); mean_L = float(np.mean([r.L_total for r in s]))
-    events = int(n * mean_L)
-    est = per_call_secs_at_4k * (n / 4000.0)
-    return {"n_sequences": n, "mean_length": round(mean_L, 1), "total_events": events,
-            "est_secs_per_verifier_call": round(est, 1)}
+def forecast(base_sampler, *, source_profile="mimic_scale_control", seed=1000,
+             secs_per_million_events=None) -> dict:
+    """Cost forecast scaled by measured EVENT / CLUSTER / adjacent-PAIR volume (not sequence count alone)."""
+    s = base_sampler(source_profile, seed, "forecast")
+    n = len(s)
+    events = int(sum(r.L_total for r in s))
+    clusters = int(sum(r.K for r in s))
+    pairs = int(sum(max(0, r.K - 1) for r in s))       # adjacent-cluster pairs
+    per_call = (events / 1e6) * secs_per_million_events if secs_per_million_events else None
+    return {"n_sequences": n, "total_events": events, "total_clusters": clusters, "adjacent_pairs": pairs,
+            "est_secs_per_verifier_call": None if per_call is None else round(per_call, 1)}
 
 
-# --- profile helpers (synthetic; only the length scale anchored) -----------------------------------
-def _profile(length_mu, class_prior, cluster_p, gap_mu, *, sigma=0.35):
-    return {"length": {"family": "discretized_lognormal", "mu": length_mu, "sigma": sigma, "min": 1},
-            "class_prior": class_prior, "structural_zero_classes": [],
-            "cluster_size": {"family": "geometric", "p": cluster_p},
-            "gap": {"family": "lognormal", "mu": gap_mu, "sigma": 0.85}, "dependence": {}}
+# --- samplers -------------------------------------------------------------------------------------
+def registered_base_sampler(n: int = REGISTERED_N):
+    """Registered per-source-PROFILE sampler at N (default 4000). Draws from the hashed design PROFILES with a
+    deterministic seed derived from (source, profile, replicate_seed, role) — genuinely distinct source blocks."""
+    def sampler(source_profile, replicate_seed, role):
+        prof = PROFILES[source_profile]
+        seed = _derive_seed("fixture", source_profile, replicate_seed, role)
+        return sample_fixture(_source_key(source_profile), prof, n, seed=seed)
+    return sampler
 
 
-def _multiscale_from(profile, seed, n_each):
-    recs = []
-    src = "MIMIC" if profile.get("_src", "MIMIC") == "MIMIC" else "SCID"
-    for i, mu in enumerate((log(18), log(60), log(250))):
-        p = dict(profile, length={**profile["length"], "mu": mu})
-        recs += sample_fixture(src, p, n_each, seed=seed * 10 + i)
-    return recs
-
-
-def default_base_sampler(n_each: int = 600):
-    """Multiscale null-independent base (3 length scales) so length-conditioned checks can evaluate. Injected
-    as (source, seed) -> sample so the real step-4 battery can register per-source profiles/sizes."""
-    base = _profile(log(60), [0.3, 0.25, 0.2, 0.15, 0.1], 0.5, log(1.2))
-
-    def sampler(source, seed):
-        p = dict(base, _src=source)
-        return _multiscale_from(p, seed, n_each)
+def multiscale_smoke_sampler(n_each: int = 600):
+    """SMALL mechanical sampler for the machinery smoke — three length strata so length-conditioned checks can
+    evaluate cheaply. Distinct per (source_profile, replicate_seed, role). NOT the registered run contract."""
+    from math import log
+    def sampler(source_profile, replicate_seed, role):
+        prof = PROFILES[source_profile]
+        recs = []
+        for i, mu in enumerate((log(18), log(60), log(250))):
+            p = dict(prof, length={**prof["length"], "mu": mu})
+            recs += sample_fixture(_source_key(source_profile), p, n_each,
+                                   seed=_derive_seed("smoke", source_profile, replicate_seed, role, i))
+        return recs
     return sampler
 
 
 BATTERY_IMPL = {
     "name": "realism_v2_battery_dev",
-    "fail_closed": "required check satisfied ONLY on PASS; NOT_EVALUABLE is non-passing, reported separately",
+    "fail_closed": "required check satisfied ONLY on PASS; NOT_EVALUABLE non-passing, reported separately",
     "orientation": "reference has component@0.5; candidate_A(null) FAILs every primary + PASSes non-attributed; "
-                   "candidate_D_recovery(component@0.5, distinct seed) PASSes every required check",
+                   "candidate_D establishes KNOWN-PROFILE REPEATABILITY (same constructor, distinct RNG) — NOT "
+                   "implementation recovery (that is the later M2 adapter comparison)",
     "components": list(V2_D_COMPONENT_MENU),
     "controls": ["null", "boundary_short", "structural_zero", "source_swap"],
+    "boundary_expected_not_evaluable": sorted(_BOUNDARY_EXPECTED_NE),
     "ablation_strength": _ABL_S,
-    "source_conjunction": True,
-    "rate_rule": "per-check PASS/FAIL/NOT_EVALUABLE rates; self/known >=24/25; misspec-fail >=20/25; "
-                 ">=24/25 specificity PER non-attributed check; Wilson CI; source-wise conjunction",
+    "registered_n": REGISTERED_N,
+    "source_profiles": list(SOURCE_PROFILES),
+    "rng_derivation": "fixture: (source,profile,replicate_seed,role); coupling: (source,component,seed,role)",
+    "verdict": {"primary_fail_min": PRIMARY_FAIL_MIN, "specificity_min": SPECIFICITY_MIN,
+                "source_conjunction": "each source independently satisfies its criterion",
+                "not_evaluable": "always non-passing, reported separately"},
     "source_swap_never_D": True,
-    "forecast": "per-source sequences + mean length + total events + verifier-call runtime estimate",
+    "forecast": "scaled by event/cluster/adjacent-pair volume",
 }
 
 

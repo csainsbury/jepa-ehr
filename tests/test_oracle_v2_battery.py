@@ -1,73 +1,91 @@
-"""Step-3 (rebuild, final) — fail-closed control/ablation battery machinery (Pi F3 fold).
+"""Step-3 (rebuild, final) — fail-closed battery machinery + run-contract (Pi F3 + run-contract fold).
 
-Exercises the fail-closed ablation ORIENTATION for each active D component (PASS-only; NOT_EVALUABLE
-non-passing) at a small seed count — the full 25-seed source-conjunction power run is step 4 — plus the null,
-boundary-short, structural-zero and source-swap controls and the per-check rate aggregation. After the F3 fix
-(centered S8 + position-balanced CSMD) all four components pass the full orientation. Slower (verifier-heavy).
+Exercises: the conjunctive verdict semantics (synthetic, no verifier), Wilson CI, deterministic (source,
+profile, seed, role) RNG derivation, the forecast (event/cluster/pair volume), a small mechanical orientation
+smoke for two components (known-profile repeatability, not recovery), and the fail-closed controls with exact
+expected-status maps. The full 25-seed source-conjunction run at N=4000 is the step-4 runner (not here).
 """
 from __future__ import annotations
 
 import unittest
 
 from clinical_jepa.eval import oracle_realism_v2_battery as bat
-from clinical_jepa.eval.oracle_realism_v2 import V2_D_COMPONENT_MENU
 
-_BATTERY_IMPL_ID = "ee0da40525d484c6de49b262e0322f50643cec912464a87f49ff29fe873c3bb1"
+_BATTERY_IMPL_ID = "2467285a2155e57a7bd19037776fc4233de0503d60fe304221f53f33bcd3f5bd"
 
 
-class BatteryIdentity(unittest.TestCase):
-    def test_impl_identity_and_wilson(self) -> None:
+def _synth(kp, ks, kr):
+    return {"primary_fail_per_check": {"S3_tau": {"k": kp, "n": 25}, "S3_loggap": {"k": kp, "n": 25}},
+            "specificity_per_check": {"x": {"k": ks, "n": 25}}, "repeatability_rate": {"k": kr, "n": 25}}
+
+
+class BatteryContract(unittest.TestCase):
+    def test_impl_identity_and_registered_contract(self) -> None:
         self.assertEqual(bat.battery_impl_identity(), _BATTERY_IMPL_ID)
-        self.assertTrue(bat.BATTERY_IMPL["fail_closed"].startswith("required check satisfied ONLY on PASS"))
-        r = bat._rate([True] * 24 + [False])          # 24/25
-        self.assertEqual(r["k"], 24)
-        self.assertEqual(r["rate"], 0.96)
-        self.assertEqual(len(r["ci95"]), 2)
+        self.assertEqual(bat.REGISTERED_N, 4000)
+        self.assertEqual(tuple(bat.SOURCE_PROFILES), ("scid_scale_control", "mimic_scale_control"))
+        self.assertEqual(bat.PRIMARY_FAIL_MIN, 20)
+        self.assertEqual(bat.SPECIFICITY_MIN, 24)
+
+    def test_conjunctive_verdict(self) -> None:
+        both = {"scid_scale_control": _synth(25, 25, 25), "mimic_scale_control": _synth(22, 24, 24)}
+        self.assertTrue(bat._component_verdict("burst_timing", both, bat.SOURCE_PROFILES)["conjunctive_pass"])
+        # primary 19/25 (< 20) on one source => that source fails => conjunction fails
+        one = {"scid_scale_control": _synth(25, 25, 25), "mimic_scale_control": _synth(19, 24, 24)}
+        v = bat._component_verdict("burst_timing", one, bat.SOURCE_PROFILES)
+        self.assertFalse(v["conjunctive_pass"])
+        self.assertFalse(v["per_source_ok"]["mimic_scale_control"])
+        # specificity 23/25 (< 24) also fails
+        spec = {"scid_scale_control": _synth(25, 23, 25), "mimic_scale_control": _synth(25, 25, 25)}
+        self.assertFalse(bat._component_verdict("burst_timing", spec, bat.SOURCE_PROFILES)["conjunctive_pass"])
+
+    def test_wilson_and_seed_derivation(self) -> None:
+        r = bat._rate([True] * 24 + [False])
+        self.assertEqual((r["k"], r["rate"]), (24, 0.96))
+        s1 = bat._derive_seed("fixture", "scid_scale_control", 1000, "reference")
+        self.assertEqual(s1, bat._derive_seed("fixture", "scid_scale_control", 1000, "reference"))   # deterministic
+        self.assertNotEqual(s1, bat._derive_seed("fixture", "scid_scale_control", 1000, "candidate_A"))  # role varies
+        self.assertNotEqual(s1, bat._derive_seed("fixture", "mimic_scale_control", 1000, "reference"))   # source varies
+
+    def test_forecast_by_volume(self) -> None:
+        smoke = bat.multiscale_smoke_sampler(n_each=400)
+        f = bat.forecast(smoke, source_profile="mimic_scale_control", secs_per_million_events=3.0)
+        for k in ("n_sequences", "total_events", "total_clusters", "adjacent_pairs", "est_secs_per_verifier_call"):
+            self.assertIn(k, f)
+        self.assertEqual(f["n_sequences"], 1200)
+        self.assertGreater(f["total_events"], f["n_sequences"])   # scaled by events, not sequence count
 
 
-class AblationOrientation(unittest.TestCase):
-    def test_each_component_full_orientation(self) -> None:
-        base = bat.default_base_sampler(n_each=600)      # local (a class attr would bind self)
-        for comp in V2_D_COMPONENT_MENU:
-            o = bat.component_ablation(comp, 1, base_sampler=base, source="MIMIC")
+class OrientationSmoke(unittest.TestCase):
+    def test_two_components_repeatability(self) -> None:
+        smoke = bat.multiscale_smoke_sampler(n_each=600)
+        for comp in ("burst_timing", "cluster_size_mark_diversity"):
+            o = bat.component_ablation(comp, 1000, base_sampler=smoke, source_profile="mimic_scale_control")
             self.assertTrue(o.A_fails_primary, f"{comp}: candidate_A must FAIL primary")
             self.assertTrue(o.A_specificity_ok,
-                            f"{comp}: non-attributed specificity — fails {[k for k,v in o.A_specificity.items() if not v]}")
-            self.assertTrue(o.D_recovers,
-                            f"{comp}: D-recovery — fails {[k for k,v in o.D_status.items() if v!=bat.PASS]}")
+                            f"{comp}: specificity fails {[k for k,v in o.A_specificity.items() if not v]}")
+            self.assertTrue(o.known_profile_repeatability,
+                            f"{comp}: repeatability fails {[k for k,v in o.D_status.items() if v!=bat.PASS]}")
 
 
-class Controls(unittest.TestCase):
+class ControlsFailClosed(unittest.TestCase):
     def test_null_all_pass(self) -> None:
-        base = bat.default_base_sampler(n_each=600)
-        nc = bat.null_control(1, base_sampler=base)
+        smoke = bat.multiscale_smoke_sampler(n_each=600)
+        nc = bat.null_control(1000, base_sampler=smoke, source_profile="mimic_scale_control")
         self.assertTrue(nc["all_pass"], f"null FAILs={nc['fails']} NE={nc['not_evaluable']}")
 
-    def test_structural_zero_control(self) -> None:
-        sz = bat.structural_zero_control(1, n_each=600)
+    def test_boundary_expected_status_map(self) -> None:
+        bc = bat.boundary_control(1000, n_each=500)
+        self.assertTrue(bc["ok"], f"boundary unexpected: {bc['unexpected']}")
+
+    def test_structural_zero(self) -> None:
+        sz = bat.structural_zero_control(1000, n_each=600)
         self.assertTrue(sz["zeros_absent"])
-        self.assertTrue(sz["no_false_fail"])
+        self.assertTrue(sz["ok"])
 
-    def test_source_swap_fails_nondegenerate(self) -> None:
-        ss = bat.source_swap_control(1, n_each=600)
-        self.assertTrue(ss["fails_nondegenerate"], f"source-swap fails: {ss['fails']}")
-
-
-class RateAndForecast(unittest.TestCase):
-    def test_rate_battery_per_check_shape(self) -> None:
-        base = bat.default_base_sampler(n_each=600)
-        rates = bat.rate_battery(["burst_timing"], [1], base_sampler=base, sources=("MIMIC",))
-        row = rates["burst_timing"]["per_source"]["MIMIC"]
-        self.assertIn("A_specificity_per_check", row)
-        self.assertIn("ci95", row["D_recovery_rate"])
-        self.assertIn("conjunction_A_fails_primary", rates["burst_timing"])
-
-    def test_forecast(self) -> None:
-        base = bat.default_base_sampler(n_each=600)
-        f = bat.forecast(base, source="MIMIC")
-        for k in ("n_sequences", "mean_length", "total_events", "est_secs_per_verifier_call"):
-            self.assertIn(k, f)
-        self.assertEqual(f["n_sequences"], 1800)
+    def test_source_swap_nondegenerate(self) -> None:
+        ss = bat.source_swap_control(1000, n_each=600)
+        self.assertTrue(ss["fails_nondegenerate"], f"fails: {ss['fails']}")
 
 
 if __name__ == "__main__":
