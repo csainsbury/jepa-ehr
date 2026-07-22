@@ -129,6 +129,7 @@ class AggregateVerdict(unittest.TestCase):
                   "S8_class": PASS}
         # full-key boundary status map (Pi §4): the length/seam checks are NE, everything else PASS
         full_boundary = {k: (NOT_EVALUABLE if k in bat._BOUNDARY_EXPECTED_NE else PASS) for k in bat.ALL_CHECK_KEYS}
+        cnt = {"n_ref": bat.CONTROL_N, "n_cand": bat.CONTROL_N, "alloc": list(bat.CONTROL_ALLOC)}   # exact counts
         recs = {}
         for s in seeds:
             recs[f"ablation|burst_timing|mimic_scale_control|{s}"] = {
@@ -137,12 +138,13 @@ class AggregateVerdict(unittest.TestCase):
                 "known_profile_repeatability": rep, "A_specificity_ok": spec_pass}
             recs[f"control|null|mimic_scale_control|{s}"] = {   # source-scoped
                 "kind": "control", "name": "null", "all_pass": ctrl_ok, "status": dict(checks)}
-            # global controls (Pi §4): keyed by GLOBAL, once per seed; boundary carries the FULL key set
+            # global controls (Pi §4): keyed by GLOBAL, once per seed; boundary carries the FULL key set; each
+            # carries the EXACT registered sample counts + allocation (verdict-gated).
             recs[f"control|boundary|GLOBAL|{s}"] = {
-                "kind": "control", "name": "boundary",
+                "kind": "control", "name": "boundary", **cnt,
                 "status": (dict(full_boundary) if ctrl_ok else {**full_boundary, "S4_abs": FAIL})}
-            recs[f"control|structural_zero|GLOBAL|{s}"] = {"kind": "control", "name": "structural_zero", "ok": ctrl_ok}
-            recs[f"control|source_swap|GLOBAL|{s}"] = {"kind": "control", "name": "source_swap", "fails_nondegenerate": ctrl_ok}
+            recs[f"control|structural_zero|GLOBAL|{s}"] = {"kind": "control", "name": "structural_zero", "ok": ctrl_ok, **cnt}
+            recs[f"control|source_swap|GLOBAL|{s}"] = {"kind": "control", "name": "source_swap", "fails_nondegenerate": ctrl_ok, **cnt}
         return recs
 
     def test_conjunctive_pass_at_25(self) -> None:
@@ -218,6 +220,34 @@ class AggregateVerdict(unittest.TestCase):
         v = ex.aggregate(recs, ["burst_timing"], ["mimic_scale_control"], seeds)
         self.assertEqual(v["controls"]["global"]["boundary_exact"], 23)   # 2 truncated => 23/25
         self.assertFalse(v["conjunctive_pass"])
+
+    def test_missing_control_counts_block_pass(self) -> None:  # Pi: count evidence is verdict-gated
+        seeds = list(range(1000, 1025))
+        recs = self._records(seeds)
+        for k in ("n_ref", "n_cand", "alloc"):                 # strip counts from 1 structural-zero record
+            recs[f"control|structural_zero|GLOBAL|{seeds[0]}"].pop(k, None)
+        v = ex.aggregate(recs, ["burst_timing"], ["mimic_scale_control"], seeds)
+        self.assertFalse(v["controls"]["global"]["exact_n"]["all_exact"])
+        self.assertFalse(v["conjunctive_pass"])                # blocked regardless of statistical statuses
+
+    def test_wrong_control_counts_block_pass(self) -> None:  # Pi: a count/alloc mismatch blocks PASS
+        seeds = list(range(1000, 1025))
+        recs = self._records(seeds)
+        recs[f"control|source_swap|GLOBAL|{seeds[0]}"]["n_ref"] = 1          # tampered count
+        recs[f"control|boundary|GLOBAL|{seeds[1]}"]["alloc"] = [1, 0, 0]     # tampered allocation
+        v = ex.aggregate(recs, ["burst_timing"], ["mimic_scale_control"], seeds)
+        self.assertEqual(v["controls"]["global"]["exact_n"]["source_swap"], 24)
+        self.assertEqual(v["controls"]["global"]["exact_n"]["boundary"], 24)
+        self.assertFalse(v["conjunctive_pass"])
+
+    def test_control_counts_bound_into_evidence_hash(self) -> None:  # Pi: changing counts changes evidence_sha256
+        seeds = list(range(1000, 1025))
+        recs = self._records(seeds)
+        h0 = ex._completion_hashes(recs, "r", "m", "c", {"conjunctive_pass": True})
+        recs[f"control|structural_zero|GLOBAL|{seeds[0]}"]["n_ref"] = 1       # tamper an exact count
+        h1 = ex._completion_hashes(recs, "r", "m", "c", {"conjunctive_pass": True})
+        self.assertNotEqual(h0["evidence_sha256"], h1["evidence_sha256"])     # evidence hash reflects counts
+        self.assertNotEqual(h0["result_sha256"], h1["result_sha256"])
 
 
 if __name__ == "__main__":

@@ -168,7 +168,7 @@ def collision_search(grid_thetas, grid_vectors, *, accept_tol=None):
     return collisions
 
 
-def cost_forecast(n=4000, *, cov_seeds=25, ref_seeds=1, heldout_seeds=1, rank_points=3,
+def cost_forecast(n=8000, *, cov_seeds=25, ref_seeds=1, heldout_seeds=1, rank_points=3,
                   seconds_per_eval=None) -> dict:
     """Structural forecast matching the runner (seeds replicate where they actually multiply, Pi §5): null
     covariance = cov_seeds x nuisance; grid vectors = grid_points x (ref+heldout) x nuisance; Jacobian rank =

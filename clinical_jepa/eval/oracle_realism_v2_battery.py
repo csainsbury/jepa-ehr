@@ -257,7 +257,7 @@ def forecast(base_sampler, *, source_profile="mimic_scale_control", seed=1000,
 
 # --- samplers -------------------------------------------------------------------------------------
 def registered_base_sampler(n: int = REGISTERED_N):
-    """Registered per-source-PROFILE sampler at N (default 4000). Draws from the hashed design PROFILES with a
+    """Registered per-source-PROFILE sampler at N (default REGISTERED_N=8000). Draws from the hashed design PROFILES with a
     deterministic seed derived from (source, profile, replicate_seed, role) — genuinely distinct source blocks."""
     def sampler(source_profile, replicate_seed, role):
         prof = PROFILES[source_profile]

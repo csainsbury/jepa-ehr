@@ -6,7 +6,7 @@ serialisation of every CheckResult status + VALUE + detail (the denominator/coar
 denominator-map hash can be produced); partial-state persistence; and a cap-exceed / resume-mismatch that
 atomically yields PARTIAL / non-pass. Aggregates the per-check per-source verdict (§3).
 
-Synthetic-only; no governed read, no candidate sampling. The full 25-seed / N=4000 run is launched only by the
+Synthetic-only; no governed read, no candidate sampling. The full 25-seed / N=8000 run is launched only by the
 reviewed job; this module is exercised at a tiny mechanical scale (checkpoint/resume/cap correctness).
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from clinical_jepa.eval.oracle_realism_v2_verifier import PASS, FAIL, NOT_EVALUA
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import ABLATION_MATRIX
 from clinical_jepa.eval.oracle_realism_v2_battery import (
     component_ablation, null_control, boundary_control, structural_zero_control, source_swap_control,
-    PRIMARY_FAIL_MIN, SPECIFICITY_MIN, _BOUNDARY_EXPECTED_NE, ALL_CHECK_KEYS,
+    PRIMARY_FAIL_MIN, SPECIFICITY_MIN, _BOUNDARY_EXPECTED_NE, ALL_CHECK_KEYS, CONTROL_N, CONTROL_ALLOC,
 )
 
 CONTROLS = ("null", "boundary", "structural_zero", "source_swap")
@@ -237,7 +237,7 @@ def execute(manifest, run_id, out_base, *, base_sampler, seeds, sources, compone
 #   runtime/env     — observed timing + environment (machine-specific, stamped at completion; not manifest-bound)
 _STATUS_KEYS = ("kind", "name", "source", "seed", "A_status", "D_status", "A_fails_primary",
                 "A_specificity_ok", "known_profile_repeatability", "all_pass", "ok", "zeros_absent",
-                "fails_nondegenerate", "status")
+                "fails_nondegenerate", "status", "n_ref", "n_cand", "alloc")   # exact control counts hash-bound (Pi)
 
 
 def _completion_hashes(records, run_id, mhash, reviewed_commit, verdict) -> dict:
@@ -246,8 +246,9 @@ def _completion_hashes(records, run_id, mhash, reviewed_commit, verdict) -> dict
         rec = records[kid]
         if rec["kind"] == "ablation":
             evidence[kid] = {"A_evidence": rec.get("A_evidence", {}), "D_evidence": rec.get("D_evidence", {})}
-        else:
-            evidence[kid] = {"evidence": rec.get("evidence", {})}
+        else:   # controls: bind the exact sample counts + allocation into the evidence hash (Pi)
+            evidence[kid] = {"evidence": rec.get("evidence", {}), "n_ref": rec.get("n_ref"),
+                             "n_cand": rec.get("n_cand"), "alloc": rec.get("alloc")}
         status_summary[kid] = {k: rec[k] for k in _STATUS_KEYS if k in rec}
     evidence_sha = _sha(_dumps(evidence, sort_keys=True))
     result_core = {"run_id": run_id, "manifest_hash": mhash, "reviewed_commit": reviewed_commit,
@@ -341,10 +342,18 @@ def _boundary_exact(rec) -> bool:
                for k in ALL_CHECK_KEYS)
 
 
+def _control_counts_exact(rec) -> bool:
+    """A global-control record must carry EXACTLY the registered sample counts + allocation (Pi). Missing or
+    malformed count/allocation fields are non-passing — a count mismatch blocks PASS regardless of statuses."""
+    return (rec.get("n_ref") == CONTROL_N and rec.get("n_cand") == CONTROL_N
+            and rec.get("alloc") == list(CONTROL_ALLOC))
+
+
 def _aggregate_controls(records, sources, seeds) -> dict:
     """§4 routed-control aggregation. Source-scoped `null` per source (also folded into per-source conjunction);
     global boundary / structural_zero / source_swap computed once and gated globally (NOT per source). Every
-    outcome rate carries a Wilson 95% interval (Pi §2)."""
+    outcome rate carries a Wilson 95% interval (Pi §2). Each global-control record's EXACT sample counts +
+    allocation are verdict-gated: any count mismatch blocks overall PASS regardless of statistical statuses (Pi)."""
     n = len(seeds)
     per_source = {}
     for src in sources:
@@ -355,12 +364,19 @@ def _aggregate_controls(records, sources, seeds) -> dict:
     bnd = sum(1 for s in seeds if _boundary_exact(records.get(f"control|boundary|{GLOBAL_SRC}|{s}", {})))
     sz = sum(1 for s in seeds if records.get(f"control|structural_zero|{GLOBAL_SRC}|{s}", {}).get("ok"))
     sw = sum(1 for s in seeds if records.get(f"control|source_swap|{GLOBAL_SRC}|{s}", {}).get("fails_nondegenerate"))
+
+    def _exact(name):
+        return sum(1 for s in seeds if _control_counts_exact(records.get(f"control|{name}|{GLOBAL_SRC}|{s}", {})))
+    exact_n = {name: _exact(name) for name in ("boundary", "structural_zero", "source_swap")}
+    exact_all = all(v == n for v in exact_n.values())      # EVERY global-control record exactly N on EVERY seed
     glob = {"boundary_exact": bnd, "boundary_wilson": _rate_ci(bnd, n),
             "structural_zero_ok": sz, "structural_zero_wilson": _rate_ci(sz, n),
-            "source_swap_nondegenerate": sw, "source_swap_wilson": _rate_ci(sw, n), "n": n}
+            "source_swap_nondegenerate": sw, "source_swap_wilson": _rate_ci(sw, n), "n": n,
+            "exact_n": {**exact_n, "required": n, "control_n": CONTROL_N, "alloc": list(CONTROL_ALLOC),
+                        "all_exact": exact_all}}
     controls_ok = None
     if n >= 25:
         source_ok = all(o["null_pass"] >= SPECIFICITY_MIN for o in per_source.values())
         global_ok = (bnd >= SPECIFICITY_MIN and sz >= SPECIFICITY_MIN and sw >= PRIMARY_FAIL_MIN)
-        controls_ok = source_ok and global_ok
+        controls_ok = source_ok and global_ok and exact_all   # count mismatch blocks PASS regardless of statuses
     return {"per_source": per_source, "global": glob, "controls_ok": controls_ok}
