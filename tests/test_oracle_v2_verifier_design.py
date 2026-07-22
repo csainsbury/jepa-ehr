@@ -14,10 +14,11 @@ from clinical_jepa.eval.oracle_realism_v2 import V2_D_COMPONENT_MENU
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import (
     ROUTES, REGISTERED_MARGINALS, S_ALGORITHMS, CHECK_TO_D_COMPONENTS, ESCALATION, ABLATION_MATRIX,
     CONDITIONAL_COARSENING, SIMULATION, IDENTIFIABILITY, FIXTURE_GENERATOR, FIXTURE_LAW,
+    COUPLING_LAWS, REJECTED_COUPLING_LAWS, PROFILES,
     m3a_design_dev_hash, M3A_DESIGN_VERSION,
 )
 
-_DESIGN_DEV_HASH = "206f299eb4fb1f2131d2ba742f07f99efd284df51a3471ab4ce950c488abe74e"  # re-minted (Pi step-4 result gate)
+_DESIGN_DEV_HASH = "20db0c7249ddbad2e4ed4d1aa753aef027aa31d0dddc0d837029d005aeb1a03b"  # re-minted (Pi step-4 re-gate v2 hardening)
 
 
 class VerifierDesignRev2(unittest.TestCase):
@@ -65,6 +66,15 @@ class VerifierDesignRev2(unittest.TestCase):
         self.assertEqual(set(ABLATION_MATRIX), set(V2_D_COMPONENT_MENU))
         for comp, row in ABLATION_MATRIX.items():
             self.assertTrue(row["primary_fail"], comp)
+
+    def test_active_vs_rejected_coupling_laws(self) -> None:  # Pi re-gate #4
+        self.assertEqual(set(COUPLING_LAWS), set(V2_D_COMPONENT_MENU))          # active == menu
+        self.assertEqual(set(REJECTED_COUPLING_LAWS), {"burst_count_length", "length_class_mix"})
+        self.assertFalse(set(COUPLING_LAWS) & set(REJECTED_COUPLING_LAWS))     # disjoint
+
+    def test_boundary_profile_bounded_and_canonical(self) -> None:  # Pi re-gate #3/#4
+        lg = PROFILES["boundary_short"]["length"]
+        self.assertEqual(lg, {"family": "uniform_int", "min": 1, "max": 7})   # structural L<=7
 
     def test_reference_only_coarsening(self) -> None:
         self.assertIn("REFERENCE ONLY", CONDITIONAL_COARSENING["rule"])

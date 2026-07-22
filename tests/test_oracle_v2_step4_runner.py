@@ -31,6 +31,14 @@ class ManifestBinding(unittest.TestCase):
         self.assertEqual(self.m["identifiability_vector"],
                          ["S3_tau", "S3_loggap", "S4_abs", "S7_abs"])
 
+    def test_binds_control_alloc_and_boundary_profile(self) -> None:  # Pi re-gate #1/#3
+        from clinical_jepa.eval.oracle_realism_v2_verifier_design import PROFILES
+        from clinical_jepa.eval.oracle_contracts import canonical_hash
+        self.assertEqual(self.m["control_alloc"], [2667, 2667, 2666])
+        self.assertEqual(sum(self.m["control_alloc"]), self.m["control_n"])
+        self.assertEqual(self.m["boundary_fixture"]["canonical_profile_hash"],
+                         canonical_hash(PROFILES["boundary_short"]))     # design == executed control profile
+
     def test_cap_unambiguous(self) -> None:
         self.assertEqual(self.m["cap"]["workers"], 1)
         self.assertEqual(self.m["cap"]["wall_clock_hours"], 8)

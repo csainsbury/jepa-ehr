@@ -18,7 +18,7 @@ _PROF = {"length": {"family": "discretized_lognormal", "mu": log(99), "sigma": 1
          "class_prior": [0.1, 0.15, 0.2, 0.25, 0.3], "structural_zero_classes": [],
          "cluster_size": {"family": "geometric", "p": 0.45},
          "gap": {"family": "lognormal", "mu": log(1.5), "sigma": 0.9}, "dependence": {}}
-_FIXTURE_IMPL_ID = "5f013589ee4a995c3fcb5bb427f3f2735cabad02fe82a5a4ae586277984e7548"
+_FIXTURE_IMPL_ID = "718788bd21d30479ad7ffc5eac3dced8efc26f3665740c8df86282af15287bf5"
 
 
 class FixtureInvariants(unittest.TestCase):

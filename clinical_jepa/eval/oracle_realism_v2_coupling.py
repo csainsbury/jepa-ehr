@@ -349,14 +349,16 @@ COUPLING_IMPL = {
     "components": list(V2_D_COMPONENT_MENU),
     "strength_range": [0.0, 0.6],
     "rng": "sha256(coupling|component|seed) -> default_rng",
-    "exact_invariants": {
+    "exact_invariants": {   # ACTIVE only — exactly V2_D_COMPONENT_MENU (Pi re-gate #4)
         "burst_timing": "per-sequence positive-gap multiset",
         "mark_burst_tie": "per-sequence class counts",
         "cluster_size_mark_diversity": "per-sequence x position-QUARTILE class counts + cluster sizes "
                                        "(position-balanced; S8_class invariant by construction, Pi F3)",
-        "length_class_mix": "pooled class counts",
     },
-    "rejected": {"burst_count_length": "Pi F1 — S1 is structural under the maximal-run law (not separable D)"},
+    "rejected": {
+        "burst_count_length": "Pi F1 — S1 is structural under the maximal-run law (not separable D)",
+        "length_class_mix": "Pi step-4 result gate — drives terminal S5 (candidate-A S5_abs ~19 FAIL/25); dropped",
+    },
     "empirically_required": "other registered marginals + S2 tested >=24/25; failure => DESIGN FAIL / re-gate",
 }
 

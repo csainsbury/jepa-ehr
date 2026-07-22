@@ -115,16 +115,18 @@ def _run_replicate(kind, name, src, seed, *, base_sampler) -> dict:
         return {"kind": kind, "name": name, "source": src, "seed": seed, "all_pass": r["all_pass"],
                 "status": r["status"], "evidence": r["evidence"]}
     if name == "boundary":
-        r = boundary_control(seed)                 # registered-N default (Pi re-gate §3); bounded L<=7 (§4)
+        r = boundary_control(seed)                 # exact registered-N allocation (Pi §3/#1); bounded L<=7 (§4)
         return {"kind": kind, "name": name, "source": src, "seed": seed, "ok": r["ok"], "status": r["status"],
-                "evidence": r["evidence"]}
+                "evidence": r["evidence"], "n_ref": r["n_ref"], "n_cand": r["n_cand"], "alloc": r["alloc"]}
     if name == "structural_zero":
-        r = structural_zero_control(seed)          # registered-N default
+        r = structural_zero_control(seed)          # exact registered-N allocation
         return {"kind": kind, "name": name, "source": src, "seed": seed, "ok": r["ok"],
-                "zeros_absent": r["zeros_absent"], "status": r["status"], "evidence": r["evidence"]}
-    r = source_swap_control(seed)                  # registered-N default
+                "zeros_absent": r["zeros_absent"], "status": r["status"], "evidence": r["evidence"],
+                "n_ref": r["n_ref"], "n_cand": r["n_cand"], "alloc": r["alloc"]}
+    r = source_swap_control(seed)                  # exact registered-N allocation
     return {"kind": kind, "name": name, "source": src, "seed": seed,
-            "fails_nondegenerate": r["fails_nondegenerate"], "status": r["status"], "evidence": r["evidence"]}
+            "fails_nondegenerate": r["fails_nondegenerate"], "status": r["status"], "evidence": r["evidence"],
+            "n_ref": r["n_ref"], "n_cand": r["n_cand"], "alloc": r["alloc"]}
 
 
 def _resume_replicate(rd, kid, expected_sha):

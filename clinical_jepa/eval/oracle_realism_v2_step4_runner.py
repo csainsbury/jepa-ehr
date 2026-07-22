@@ -20,7 +20,7 @@ from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_realism_v2 import V2_D_COMPONENT_MENU
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import PROFILES, IDENTIFIABILITY_VECTOR
 from clinical_jepa.eval.oracle_realism_v2_battery import (
-    REGISTERED_N, CONTROL_N, SOURCE_PROFILES, PRIMARY_FAIL_MIN, SPECIFICITY_MIN, battery_impl_identity,
+    REGISTERED_N, CONTROL_N, CONTROL_ALLOC, SOURCE_PROFILES, PRIMARY_FAIL_MIN, SPECIFICITY_MIN, battery_impl_identity,
     registered_base_sampler, component_ablation, null_control, boundary_control,
     structural_zero_control, source_swap_control, rate_battery, forecast,
 )
@@ -108,7 +108,9 @@ def build_manifest(*, reviewed_commit: str, job_kind: str = "m3a-step4-power-v2"
         "seeds": list(SEEDS),
         "registered_n": REGISTERED_N,
         "control_n": CONTROL_N,                                 # global controls at the registered N (Pi re-gate §3)
-        "boundary_fixture": {"bound": "L<=7", "family": "uniform_int", "min": 1, "max": 7},  # bounded support (§4)
+        "control_alloc": list(CONTROL_ALLOC),                  # EXACT per-stratum allocation summing to N (#1)
+        "boundary_fixture": {"bound": "L<=7", "family": "uniform_int", "min": 1, "max": 7,   # bounded support (§4)
+                             "canonical_profile_hash": canonical_hash(PROFILES["boundary_short"])},   # design==executed (#3)
         "stratum_allocation": {"single_block": REGISTERED_N},   # single-scale design profiles; no strata
         "rng_derivation": {"fixture": "(source,profile,replicate_seed,role)",
                            "coupling": "(source,component,replicate_seed,role)"},
@@ -221,9 +223,9 @@ def dry_run(manifest: dict, *, n: int = 600, seeds=(1000,), components=None, req
                      "known_profile_repeatability": o.known_profile_repeatability}
     controls = {
         "null": null_control(seeds[0], base_sampler=base, source_profile="mimic_scale_control")["all_pass"],
-        "boundary": boundary_control(seeds[0], n_each=min(n, 500))["ok"],
-        "structural_zero": structural_zero_control(seeds[0], n_each=n)["ok"],
-        "source_swap": source_swap_control(seeds[0], n_each=n)["fails_nondegenerate"],
+        "boundary": boundary_control(seeds[0], alloc=(min(n, 500),) * 3)["ok"],
+        "structural_zero": structural_zero_control(seeds[0], alloc=(n, n, n))["ok"],
+        "source_swap": source_swap_control(seeds[0], alloc=(n, n, n))["fails_nondegenerate"],
     }
     fc = {sp: forecast(_registered_forecast_sampler(), source_profile=sp, secs_per_million_events=None)
           for sp in SOURCE_PROFILES}

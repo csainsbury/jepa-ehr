@@ -222,7 +222,7 @@ def reg_positive_gaps(sample) -> np.ndarray:
 FIXTURE_IMPL = {
     "name": "realism_v2_reference_constructor_dev",
     "law": "canonical_maximal_run",
-    "length_family": "discretized_lognormal(min>=1)",
+    "length_family": "discretized_lognormal(min>=1) OR uniform_int[min,max] inclusive (bounded-support control)",
     "run_family": "geometric with terminal truncation to hit L exactly (drop zero-truncation)",
     "class_family": "multinomial with hard structural zeros",
     "gap_family": "lognormal positive; float-collapse => np.nextafter nudge",

@@ -11,7 +11,7 @@ import unittest
 
 from clinical_jepa.eval import oracle_realism_v2_battery as bat
 
-_BATTERY_IMPL_ID = "7c61fe69587bf77ea653a7000369fbe9a1db3ab07a32dbbb1f560c8149ea07c0"
+_BATTERY_IMPL_ID = "508e55bc90dc3baa84bb0ce9defc6bd270cd63e51009c75f76f8f3941f68dcdf"
 
 
 def _synth(kp, ks, kr):
@@ -75,19 +75,18 @@ class ControlsFailClosed(unittest.TestCase):
         self.assertTrue(nc["all_pass"], f"null FAILs={nc['fails']} NE={nc['not_evaluable']}")
 
     def test_boundary_expected_status_map(self) -> None:
-        # at a representative N (S3 needs >=FLOOR eligible multi-cluster sequences); the exact predeclared
-        # NE-else-PASS map holds. (At tiny N some non-length checks are NE for lack of support — a small-N
-        # artifact, not the registered behaviour.)
-        bc = bat.boundary_control(1000, n_each=1500)
+        # at the REGISTERED allocation the exact predeclared NE-else-PASS map holds (S3 needs >=FLOOR eligible
+        # multi-cluster sequences; only reached at the registered N with the canonical boundary profile).
+        bc = bat.boundary_control(1000)   # default = exact registered allocation (8000)
         self.assertTrue(bc["ok"], f"boundary unexpected: {bc['unexpected']}")
 
     def test_structural_zero(self) -> None:
-        sz = bat.structural_zero_control(1000, n_each=600)
+        sz = bat.structural_zero_control(1000, alloc=(600, 600, 600))
         self.assertTrue(sz["zeros_absent"])
         self.assertTrue(sz["ok"])
 
     def test_source_swap_nondegenerate(self) -> None:
-        ss = bat.source_swap_control(1000, n_each=600)
+        ss = bat.source_swap_control(1000, alloc=(600, 600, 600))
         self.assertTrue(ss["fails_nondegenerate"], f"fails: {ss['fails']}")
 
     def test_all_check_keys_registry_matches_emitted(self) -> None:  # Pi §4: registry must not drift
@@ -101,10 +100,17 @@ class ControlsFailClosed(unittest.TestCase):
         from clinical_jepa.eval.oracle_realism_v2_verifier import NOT_EVALUABLE
         recs = sample_fixture("MIMIC", bat._BOUNDED_SHORT_PROF, 3000, seed=7)
         self.assertLessEqual(max(r.L_total for r in recs), 7)      # HARD structural bound (no 8-item block)
-        bc = bat.boundary_control(1000, n_each=1500)
+        bc = bat.boundary_control(1000)   # default = exact registered allocation (8000)
         for k in ("S9_zero", "S9_class", "S9_gap"):                # seam checks NE by construction, not by tail luck
             self.assertEqual(bc["status"][k], NOT_EVALUABLE, k)
         self.assertTrue(bc["ok"], f"boundary unexpected: {bc['unexpected']}")
+
+    def test_control_allocation_exactly_N(self) -> None:  # Pi re-gate #1: exact N=8000, not ~N
+        self.assertEqual(sum(bat.CONTROL_ALLOC), bat.CONTROL_N)
+        self.assertEqual(bat.CONTROL_N, 8000)
+        sz = bat.structural_zero_control(1000)             # default = registered allocation
+        self.assertEqual(sz["n_ref"], 8000)                # candidate/reference samples are EXACTLY 8000
+        self.assertEqual(sz["n_cand"], 8000)
 
 
 if __name__ == "__main__":

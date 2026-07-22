@@ -13,7 +13,7 @@ import unittest
 from clinical_jepa.eval import oracle_realism_v2_fixture as fx
 from clinical_jepa.eval import oracle_realism_v2_coupling as cp
 
-_COUPLING_IMPL_ID = "059706b7d12c4b2be0f8055dbaf6b4b039f8b16bafa3031a8cf4e2ad205481be"
+_COUPLING_IMPL_ID = "1188ebd55960881f8a51727546e3ce5230dbf4b16bdd3f4a14871a540f3b6bde"
 _PROF = {"length": {"family": "discretized_lognormal", "mu": log(120), "sigma": 0.9, "min": 1},
          "class_prior": [0.3, 0.25, 0.2, 0.15, 0.1], "structural_zero_classes": [],
          "cluster_size": {"family": "geometric", "p": 0.5},
@@ -87,6 +87,10 @@ class CouplingInvariants(unittest.TestCase):
             cp.apply_coupling(self.s, "nope", 0.3, seed=1)
         with self.assertRaises(ValueError):
             cp.apply_coupling(self.s, "burst_timing", 0.9, seed=1)      # out of [0,0.6]
+
+    def test_active_vs_rejected_impl_invariants(self) -> None:  # Pi re-gate #4
+        self.assertEqual(set(cp.COUPLING_IMPL["exact_invariants"]), set(cp.V2_D_COMPONENT_MENU))
+        self.assertEqual(set(cp.COUPLING_IMPL["rejected"]), {"burst_count_length", "length_class_mix"})
 
     def test_impl_identity_pinned(self) -> None:
         self.assertEqual(cp.coupling_impl_identity(), _COUPLING_IMPL_ID)

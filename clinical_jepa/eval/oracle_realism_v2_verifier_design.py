@@ -223,7 +223,10 @@ PROFILES = {
     "interior_high": _prof(log(150), 0.95, [0.3, 0.25, 0.2, 0.15, 0.1], [], 0.5, (log(1.2), 0.85),
                            {k: 0.55 for k in V2_D_COMPONENT_MENU}),   # 0.55 (not 0.60) to keep central FD in range
     "null_independent": _prof(log(150), 0.95, [0.3, 0.25, 0.2, 0.15, 0.1], [], 0.5, (log(1.2), 0.85), _NO_DEP),
-    "boundary_short":   _prof(log(9), 0.30, [0.3, 0.25, 0.2, 0.15, 0.1], [], 0.5, (log(1.2), 0.85), _NO_DEP),
+    # boundary-short is the CANONICAL bounded-support control (Pi re-gate #3/#4): STRUCTURAL bound L in [1,7]
+    # (uniform_int) so no 8-item block forms and S9 refusal is guaranteed. The battery imports THIS profile.
+    "boundary_short":   {**_prof(log(9), 0.30, [0.3, 0.25, 0.2, 0.15, 0.1], [], 0.5, (log(1.2), 0.85), _NO_DEP),
+                         "length": {"family": "uniform_int", "min": 1, "max": 7}},
 }
 
 # Coupling laws: EXACT finite-pool constructions with a dedicated coupling RNG (seed derived from the profile
@@ -241,17 +244,8 @@ COUPLING_PROTOCOL = {
                                "DESIGN FAIL / re-gate — never post-hoc threshold tuning",
 }
 COUPLING_LAWS = {
-    # honest exact construction (Pi's acceptable route): preserves the L and K MULTISETS exactly; S2 + the six
-    # registered marginals are preservation-REQUIRED (tested), NOT claimed preserved by construction.
-    "burst_count_length": {
-        "construction": "generate the independent finite pool; retain the exact L and K multisets; build the "
-                        "COMONOTONE feasible assignment of sorted K values to sorted L values (K<=L, stable "
-                        "index tie-breaks); s activates a frozen fraction of whole permutation CYCLES between "
-                        "the original and comonotone assignments (preserving the L and K multisets exactly); "
-                        "reconstruct positive run compositions under a separately frozen conditional rule",
-        "preserves_exactly": ["L multiset", "K multiset"],
-        "preservation_required_tested": ["S2", "the six registered marginals"],
-        "moves": ["S1_density", "S1_tau"]},
+    # ACTIVE laws — exactly the V2_D_COMPONENT_MENU (Pi re-gate #4). Rejected explored-space descriptors live in
+    # REJECTED_COUPLING_LAWS below and are NEVER part of the active contract.
     "burst_timing": {
         "construction": "rank copula on the sequence's positive gaps: a fraction s of gaps are reassigned to "
                         "follow the rank of the preceding cluster size, holding the sequence's gap MULTISET "
@@ -271,13 +265,21 @@ COUPLING_LAWS = {
         "preserves_exactly": ["per-sequence class counts => pooled class_tv", "cluster-size multiset"],
         "preservation_required_tested": ["S4 (cross-loading recorded, see below)"],
         "moves": ["S7_abs"]},
+}
+# Rejected explored-space coupling descriptors (Pi rulings). Retained as provenance ONLY; NEVER dispatched and
+# never part of the active contract. Their private implementations may remain in the coupling module.
+REJECTED_COUPLING_LAWS = {
+    "burst_count_length": {
+        "construction": "comonotone K<->L cycle activation preserving the L and K multisets exactly",
+        "moves": ["S1_density", "S1_tau"],
+        "rejected": "Pi F1 — S1 is structural under the maximal-run law (baseline tau(L,K)~0.92); not a "
+                    "separable dependence."},
     "length_class_mix": {
-        "construction": "length-bin-dependent POOL-BALANCED class relabelling: conditional class mix shifted by "
-                        "length bin by a fraction s with a per-bin balancing constraint that holds the POOLED "
-                        "class proportions fixed",
-        "preserves_exactly": ["pooled class proportions (class_tv)"],
-        "preservation_required_tested": ["the six registered marginals"],
-        "moves": ["S5_abs", "S6_tv"]},
+        "construction": "length-bin-dependent POOL-BALANCED class relabelling holding pooled class proportions fixed",
+        "moves": ["S5_abs", "S6_tv"],
+        "rejected": "Pi step-4 result gate — it drives the TERMINAL S5 occupancy check (candidate-A S5_abs ~19 "
+                    "FAIL/25 on MIMIC; real cross-loading, worse at higher N). S5 must not be exempted/weakened, "
+                    "so the component is dropped and S6 made terminal/no-D."},
 }
 # S4<->S7 cross-loading is REAL (diversity-by-cluster-size and within-cluster homogeneity are related). We do
 # NOT claim orthogonality; the predeclared cross-loading is recorded and the Jacobian/collision tests decide
@@ -420,6 +422,7 @@ M3A_VERIFIER_DESIGN = {
     "profiles": PROFILES,
     "coupling_protocol": COUPLING_PROTOCOL,
     "coupling_laws": COUPLING_LAWS,
+    "rejected_coupling_laws": REJECTED_COUPLING_LAWS,
     "cross_loading": CROSS_LOADING,
     "source_swap": SOURCE_SWAP,
     "ablation_matrix": ABLATION_MATRIX,
