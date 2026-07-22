@@ -107,6 +107,18 @@ class IdentExecution(unittest.TestCase):
         r = self._exec("identR", m=dict(self.m, registered_n=1), cap_hours=1.0, cap_gb=64)
         self.assertEqual(r["status"], "REFUSED")   # deep-equality refuses tampered registered_n
 
+    def test_resume_evidence_integrity(self) -> None:  # Pi §4: a tampered profile record refuses on resume
+        self._exec("identTamper", cap_hours=1.0, cap_gb=64)
+        rd = ir.run_dir(self.out, "identTamper")
+        p = os.path.join(rd, "profiles", "mimic_scale_control.json")
+        rec = json.load(open(p))
+        rec["status"] = "FAIL" if rec["status"] != "FAIL" else "PASS"   # flip the verdict, keep parseable
+        with open(p, "w") as f:
+            json.dump(rec, f)
+        r = self._exec("identTamper", cap_hours=1.0, cap_gb=64)
+        self.assertEqual(r["status"], "PARTIAL")
+        self.assertEqual(r["reason"], "resume evidence integrity failure")
+
 
 if __name__ == "__main__":
     unittest.main()

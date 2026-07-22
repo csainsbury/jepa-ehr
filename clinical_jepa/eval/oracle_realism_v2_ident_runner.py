@@ -202,12 +202,29 @@ def _ident_completion_hashes(records, run_id, mhash, reviewed_commit, conj) -> d
     return {"result_sha256": _sha(_dumps(result_core, sort_keys=True)), "evidence_sha256": evidence_sha}
 
 
+def _resume_profile_record(rd, prof, expected_sha):
+    """Load a resumed FINAL profile record with integrity binding (Pi §4): bytes must hash to the recorded sha
+    and the record's profile name must match. Returns (rec, None) or (None, why)."""
+    path = os.path.join(rd, "profiles", prof + ".json")
+    if not os.path.exists(path):
+        return None, f"missing:{prof}"
+    raw = open(path).read()
+    if not expected_sha or _sha(raw) != expected_sha:
+        return None, f"hash_mismatch:{prof}"
+    rec = json.loads(raw)
+    if str(rec.get("profile")) != prof:
+        return None, f"metadata_mismatch:{prof}"
+    return rec, None
+
+
 def execute_identifiability(manifest, run_id, out_base, *, base_sampler, nuisance_profiles=NUISANCE_PROFILES,
                             cov_seeds=None, ref_seed=1000, heldout_seed=1024, grid=None, rank_points=None,
-                            cap_hours, cap_gb, clock=time.monotonic, verify=None):
+                            cap_hours, cap_gb, clock=time.monotonic, verify=None, gate_event=None):
     """Fail-closed identifiability execution with INTRA-profile checkpoint/resume + CUMULATIVE cap. `cov_seeds`
-    seed the strict null covariance (default the manifest seeds). Writes result.json + per-profile evidence
-    records atomically; a cap-exceed at any unit boundary (or a resume mismatch) yields PARTIAL / non-pass."""
+    seed the strict null covariance (default the manifest seeds). `gate_event` is the reviewed ARR approval,
+    persisted into the result. Writes result.json + per-profile evidence records atomically; a cap-exceed at any
+    unit boundary or a resume mismatch yields PARTIAL / non-pass. Resumed profile records AND the intra-profile
+    progress state are integrity-bound to the checkpoint (content sha); any mismatch => PARTIAL / non-pass."""
     if verify is not None:
         v = verify(manifest)
         if not v.get("ok"):
@@ -222,6 +239,7 @@ def execute_identifiability(manifest, run_id, out_base, *, base_sampler, nuisanc
     ckpt = os.path.join(rd, "checkpoint.json")
     mhash = manifest["manifest_hash"]
     done, records, timings, cum_prev = set(), {}, {}, 0.0
+    hashes_ck, progress_ck = {}, {}
     if os.path.exists(ckpt):
         prev = json.load(open(ckpt))
         if prev.get("manifest_hash") != mhash:
@@ -229,12 +247,20 @@ def execute_identifiability(manifest, run_id, out_base, *, base_sampler, nuisanc
             _atomic_write(os.path.join(rd, "result.json"), _dumps(res)); return res
         done = set(prev.get("done", []))
         timings = dict(prev.get("timings", {}))
+        hashes_ck = dict(prev.get("hashes", {}))             # per-profile final-record shas
+        progress_ck = dict(prev.get("progress_hashes", {}))  # per-profile intra-profile state shas
         cum_prev = float(prev.get("cum_elapsed", 0.0))
         for p in done:
-            records[p] = json.load(open(os.path.join(rd, "profiles", p + ".json")))
+            rec, why = _resume_profile_record(rd, p, hashes_ck.get(p))
+            if why is not None:
+                res = {"run_id": run_id, "status": "PARTIAL", "reason": "resume evidence integrity failure",
+                       "detail": why, "manifest_hash": mhash}
+                _atomic_write(os.path.join(rd, "result.json"), _dumps(res)); return res
+            records[p] = rec
 
     def _write_ckpt():
         _atomic_write(ckpt, _dumps({"manifest_hash": mhash, "done": sorted(done), "timings": timings,
+                                    "hashes": hashes_ck, "progress_hashes": progress_ck,
                                     "cum_elapsed": round(cum_prev + (clock() - t0), 2)}))
 
     t0 = clock()
@@ -242,7 +268,15 @@ def execute_identifiability(manifest, run_id, out_base, *, base_sampler, nuisanc
         if prof in done:
             continue
         sf = os.path.join(rd, "progress", prof + ".json")
-        state = json.load(open(sf)) if os.path.exists(sf) else _init_state(prof, grid, rank_points, cov_seeds)
+        if os.path.exists(sf):                               # resume a partial profile — verify its integrity
+            raw = open(sf).read()
+            if _sha(raw) != progress_ck.get(prof):
+                res = {"run_id": run_id, "status": "PARTIAL", "reason": "resume progress integrity failure",
+                       "detail": f"progress_hash_mismatch:{prof}", "manifest_hash": mhash}
+                _atomic_write(os.path.join(rd, "result.json"), _dumps(res)); return res
+            state = json.loads(raw)
+        else:
+            state = _init_state(prof, grid, rank_points, cov_seeds)
         while state["stage"] != "done":
             cum_now = cum_prev + (clock() - t0)
             if cum_now > cap_hours * 3600 or _rss_gb() > cap_gb:      # cumulative cap AT the unit boundary
@@ -259,11 +293,15 @@ def execute_identifiability(manifest, run_id, out_base, *, base_sampler, nuisanc
             state = _step_profile(state, base_sampler, prof, grid=grid, rank_points=rank_points,
                                   cov_seeds=cov_seeds, ref_seed=ref_seed, heldout_seed=heldout_seed)
             timings[unit] = round(clock() - t_u, 4)
-            _atomic_write(sf, _dumps(state)); _write_ckpt()
+            ptext = _dumps(state)
+            _atomic_write(sf, ptext); progress_ck[prof] = _sha(ptext); _write_ckpt()
         rec = state["result"]
-        _atomic_write(os.path.join(rd, "profiles", prof + ".json"), _dumps(rec))
+        rtext = _dumps(rec)
+        _atomic_write(os.path.join(rd, "profiles", prof + ".json"), rtext)
+        hashes_ck[prof] = _sha(rtext)
         records[prof] = rec
         done.add(prof)
+        progress_ck.pop(prof, None)
         try:
             os.remove(sf)                        # progress consumed; profiles/ holds only final evidence records
         except OSError:
@@ -285,7 +323,8 @@ def execute_identifiability(manifest, run_id, out_base, *, base_sampler, nuisanc
     _atomic_write(os.path.join(rd, "runtime.json"), _dumps(runtime))
     _atomic_write(os.path.join(rd, "environment.json"), _dumps(env))
     result = {"run_id": run_id, "status": "PASS" if conj else "FAIL", "manifest_hash": mhash,
-              "reviewed_commit": manifest.get("reviewed_commit"), "per_profile": records,
-              "profile_conjunction": conj, "completion_hashes": hashes, "runtime_secs": cum_total}
+              "reviewed_commit": manifest.get("reviewed_commit"), "gate_event": gate_event,
+              "per_profile": records, "profile_conjunction": conj, "completion_hashes": hashes,
+              "runtime_secs": cum_total}
     _atomic_write(os.path.join(rd, "result.json"), _dumps(result))
     return result

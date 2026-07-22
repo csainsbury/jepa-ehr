@@ -105,6 +105,30 @@ class LaunchGate(unittest.TestCase):
             rn._validate_run_id("m3a-step4-ident-v1-run1", "m3a-step4-power-v1")   # wrong job kind
         rn._validate_run_id("m3a-step4-power-v1-run1", "m3a-step4-power-v1")       # ok
 
+    def test_gate_event_required(self) -> None:  # Pi §3: an approval without a canonical gate_event cannot launch
+        import clinical_jepa.eval.oracle_realism_v2_step4_policy as pol
+        head = rn._git_head()
+        if not head:
+            self.skipTest("no git head")
+        m = rn.build_manifest(reviewed_commit=head, job_kind="m3a-step4-power-v1")
+        rid = "m3a-step4-power-v1-run1"
+        saved = dict(pol.APPROVED_STEP4_JOBS)
+        try:
+            pol.APPROVED_STEP4_JOBS[rid] = {"job_kind": "m3a-step4-power-v1", "reviewed_commit": head,
+                                            "manifest_hash": m["manifest_hash"]}   # no gate_event
+            v = rn.verify_launch(m, run_id=rid, job_kind="m3a-step4-power-v1")
+            self.assertIn("gate_event_missing", v["problems"])
+            self.assertIsNone(v["gate_event"])
+            pol.APPROVED_STEP4_JOBS[rid]["gate_event"] = "evt-20260722T000000Z-deadbeef"
+            v2 = rn.verify_launch(m, run_id=rid, job_kind="m3a-step4-power-v1")
+            self.assertTrue(v2["ok"], v2["problems"])
+            self.assertEqual(v2["gate_event"], "evt-20260722T000000Z-deadbeef")
+            # a non-canonical gate id is refused
+            pol.APPROVED_STEP4_JOBS[rid]["gate_event"] = "not-an-event"
+            self.assertIn("gate_event_missing", rn.verify_launch(m, run_id=rid, job_kind="m3a-step4-power-v1")["problems"])
+        finally:
+            pol.APPROVED_STEP4_JOBS.clear(); pol.APPROVED_STEP4_JOBS.update(saved)
+
 
 class Benchmark(unittest.TestCase):
     def test_benchmark_binds_volume_time_env(self) -> None:  # Pi §4/§7

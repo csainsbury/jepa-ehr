@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re as _re
 
 from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_realism_v2 import V2_D_COMPONENT_MENU
@@ -173,10 +174,15 @@ def verify_manifest(manifest: dict, *, require_git_head: bool = True) -> dict:
     return {"ok": not problems, "problems": problems, "diff": diff}
 
 
+_GATE_EVENT_RE = _re.compile(r"^evt-[0-9A-Za-z_.-]+$")
+
+
 def verify_launch(manifest: dict, *, run_id: str, job_kind: str) -> dict:
     """LAUNCH gate: whole-manifest verification PLUS the policy-data approval map (Pi §1). The (run_id, job_kind,
-    reviewed_commit, manifest_hash) must be present in APPROVED_STEP4_JOBS (empty => nothing launches). The
-    requested job_kind must match the manifest. Any mismatch REFUSES."""
+    reviewed_commit, manifest_hash) must be present in APPROVED_STEP4_JOBS (empty => nothing launches), the
+    requested job_kind must match the manifest, AND the approval must carry a non-empty canonical ARR `gate_event`
+    (Pi §3 — an entry lacking reviewed-gate provenance must NOT authorize execution). Any mismatch REFUSES. On
+    success returns the approval (incl. gate_event) so the runner can persist it as run provenance."""
     from clinical_jepa.eval.oracle_realism_v2_step4_policy import APPROVED_STEP4_JOBS
     v = verify_manifest(manifest, require_git_head=True)
     problems = list(v["problems"])
@@ -185,11 +191,16 @@ def verify_launch(manifest: dict, *, run_id: str, job_kind: str) -> dict:
     appr = APPROVED_STEP4_JOBS.get(run_id)
     if appr is None:
         problems.append("run_id_not_approved")
-    elif not (appr.get("job_kind") == job_kind
-              and appr.get("reviewed_commit") == manifest.get("reviewed_commit")
-              and appr.get("manifest_hash") == manifest.get("manifest_hash")):
-        problems.append("approval_mismatch")
-    return {"ok": not problems, "problems": problems}
+    else:
+        if not (appr.get("job_kind") == job_kind
+                and appr.get("reviewed_commit") == manifest.get("reviewed_commit")
+                and appr.get("manifest_hash") == manifest.get("manifest_hash")):
+            problems.append("approval_mismatch")
+        gate = str(appr.get("gate_event", ""))
+        if not _GATE_EVENT_RE.match(gate):
+            problems.append("gate_event_missing")
+    return {"ok": not problems, "problems": problems,
+            "gate_event": (appr or {}).get("gate_event") if not problems else None}
 
 
 def dry_run(manifest: dict, *, n: int = 600, seeds=(1000,), components=None, require_git_head: bool = True) -> dict:
@@ -227,8 +238,6 @@ def _registered_forecast_sampler():
     return registered_base_sampler(n=REGISTERED_N)
 
 
-import re as _re
-
 _STATE_ROOT = os.path.join(_REPO_ROOT, "state", "realism-v2", "step4")
 _RUN_ID_RE = {"m3a-step4-power-v1": _re.compile(r"^m3a-step4-power-v1-run\d+$"),
               "m3a-step4-ident-v1": _re.compile(r"^m3a-step4-ident-v1-run\d+$")}
@@ -260,7 +269,7 @@ def run_full_battery(manifest: dict, *, run_id: str):
                    seeds=manifest["seeds"], sources=tuple(manifest["source_profiles"]),
                    components=manifest["components"],
                    cap_hours=manifest["cap"]["wall_clock_hours"], cap_gb=manifest["cap"]["ram_gb"],
-                   verify=lambda mm: verify_manifest(mm, require_git_head=True))
+                   verify=lambda mm: verify_manifest(mm, require_git_head=True), gate_event=v["gate_event"])
 
 
 def run_full_identifiability(manifest: dict, *, run_id: str):
@@ -281,7 +290,8 @@ def run_full_identifiability(manifest: dict, *, run_id: str):
                                    heldout_seed=idb["heldout_seed"], grid=ident_grid(),
                                    rank_points=interior_rank_points(),
                                    cap_hours=manifest["cap"]["wall_clock_hours"], cap_gb=manifest["cap"]["ram_gb"],
-                                   verify=lambda mm: verify_manifest(mm, require_git_head=True))
+                                   verify=lambda mm: verify_manifest(mm, require_git_head=True),
+                                   gate_event=v["gate_event"])
 
 
 def benchmark(*, source_profile: str = "mimic_scale_control", seed: int = 1000) -> dict:

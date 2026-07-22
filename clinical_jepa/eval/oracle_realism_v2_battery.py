@@ -40,6 +40,15 @@ _NONDEGENERATE = ["count_ks", "positive_gap_ks", "class_tv", "S1_density", "S1_t
 # checks (sequences shorter than an 8-item block have no seams). Everything else must PASS.
 _BOUNDARY_EXPECTED_NE = {"S1_density", "S5_abs", "S6_tv", "S9_zero", "S9_class", "S9_gap"}
 
+# Authoritative universe of check keys the two verifier routes emit (keys ALWAYS present; status may be NE).
+# A record missing any of these is truncated/tampered — used to require the FULL expected set (Pi §4). A
+# conformance test (test_oracle_v2_battery) asserts the emitted keys equal this registry, catching drift.
+ALL_CHECK_KEYS = frozenset({
+    "S1_density", "S1_tau", "S2_ks", "S3_tau", "S3_loggap", "S4_abs", "S5_abs", "S6_tv", "S7_abs",
+    "S8_class", "S8_density", "S9_zero", "S9_class", "S9_gap",
+    "class_tv", "count_ks", "delta_t_zero_abs", "length_ks", "occupancy_abs", "positive_gap_ks",
+})
+
 
 def _derive_seed(*parts) -> int:
     return int.from_bytes(hashlib.sha256("|".join(str(p) for p in parts).encode()).digest()[:8], "big")

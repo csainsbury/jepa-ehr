@@ -87,6 +87,12 @@ class ControlsFailClosed(unittest.TestCase):
         ss = bat.source_swap_control(1000, n_each=600)
         self.assertTrue(ss["fails_nondegenerate"], f"fails: {ss['fails']}")
 
+    def test_all_check_keys_registry_matches_emitted(self) -> None:  # Pi §4: registry must not drift
+        smoke = bat.multiscale_smoke_sampler(n_each=400)
+        nc = bat.null_control(1000, base_sampler=smoke, source_profile="mimic_scale_control")
+        self.assertEqual(set(nc["status"].keys()), set(bat.ALL_CHECK_KEYS))
+        self.assertEqual(set(nc["evidence"].keys()), set(bat.ALL_CHECK_KEYS))
+
 
 if __name__ == "__main__":
     unittest.main()

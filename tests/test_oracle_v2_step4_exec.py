@@ -109,25 +109,38 @@ class ExecutionMachinery(unittest.TestCase):
         self.assertEqual(r["status"], "PARTIAL")
         self.assertEqual(r["reason"], "cap exceeded before verdict")
 
+    def test_resume_evidence_integrity(self) -> None:  # Pi §4: a tampered done record refuses on resume
+        self._run("runTamper", cap_hours=1.0, cap_gb=64)       # complete a run
+        rd = ex.run_dir(self.out, "runTamper")
+        p = os.path.join(rd, "replicates", "control|null|mimic_scale_control|1000.json")
+        rec = json.load(open(p))
+        rec["all_pass"] = (not rec["all_pass"])                # flip a verdict-bearing field, keep it parseable
+        with open(p, "w") as f:
+            json.dump(rec, f)
+        r = self._run("runTamper", cap_hours=1.0, cap_gb=64)   # resume => integrity check catches the edit
+        self.assertEqual(r["status"], "PARTIAL")
+        self.assertEqual(r["reason"], "resume evidence integrity failure")
+
 
 class AggregateVerdict(unittest.TestCase):
     def _records(self, seeds, *, primary_fail=True, spec_pass=True, rep=True, ctrl_ok=True):
         checks = {"S3_tau": FAIL if primary_fail else PASS, "S3_loggap": FAIL if primary_fail else PASS,
                   "S4_abs": PASS if spec_pass else FAIL, "S6_tv": PASS, "S7_abs": PASS, "class_tv": PASS,
                   "S8_class": PASS}
+        # full-key boundary status map (Pi §4): the length/seam checks are NE, everything else PASS
+        full_boundary = {k: (NOT_EVALUABLE if k in bat._BOUNDARY_EXPECTED_NE else PASS) for k in bat.ALL_CHECK_KEYS}
         recs = {}
         for s in seeds:
             recs[f"ablation|burst_timing|mimic_scale_control|{s}"] = {
                 "kind": "ablation", "A_status": dict(checks),
+                "D_status": {k: PASS for k in checks},          # known profile (D arm) — all recover
                 "known_profile_repeatability": rep, "A_specificity_ok": spec_pass}
             recs[f"control|null|mimic_scale_control|{s}"] = {   # source-scoped
                 "kind": "control", "name": "null", "all_pass": ctrl_ok, "status": dict(checks)}
-            # global controls (Pi §4): keyed by GLOBAL, once per seed
+            # global controls (Pi §4): keyed by GLOBAL, once per seed; boundary carries the FULL key set
             recs[f"control|boundary|GLOBAL|{s}"] = {
                 "kind": "control", "name": "boundary",
-                "status": ({"S1_density": NOT_EVALUABLE, "S5_abs": NOT_EVALUABLE, "S6_tv": NOT_EVALUABLE,
-                            "S9_zero": NOT_EVALUABLE, "S9_class": NOT_EVALUABLE, "S9_gap": NOT_EVALUABLE,
-                            "S4_abs": PASS} if ctrl_ok else {"S4_abs": FAIL})}
+                "status": (dict(full_boundary) if ctrl_ok else {**full_boundary, "S4_abs": FAIL})}
             recs[f"control|structural_zero|GLOBAL|{s}"] = {"kind": "control", "name": "structural_zero", "ok": ctrl_ok}
             recs[f"control|source_swap|GLOBAL|{s}"] = {"kind": "control", "name": "source_swap", "fails_nondegenerate": ctrl_ok}
         return recs
@@ -161,12 +174,13 @@ class AggregateVerdict(unittest.TestCase):
         ctrl = v["controls"]
         # global controls gated once (not per source); null stays per source
         self.assertIn("global", ctrl)
-        self.assertEqual(set(ctrl["global"]), {"boundary_exact", "structural_zero_ok", "source_swap_nondegenerate", "n"})
+        self.assertLessEqual({"boundary_exact", "structural_zero_ok", "source_swap_nondegenerate", "n"},
+                             set(ctrl["global"]))
         self.assertIn("null_pass", ctrl["per_source"]["mimic_scale_control"])
         self.assertNotIn("boundary_exact", ctrl["per_source"]["mimic_scale_control"])
-        # per-check known-profile PASS/FAIL/NE diagnostic present
+        # per-check known-profile (D arm) diagnostic present; D recovers => S3_tau PASS on every seed
         rates = v["per_component"]["burst_timing"]["per_source"]["mimic_scale_control"]["known_profile_rates"]
-        self.assertEqual(rates["S3_tau"]["FAIL"], 25)
+        self.assertEqual(rates["S3_tau"]["PASS"], 25)
 
     def test_global_control_failure_blocks_pass(self) -> None:  # global gate is conjunctive
         seeds = list(range(1000, 1025))
@@ -174,6 +188,35 @@ class AggregateVerdict(unittest.TestCase):
         for s in seeds[:2]:                                    # 2 seeds' structural-zero fail => 23/25 < 24
             recs[f"control|structural_zero|GLOBAL|{s}"]["ok"] = False
         v = ex.aggregate(recs, ["burst_timing"], ["mimic_scale_control"], seeds)
+        self.assertFalse(v["conjunctive_pass"])
+
+    def test_known_profile_rates_use_D_arm_and_wilson(self) -> None:  # Pi §1 + §2
+        seeds = list(range(1000, 1025))
+        # make the A arm (misspecified) FAIL S3_tau on every seed, but the D arm all PASS
+        recs = self._records(seeds)
+        ps = ex.aggregate(recs, ["burst_timing"], ["mimic_scale_control"], seeds)["per_component"]["burst_timing"]["per_source"]["mimic_scale_control"]
+        # KNOWN-profile (D arm) recovers => S3_tau PASS 25/25; misspecified A arm => S3_tau FAIL 25/25
+        self.assertEqual(ps["known_profile_rates"]["S3_tau"]["PASS"], 25)
+        self.assertEqual(ps["misspecified_A_rates"]["S3_tau"]["FAIL"], 25)
+        # Wilson intervals present on every reported rate
+        self.assertIn("wilson95", ps["primary_fail_wilson"]["S3_tau"])
+        self.assertIn("wilson95", ps["repeatability_wilson"])
+        self.assertIn("wilson95", ps["null_wilson"])
+        self.assertEqual(len(ps["primary_fail_wilson"]["S3_tau"]["wilson95"]), 2)
+
+    def test_controls_global_wilson_present(self) -> None:  # Pi §2
+        seeds = list(range(1000, 1025))
+        g = ex.aggregate(self._records(seeds), ["burst_timing"], ["mimic_scale_control"], seeds)["controls"]["global"]
+        for k in ("boundary_wilson", "structural_zero_wilson", "source_swap_wilson"):
+            self.assertIn("wilson95", g[k], k)
+
+    def test_truncated_boundary_record_not_exact(self) -> None:  # Pi §4 full-key-set requirement
+        seeds = list(range(1000, 1025))
+        recs = self._records(seeds)
+        for s in seeds[:2]:                                    # drop keys from 2 boundary records => not exact
+            recs[f"control|boundary|GLOBAL|{s}"]["status"] = {"S4_abs": PASS}
+        v = ex.aggregate(recs, ["burst_timing"], ["mimic_scale_control"], seeds)
+        self.assertEqual(v["controls"]["global"]["boundary_exact"], 23)   # 2 truncated => 23/25
         self.assertFalse(v["conjunctive_pass"])
 
 

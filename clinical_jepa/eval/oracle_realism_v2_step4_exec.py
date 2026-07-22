@@ -22,7 +22,7 @@ from clinical_jepa.eval.oracle_realism_v2_verifier import PASS, FAIL, NOT_EVALUA
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import ABLATION_MATRIX
 from clinical_jepa.eval.oracle_realism_v2_battery import (
     component_ablation, null_control, boundary_control, structural_zero_control, source_swap_control,
-    PRIMARY_FAIL_MIN, SPECIFICITY_MIN, _BOUNDARY_EXPECTED_NE,
+    PRIMARY_FAIL_MIN, SPECIFICITY_MIN, _BOUNDARY_EXPECTED_NE, ALL_CHECK_KEYS,
 )
 
 CONTROLS = ("null", "boundary", "structural_zero", "source_swap")
@@ -127,11 +127,30 @@ def _run_replicate(kind, name, src, seed, *, base_sampler) -> dict:
             "fails_nondegenerate": r["fails_nondegenerate"], "status": r["status"], "evidence": r["evidence"]}
 
 
+def _resume_replicate(rd, kid, expected_sha):
+    """Load a resumed replicate record with INTEGRITY binding (Pi §4): the on-disk bytes must hash to the
+    checkpoint-recorded sha, and the record's key metadata must match `kid`. Returns (rec, None) or (None, why)."""
+    path = os.path.join(rd, "replicates", kid + ".json")
+    if not os.path.exists(path):
+        return None, f"missing:{kid}"
+    raw = open(path).read()
+    if not expected_sha or _sha(raw) != expected_sha:
+        return None, f"hash_mismatch:{kid}"
+    rec = json.loads(raw)
+    parts = kid.split("|")                                    # kind|name|source|seed
+    if len(parts) != 4 or [str(rec.get("kind")), str(rec.get("name")), str(rec.get("source")),
+                           str(rec.get("seed"))] != parts:
+        return None, f"metadata_mismatch:{kid}"
+    return rec, None
+
+
 def execute(manifest, run_id, out_base, *, base_sampler, seeds, sources, components=None, controls=CONTROLS,
-            cap_hours, cap_gb, clock=time.monotonic, verify=None):
+            cap_hours, cap_gb, clock=time.monotonic, verify=None, gate_event=None):
     """Fail-closed execution with checkpoint/resume + cap enforcement. `verify` (callable manifest->{ok,...})
-    is the runner's fail-closed manifest check; a failure REFUSES before any work. Returns a result dict and
-    writes it atomically to run_dir/result.json (and per-replicate records + checkpoint.json)."""
+    is the runner's fail-closed manifest check; a failure REFUSES before any work. `gate_event` is the reviewed
+    ARR approval event, persisted into the result as provenance. Returns a result dict and writes it atomically
+    to run_dir/result.json (and per-replicate records + checkpoint.json). Resumed records are integrity-bound to
+    the checkpoint (content sha + key metadata); any mismatch yields PARTIAL / non-pass."""
     if verify is not None:
         v = verify(manifest)
         if not v.get("ok"):
@@ -142,7 +161,7 @@ def execute(manifest, run_id, out_base, *, base_sampler, seeds, sources, compone
     os.makedirs(os.path.join(rd, "replicates"), exist_ok=True)
     ckpt = os.path.join(rd, "checkpoint.json")
     mhash = manifest["manifest_hash"]
-    done, records, timings, cum_prev = set(), {}, {}, 0.0
+    done, records, timings, hashes_ck, cum_prev = set(), {}, {}, {}, 0.0
     if os.path.exists(ckpt):
         prev = json.load(open(ckpt))
         if prev.get("manifest_hash") != mhash:               # resume-mismatch => PARTIAL non-pass
@@ -151,9 +170,16 @@ def execute(manifest, run_id, out_base, *, base_sampler, seeds, sources, compone
             return res
         done = set(prev.get("done", []))
         timings = dict(prev.get("timings", {}))              # per-replicate secs survive resume
+        hashes_ck = dict(prev.get("hashes", {}))             # per-replicate content shas (integrity binding)
         cum_prev = float(prev.get("cum_elapsed", 0.0))       # cumulative wall-clock survives resume (Pi §3/§5)
         for kid in done:
-            records[kid] = json.load(open(os.path.join(rd, "replicates", kid + ".json")))
+            rec, why = _resume_replicate(rd, kid, hashes_ck.get(kid))
+            if why is not None:                              # tampered / truncated / renamed resumed record
+                res = {"run_id": run_id, "status": "PARTIAL", "reason": "resume evidence integrity failure",
+                       "detail": why, "manifest_hash": mhash}
+                _atomic_write(os.path.join(rd, "result.json"), _dumps(res))
+                return res
+            records[kid] = rec
     t0 = clock()
     for key in _replicate_keys(components, sources, seeds, controls):
         kid = "|".join(map(str, key))
@@ -169,11 +195,13 @@ def execute(manifest, run_id, out_base, *, base_sampler, seeds, sources, compone
         t_rep = clock()
         rec = _run_replicate(*key, base_sampler=base_sampler)
         timings[kid] = round(clock() - t_rep, 4)
-        _atomic_write(os.path.join(rd, "replicates", kid + ".json"), _dumps(rec))
+        text = _dumps(rec)
+        _atomic_write(os.path.join(rd, "replicates", kid + ".json"), text)
+        hashes_ck[kid] = _sha(text)                          # bind the exact bytes into the checkpoint
         records[kid] = rec
         done.add(kid)
         _atomic_write(ckpt, _dumps({"manifest_hash": mhash, "done": sorted(done), "timings": timings,
-                                    "cum_elapsed": round(cum_prev + (clock() - t0), 2)}))
+                                    "hashes": hashes_ck, "cum_elapsed": round(cum_prev + (clock() - t0), 2)}))
     cum_total = round(cum_prev + (clock() - t0), 2)
     if cum_total > cap_hours * 3600 or _rss_gb() > cap_gb:   # Pi §5: re-check the cap BEFORE declaring a verdict
         res = {"run_id": run_id, "status": "PARTIAL", "reason": "cap exceeded before verdict",
@@ -193,6 +221,7 @@ def execute(manifest, run_id, out_base, *, base_sampler, seeds, sources, compone
     _atomic_write(os.path.join(rd, "environment.json"), _dumps(env))
     result = {"run_id": run_id, "status": status,
               "manifest_hash": mhash, "reviewed_commit": manifest.get("reviewed_commit"),
+              "gate_event": gate_event,                       # reviewed ARR approval provenance (Pi §3)
               "verdict": verdict, "completion_hashes": hashes,
               "runtime_secs": cum_total, "n_replicates": len(records)}
     _atomic_write(os.path.join(rd, "result.json"), _dumps(result))
@@ -226,18 +255,38 @@ def _completion_hashes(records, run_id, mhash, reviewed_commit, verdict) -> dict
 
 
 def _per_check_rates(status_maps) -> dict:
-    """Per-check PASS/FAIL/NE counts over a list of status maps (Pi §4 known-profile diagnostic)."""
+    """Per-check PASS/FAIL/NE counts over a list of status maps (Pi §4 per-check diagnostic)."""
     keys = sorted({k for m in status_maps for k in m})
     return {k: {"PASS": sum(1 for m in status_maps if m.get(k) == PASS),
                 "FAIL": sum(1 for m in status_maps if m.get(k) == FAIL),
                 "NE": sum(1 for m in status_maps if m.get(k) == NOT_EVALUABLE)} for k in keys}
 
 
+def _wilson(k, n, z=1.96):
+    """Wilson score 95% interval for a binomial proportion k/n (reporting evidence, not a verdict threshold)."""
+    if n <= 0:
+        return [0.0, 0.0]
+    p = k / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = (p + z2 / (2 * n)) / denom
+    half = (z * ((p * (1 - p) / n + z2 / (4 * n * n)) ** 0.5)) / denom
+    return [round(max(0.0, center - half), 6), round(min(1.0, center + half), 6)]
+
+
+def _rate_ci(k, n) -> dict:
+    return {"count": k, "n": n, "rate": round(k / n, 6) if n else 0.0, "wilson95": _wilson(k, n)}
+
+
 def aggregate(records, components, sources, seeds) -> dict:
     """§3/§4 verdict from persisted replicate records: per-check per-source ablation rates + a source-wise
     conjunction, PLUS routed controls. NOT_EVALUABLE is non-passing. `null` is a SOURCE-scoped self-consistency
     control folded into the per-source conjunction; boundary / structural_zero / source_swap are GLOBAL controls
-    (computed once, gated globally). Per-check known-profile PASS/FAIL/NE diagnostics are reported for review."""
+    (computed once, gated globally).
+
+    Reporting evidence (Pi §1/§2): the KNOWN-profile per-check rates come from the D arm (candidate_D, the
+    correctly-specified profile that must recover); the misspecified A arm is reported SEPARATELY under an
+    unambiguous name. Every rate carries a Wilson 95% interval."""
     n = len(seeds)
     per_component = {}
     for comp in components:
@@ -250,15 +299,29 @@ def aggregate(records, components, sources, seeds) -> dict:
             non_attr = sorted({k for r in recs for k in r["A_status"]} - set(primary) - allowed)
             spec = {k: sum(1 for r in recs if r["A_status"].get(k) == PASS) for k in non_attr}
             rep = sum(1 for r in recs if r["known_profile_repeatability"])
+            d_rates = _per_check_rates([r["D_status"] for r in recs])   # KNOWN profile (D arm) — Pi §1 fix
+            a_rates = _per_check_rates([r["A_status"] for r in recs])   # misspecified (A arm), reported separately
             # source-scoped null control folds into this source's conjunction
             null_recs = [records[f"control|null|{src}|{s}"] for s in seeds if f"control|null|{src}|{s}" in records]
             null_ok = sum(1 for r in null_recs if r.get("all_pass"))
             ok = (all(prim[p] >= PRIMARY_FAIL_MIN for p in primary)
                   and all(spec[k] >= SPECIFICITY_MIN for k in non_attr)
                   and rep >= SPECIFICITY_MIN and null_ok >= SPECIFICITY_MIN and len(recs) == n)
-            per_source[src] = {"n": len(recs), "primary_fail_counts": prim, "specificity_counts": spec,
-                               "repeatability_count": rep, "null_pass": null_ok, "source_ok": ok,
-                               "known_profile_rates": _per_check_rates([r["A_status"] for r in recs])}
+            per_source[src] = {
+                "n": len(recs),
+                "primary_fail_counts": prim,
+                "primary_fail_wilson": {p: _rate_ci(prim[p], n) for p in primary},                # A primary
+                "specificity_counts": spec,
+                "specificity_wilson": {k: _rate_ci(spec[k], n) for k in non_attr},                 # A specificity
+                "repeatability_count": rep,
+                "repeatability_wilson": _rate_ci(rep, n),                                          # D all-checks
+                "repeatability_per_check_wilson": {k: _rate_ci(d_rates[k]["PASS"], n) for k in d_rates},  # D per check
+                "null_pass": null_ok,
+                "null_wilson": _rate_ci(null_ok, n),                                               # source-scoped null
+                "source_ok": ok,
+                "known_profile_rates": d_rates,          # D arm (correctly labelled)
+                "misspecified_A_rates": a_rates,         # A arm, unambiguous name
+            }
         per_component[comp] = {"per_source": per_source,
                                "conjunctive_pass": all(per_source[s]["source_ok"] for s in sources)}
     ctrl = _aggregate_controls(records, sources, seeds)
@@ -267,25 +330,32 @@ def aggregate(records, components, sources, seeds) -> dict:
 
 
 def _boundary_exact(rec) -> bool:
-    """Boundary control PASS: EXACT expected-status map — predeclared NE else PASS (no broad 'anything but FAIL')."""
+    """Boundary control PASS: the FULL expected check-key set must be present (a truncated/tampered record is
+    non-pass, Pi §4) AND every key matches its predeclared status — NE for the length/seam checks, else PASS."""
     st = rec.get("status", {})
-    return bool(st) and all((v == NOT_EVALUABLE) if k in _BOUNDARY_EXPECTED_NE else (v == PASS)
-                            for k, v in st.items())
+    if not ALL_CHECK_KEYS.issubset(st):
+        return False
+    return all((st[k] == NOT_EVALUABLE) if k in _BOUNDARY_EXPECTED_NE else (st[k] == PASS)
+               for k in ALL_CHECK_KEYS)
 
 
 def _aggregate_controls(records, sources, seeds) -> dict:
     """§4 routed-control aggregation. Source-scoped `null` per source (also folded into per-source conjunction);
-    global boundary / structural_zero / source_swap computed once and gated globally (NOT per source)."""
+    global boundary / structural_zero / source_swap computed once and gated globally (NOT per source). Every
+    outcome rate carries a Wilson 95% interval (Pi §2)."""
     n = len(seeds)
     per_source = {}
     for src in sources:
         null_recs = [records[f"control|null|{src}|{s}"] for s in seeds if f"control|null|{src}|{s}" in records]
-        per_source[src] = {"null_pass": sum(1 for r in null_recs if r.get("all_pass")), "n": len(null_recs),
+        no = sum(1 for r in null_recs if r.get("all_pass"))
+        per_source[src] = {"null_pass": no, "n": len(null_recs), "null_wilson": _rate_ci(no, n),
                            "known_profile_rates": _per_check_rates([r.get("status", {}) for r in null_recs])}
     bnd = sum(1 for s in seeds if _boundary_exact(records.get(f"control|boundary|{GLOBAL_SRC}|{s}", {})))
     sz = sum(1 for s in seeds if records.get(f"control|structural_zero|{GLOBAL_SRC}|{s}", {}).get("ok"))
     sw = sum(1 for s in seeds if records.get(f"control|source_swap|{GLOBAL_SRC}|{s}", {}).get("fails_nondegenerate"))
-    glob = {"boundary_exact": bnd, "structural_zero_ok": sz, "source_swap_nondegenerate": sw, "n": n}
+    glob = {"boundary_exact": bnd, "boundary_wilson": _rate_ci(bnd, n),
+            "structural_zero_ok": sz, "structural_zero_wilson": _rate_ci(sz, n),
+            "source_swap_nondegenerate": sw, "source_swap_wilson": _rate_ci(sw, n), "n": n}
     controls_ok = None
     if n >= 25:
         source_ok = all(o["null_pass"] >= SPECIFICITY_MIN for o in per_source.values())
