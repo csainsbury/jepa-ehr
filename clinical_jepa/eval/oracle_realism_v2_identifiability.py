@@ -11,7 +11,7 @@ forward one-sided at 0.0, backward one-sided at 0.60; null covariance whitening 
 deterministic nearest-grid recovery; recovery tol `<= 0.05 * range` and `<= half a grid step`; collision search.
 Synthetic-only; uses the independent fixture + coupling constructions; no governed read.
 
-Cost: the full `3^4 x nuisance-profiles x seeds x long-sequence` grid may exceed the cap — the runner returns
+Cost: the full `3^3 x nuisance-profiles x seeds x long-sequence` grid may exceed the cap — the runner returns
 PARTIAL/non-pass and re-gates rather than silently reducing. This module implements the machinery; the full
 grid runs only under the reviewed step-4 job.
 """
@@ -27,8 +27,8 @@ from clinical_jepa.eval.oracle_realism_v2_coupling import apply_coupling
 from clinical_jepa.eval.oracle_realism_v2_verifier import sequence_route_checks, NOT_EVALUABLE
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import IDENTIFIABILITY_VECTOR, IDENTIFIABILITY_NUISANCE
 
-COMPONENTS = tuple(V2_D_COMPONENT_MENU)                    # 4 D params, composition order
-D_VECTOR = tuple(IDENTIFIABILITY_VECTOR)                   # 5 sensitive scalars
+COMPONENTS = tuple(V2_D_COMPONENT_MENU)                    # 3 D params, composition order
+D_VECTOR = tuple(IDENTIFIABILITY_VECTOR)                   # 4 sensitive scalars
 PARAM_RANGE = (0.0, 0.6)
 GRID = (0.10, 0.35, 0.55)
 FD_STEP = 0.02
@@ -57,7 +57,7 @@ def apply_theta(sample, theta, *, tag="theta"):
 
 
 def cross_stat_vector(coupled, reference):
-    """The 5 D-sensitive scalar VALUES of ``coupled`` vs ``reference``. Returns None if any is NOT_EVALUABLE."""
+    """The 4 D-sensitive scalar VALUES of ``coupled`` vs ``reference``. Returns None if any is NOT_EVALUABLE."""
     checks = sequence_route_checks(coupled, reference)
     vals = []
     for k in D_VECTOR:
@@ -69,7 +69,7 @@ def cross_stat_vector(coupled, reference):
 
 
 def f_theta(theta, *, base_sampler, source_profile, seed):
-    """f(theta) = the 5-vector of (null base coupled at theta) vs an INDEPENDENT null reference (CRN base)."""
+    """f(theta) = the 4-vector of (null base coupled at theta) vs an INDEPENDENT null reference (CRN base)."""
     coupled = apply_theta(base_sampler(source_profile, seed, "ident_coupled"), theta,
                           tag=f"{source_profile}|{seed}")
     reference = base_sampler(source_profile, seed, "ident_ref")
@@ -88,7 +88,7 @@ def covariance_from_rows(rows):
 
 
 def null_covariance(base_sampler, seeds, *, source_profile):
-    """STRICT ridge-regularised covariance of the 5-vector under NULL (theta=0) replicates (Pi §5): EVERY seed
+    """STRICT ridge-regularised covariance of the 4-vector under NULL (theta=0) replicates (Pi §5): EVERY seed
     must evaluate — any NOT_EVALUABLE row => None (the profile is non-pass, never silently dropped)."""
     zero = {c: 0.0 for c in COMPONENTS}
     rows = [f_theta(zero, base_sampler=base_sampler, source_profile=source_profile, seed=s) for s in seeds]
@@ -108,7 +108,7 @@ def _fd_pair(theta0, comp):
 
 
 def jacobian(theta0, *, base_sampler, source_profile, seed):
-    """5x4 CRN finite-difference Jacobian d(cross-stats)/d(theta) at theta0. Returns None if any eval refuses."""
+    """4x3 CRN finite-difference Jacobian d(cross-stats)/d(theta) at theta0. Returns None if any eval refuses."""
     cols = []
     for comp in COMPONENTS:
         hi_t, lo_t, denom = _fd_pair(theta0, comp)
@@ -117,7 +117,7 @@ def jacobian(theta0, *, base_sampler, source_profile, seed):
         if hi is None or lo is None:
             return None
         cols.append((hi - lo) / denom)
-    return np.stack(cols, axis=1)                         # (5, 4)
+    return np.stack(cols, axis=1)                         # (4, 3)
 
 
 def standardized_rank(J, Sigma_lambda):
@@ -174,7 +174,7 @@ def cost_forecast(n=8000, *, cov_seeds=25, ref_seeds=1, heldout_seeds=1, rank_po
     covariance = cov_seeds x nuisance; grid vectors = grid_points x (ref+heldout) x nuisance; Jacobian rank =
     rank_points x (2*k) x nuisance. A NAIVE seeds-at-every-grid-point cross would be far larger and over cap —
     the runner never does that; if the structural forecast still exceeds the cap it returns PARTIAL/re-gate."""
-    grid_points = len(GRID) ** len(COMPONENTS)            # 81
+    grid_points = len(GRID) ** len(COMPONENTS)            # 27 (3^3)
     k, nuis = len(COMPONENTS), len(NUISANCE_PROFILES)
     cov = cov_seeds * nuis
     grid = grid_points * (ref_seeds + heldout_seeds) * nuis
@@ -206,8 +206,8 @@ IDENTIFIABILITY_IMPL = {
     "recovery": "deterministic nearest-grid, whitening APPLIED to query+grid vectors, menu-order tie-break; "
                 "recovered iff every component within recover_tol",
     "collision": "sep > recover_tol AND every cross-stat diff <= FIXED accept_tol vector",
-    "cost_forecast": "structural: null_cov(cov_seeds x nuis) + grid((ref+heldout) x 81 x nuis) + "
-                     "jac(rank_points x 2*4 x nuis); naive seeds-at-every-grid cross is over cap",
+    "cost_forecast": "structural: null_cov(cov_seeds x nuis) + grid((ref+heldout) x 27 x nuis) + "
+                     "jac(rank_points x 2*3 x nuis); naive seeds-at-every-grid cross is over cap",
     "cap_behaviour": "grid may exceed cap => PARTIAL / non-pass / re-gate; never silent reduction",
 }
 

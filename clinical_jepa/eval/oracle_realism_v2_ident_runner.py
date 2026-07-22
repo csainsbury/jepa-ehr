@@ -12,7 +12,7 @@ per-rank-point singular values + sigma_min/max; and the exact colliding pairs. T
 NOT_EVALUABLE (a refused cov-seed / grid / held-out vector) makes the profile non-pass, never silently dropped.
 
 Wall-clock is CUMULATIVE across resume; the cap is re-checked before declaring a verdict. The full grid runs
-only under the reviewed `m3a-step4-ident-v1` job.
+only under the reviewed `m3a-step4-ident-v2` job.
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ _ZERO = {c: 0.0 for c in COMPONENTS}
 
 
 def ident_grid():
-    """The 3^4 grid of theta dicts (component -> strength)."""
+    """The 3^3 grid of theta dicts (component -> strength)."""
     return [dict(zip(COMPONENTS, combo)) for combo in product(GRID, repeat=len(COMPONENTS))]
 
 

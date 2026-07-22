@@ -11,7 +11,7 @@ thresholds — the step-4 power object.
 
 Source blocks are GENUINELY DISTINCT canonical controls (design `PROFILES`); fixture and coupling RNG are
 derived deterministically from (source, profile, replicate_seed, role) / (source, component, replicate_seed,
-role). The registered per-source/profile/seed sample size is 4000 (design); tests exercise the machinery at a
+role). The registered per-source/profile/seed sample size is 8000 (design); tests exercise the machinery at a
 small mechanical size. Synthetic-only; no candidate adapter, no governed read.
 """
 from __future__ import annotations

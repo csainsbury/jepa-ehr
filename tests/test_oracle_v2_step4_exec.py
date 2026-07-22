@@ -1,6 +1,6 @@
 """Step-4 execution engine (Pi §2/§3) — fail-closed, checkpoint/resume, cap, atomic, aggregate.
 
-Machinery correctness at a tiny mechanical scale (the full 25-seed/N=4000 run is the reviewed job): cap-exceed
+Machinery correctness at a tiny mechanical scale (the full 25-seed/N=8000 run is the reviewed job): cap-exceed
 => PARTIAL, atomic result + per-replicate serialisation + denominator-map hash, checkpoint/resume, resume
 mismatch => PARTIAL, tampered manifest => REFUSED. Plus a pure-function aggregate/verdict test over 25 synthetic
 seeds. Verifier-backed parts kept small.

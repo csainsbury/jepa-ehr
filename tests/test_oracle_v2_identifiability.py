@@ -2,7 +2,7 @@
 
 Pure-function checks (FD rule, rank criterion, nearest-grid recovery, collision search, cost forecast, frozen
 params) plus a small verifier-backed pipeline (f_theta at theta=0 / interior, Jacobian shape + standardized
-rank). The full 3^4 x nuisance x seeds grid runs only under the reviewed step-4 job.
+rank). The full 3^3 x nuisance x seeds grid runs only under the reviewed step-4 job.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import unittest
 from clinical_jepa.eval import oracle_realism_v2_identifiability as idf
 from clinical_jepa.eval import oracle_realism_v2_battery as bat
 
-_IMPL_ID = "35b425ac5b0eee07c68fee5d509c5a422c62f7f4de676401fe453223802b779b"
+_IMPL_ID = "8df0dc6323cdf49675f318325224b96538cb29227e73c2384b18046cba0b9396"
 
 
 class FrozenParams(unittest.TestCase):
@@ -65,7 +65,7 @@ class PureNumerics(unittest.TestCase):
         f = idf.cost_forecast(cov_seeds=25, ref_seeds=1, heldout_seeds=1, rank_points=3)
         self.assertEqual(f["grid_points"], 27)
         self.assertEqual(f["nuisance_profiles"], 3)
-        # structural: null_cov(25*3) + grid(81*2*3) + jac(3*8*3) = 75 + 486 + 72 = 633
+        # structural: null_cov(25*3) + grid(27*2*3) + jac(3*6*3) = 75 + 162 + 54 = 291
         self.assertEqual(f["f_evals"]["total"], 75 + 162 + 54)
         self.assertGreater(f["naive_cross_evals"], f["f_evals"]["total"])   # naive cross far larger
         self.assertIn("PARTIAL", f["note"])
