@@ -75,17 +75,25 @@ def f_theta(theta, *, base_sampler, source_profile, seed):
     return cross_stat_vector(coupled, reference)
 
 
-def null_covariance(base_sampler, seeds, *, source_profile):
-    """STRICT ridge-regularised covariance of the 5-vector under NULL (theta=0) replicates (Pi §5): EVERY seed
-    must evaluate — any NOT_EVALUABLE row => None (the profile is non-pass, never silently dropped)."""
-    zero = {c: 0.0 for c in COMPONENTS}
-    rows = [f_theta(zero, base_sampler=base_sampler, source_profile=source_profile, seed=s) for s in seeds]
-    if any(r is None for r in rows) or len(rows) < 2:
+def covariance_from_rows(rows):
+    """Ridge-regularised covariance from pre-computed NULL rows. Shared by null_covariance and the CHECKPOINTED
+    runner (which collects rows one cov-seed at a time) so both produce the IDENTICAL Sigma (no divergence)."""
+    if rows is None or len(rows) < 2:
         return None
     X = np.asarray(rows)
     Sigma = np.cov(X, rowvar=False)
     d = Sigma.shape[0]
     return Sigma + RIDGE * (np.trace(Sigma) / d) * np.eye(d)
+
+
+def null_covariance(base_sampler, seeds, *, source_profile):
+    """STRICT ridge-regularised covariance of the 5-vector under NULL (theta=0) replicates (Pi §5): EVERY seed
+    must evaluate — any NOT_EVALUABLE row => None (the profile is non-pass, never silently dropped)."""
+    zero = {c: 0.0 for c in COMPONENTS}
+    rows = [f_theta(zero, base_sampler=base_sampler, source_profile=source_profile, seed=s) for s in seeds]
+    if any(r is None for r in rows):
+        return None
+    return covariance_from_rows(rows)
 
 
 def _fd_pair(theta0, comp):

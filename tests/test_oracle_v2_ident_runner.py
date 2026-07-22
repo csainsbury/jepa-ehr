@@ -6,6 +6,7 @@ strict null covariance => a profile whose covariance seed refuses is non-pass.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -55,19 +56,56 @@ class IdentExecution(unittest.TestCase):
         rd = ir.run_dir(self.out, "identA")
         self.assertTrue(os.path.exists(os.path.join(rd, "result.json")))
         self.assertTrue(os.path.exists(os.path.join(rd, "checkpoint.json")))
+        # profiles/ holds ONLY the final evidence record; the intra-profile progress file was consumed
         self.assertEqual(os.listdir(os.path.join(rd, "profiles")), ["mimic_scale_control.json"])
+        self.assertEqual(os.listdir(os.path.join(rd, "progress")), [])
+        for f in ("runtime.json", "environment.json"):
+            self.assertTrue(os.path.exists(os.path.join(rd, f)), f)
+        # §6: full identifiability evidence in the per-profile record
+        rec = r1["per_profile"]["mimic_scale_control"]
+        self.assertIsNotNone(rec["covariance"]["Sigma"])
+        self.assertIsNotNone(rec["covariance"]["eigenvalues"])
+        self.assertIsNotNone(rec["covariance"]["whitening"])
+        self.assertEqual(len(rec["grid"]["order"]), len(_TINY_GRID))
+        self.assertEqual(len(rec["grid"]["vectors"]), len(_TINY_GRID))
+        self.assertEqual(len(rec["heldout"]["per_point"]), len(_TINY_GRID))
+        for pt in rec["heldout"]["per_point"]:
+            self.assertIn("truth", pt); self.assertIn("predicted", pt); self.assertIn("error", pt)
+        self.assertEqual(len(rec["rank"]), len(_RANK_PTS))
+        self.assertIn("singular_values", rec["rank"][0])
+        self.assertIn("pairs", rec["collisions"])
+        for k in ("result_sha256", "evidence_sha256", "runtime_json_sha256", "env_sha256"):
+            self.assertEqual(len(r1["completion_hashes"][k]), 64, k)
         r2 = self._exec("identA", cap_hours=1.0, cap_gb=64)        # resume: profile done
         self.assertEqual(r2["status"], r1["status"])
+        self.assertEqual(r2["completion_hashes"]["evidence_sha256"], r1["completion_hashes"]["evidence_sha256"])
 
     def test_cap_exceed_partial(self) -> None:
         r = self._exec("identCap", cap_hours=0.0, cap_gb=1e9)
         self.assertEqual(r["status"], "PARTIAL")
         self.assertEqual(r["reason"], "cap exceeded")
 
+    def test_intra_profile_checkpoint_resume(self) -> None:  # Pi §5: cap trips MID-profile, resume continues
+        def inc_clock(dt=10.0):
+            t = {"v": 0.0}
+            def clk():
+                v = t["v"]; t["v"] += dt; return v
+            return clk
+        rd = ir.run_dir(self.out, "identMid")
+        # smooth clock (dt=10s) + cap=100s => a few cov-seed units complete, then a cap-boundary trips
+        r1 = self._exec("identMid", cap_hours=100 / 3600, cap_gb=1e12, clock=inc_clock(10))
+        self.assertEqual(r1["status"], "PARTIAL")
+        self.assertEqual(r1["reason"], "cap exceeded")
+        # at least one unit completed before the trip => genuine mid-profile progress persisted
+        st = json.load(open(os.path.join(rd, "progress", "mimic_scale_control.json")))
+        self.assertTrue(st["next_index"] > 0 or st["stage"] != "covariance", st["stage"])
+        r2 = self._exec("identMid", cap_hours=1.0, cap_gb=64)       # resume with a real clock => completes
+        self.assertIn(r2["status"], ("PASS", "FAIL"))
+        self.assertEqual(os.listdir(os.path.join(rd, "progress")), [])   # progress consumed on finalize
+
     def test_refused_on_tampered_manifest(self) -> None:
         r = self._exec("identR", m=dict(self.m, registered_n=1), cap_hours=1.0, cap_gb=64)
-        self.assertEqual(r["status"], "REFUSED")
-        self.assertIn("registered_n", r["problems"])
+        self.assertEqual(r["status"], "REFUSED")   # deep-equality refuses tampered registered_n
 
 
 if __name__ == "__main__":

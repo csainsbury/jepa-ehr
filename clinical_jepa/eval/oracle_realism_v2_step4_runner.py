@@ -6,7 +6,8 @@ reads governed data, samples any M2 candidate, or launches the full grid — the
 Pi approves this manifest + the dry-run output.
 
 Cap (resolves the earlier contradictory "<=8 CPU-hours wall-time"): ONE worker, <= 8 WALL-CLOCK hours,
-<= 32 GB RAM. Result / denominator-map / runtime / environment hashes are stamped at completion; a deterministic
+<= 32 GB RAM. Result / evidence / runtime / environment hashes are stamped at completion (the evidence hash
+covers the full CheckResult values + denominator/coarsening detail, not just status strings); a deterministic
 checkpoint/resume and an atomic result path protect a long run.
 """
 from __future__ import annotations
@@ -51,8 +52,10 @@ def _git_head() -> str | None:
 # STATIC in-code trust root: a manifest is trusted ONLY if the WHOLE thing matches these registered constants
 # (never caller-supplied fields). Any deviation refuses (Pi §1 — the old preflight was fail-OPEN).
 TRUSTED_JOB_KINDS = ("m3a-step4-power-v1", "m3a-step4-ident-v1")
+_CONTROL_ROUTING = {"source_scoped": ["null"], "global": ["boundary", "structural_zero", "source_swap"]}
 _TRUSTED_VERDICT = {"primary_fail_min": PRIMARY_FAIL_MIN, "specificity_min": SPECIFICITY_MIN,
-                    "not_evaluable": "always non-passing", "source_conjunction": True}
+                    "not_evaluable": "always non-passing", "source_conjunction": True,
+                    "control_routing": _CONTROL_ROUTING}
 _TRUSTED_RNG = {"fixture": "(source,profile,replicate_seed,role)",
                 "coupling": "(source,component,replicate_seed,role)"}
 
@@ -107,13 +110,14 @@ def build_manifest(*, reviewed_commit: str, job_kind: str = "m3a-step4-power-v1"
         "rng_derivation": {"fixture": "(source,profile,replicate_seed,role)",
                            "coupling": "(source,component,replicate_seed,role)"},
         "verdict": {"primary_fail_min": PRIMARY_FAIL_MIN, "specificity_min": SPECIFICITY_MIN,
-                    "not_evaluable": "always non-passing", "source_conjunction": True},
+                    "not_evaluable": "always non-passing", "source_conjunction": True,
+                    "control_routing": _CONTROL_ROUTING},
         "identifiability_vector": list(IDENTIFIABILITY_VECTOR),
         "identifiability": _identifiability_binding(),
         "cap": CAP,
         "atomic_result_path": "state/realism-v2/step4/<run_id>/result.json (write-temp-then-rename)",
         "checkpoint": "per (component, source, seed) replicate; deterministic resume by manifest_hash + index",
-        "completion_hashes": ["result_sha256", "denominator_map_sha256", "runtime_json_sha256", "env_sha256"],
+        "completion_hashes": ["result_sha256", "evidence_sha256", "runtime_json_sha256", "env_sha256"],
     }
     manifest["manifest_hash"] = canonical_hash({k: v for k, v in manifest.items() if k != "manifest_hash"})
     return manifest
@@ -125,6 +129,9 @@ def _identifiability_binding() -> dict:
     )
     return {"grid": list(GRID), "rank_min": RANK_MIN, "recover_tol": RECOVER_TOL,
             "nuisance_profiles": list(NUISANCE_PROFILES), "accept_tol": [round(float(x), 6) for x in ACCEPT_TOL],
+            # structured-computation params bound in the manifest (Pi §1) — caller may NOT override:
+            "ref_seed": 1000, "heldout_seed": 1024, "cov_seeds": list(SEEDS),
+            "grid_values": list(GRID), "rank_point_values": list(GRID),
             "cost_forecast": cost_forecast(n=REGISTERED_N),
             "cap_note": "full grid may exceed the cap => PARTIAL / non-pass / re-gate; never silent reduction"}
 
@@ -142,44 +149,47 @@ def verify_identities(manifest: dict) -> dict:
 
 
 def verify_manifest(manifest: dict, *, require_git_head: bool = True) -> dict:
-    """FAIL-CLOSED preflight against the STATIC in-code trust root (Pi §1). Verifies the WHOLE manifest —
-    manifest_hash integrity, every registered field against trusted constants, identities, and (optionally) that
-    live git HEAD equals the reviewed commit. ANY deviation refuses. Caller-supplied fields are NEVER trusted."""
+    """FAIL-CLOSED WHOLE-MANIFEST verification (Pi §1). Reconstructs the COMPLETE expected manifest from the
+    trusted constants (via build_manifest at the manifest's reviewed_commit + job_kind) and requires DEEP
+    EQUALITY — rejecting missing, extra, or tampered fields (no field allowlist). Also verifies live git HEAD
+    == reviewed_commit. Caller-supplied fields are NEVER trusted. Does NOT authorize launch — see
+    verify_launch."""
     problems = []
-    # (a) manifest_hash integrity
-    recomputed = canonical_hash({k: v for k, v in manifest.items() if k != "manifest_hash"})
-    if manifest.get("manifest_hash") != recomputed:
-        problems.append("manifest_hash")
-    # (b) whole manifest vs trusted registered constants
-    if manifest.get("seeds") != list(SEEDS):
-        problems.append("seeds")
-    if manifest.get("registered_n") != REGISTERED_N:
-        problems.append("registered_n")
-    if manifest.get("components") != list(V2_D_COMPONENT_MENU):
-        problems.append("components")
-    if set(manifest.get("source_profiles", {})) != set(SOURCE_PROFILES):
-        problems.append("source_profiles")
-    if manifest.get("verdict") != _TRUSTED_VERDICT:
-        problems.append("verdict")
-    if manifest.get("cap") != CAP:
-        problems.append("cap")
-    if manifest.get("rng_derivation") != _TRUSTED_RNG:
-        problems.append("rng_derivation")
-    if manifest.get("identifiability_vector") != list(IDENTIFIABILITY_VECTOR):
-        problems.append("identifiability_vector")
-    if manifest.get("job_kind") not in TRUSTED_JOB_KINDS:
-        problems.append("job_kind")
-    # (c) git HEAD == reviewed commit (short or full)
+    jk = manifest.get("job_kind")
+    if jk not in TRUSTED_JOB_KINDS:
+        return {"ok": False, "problems": ["job_kind"], "diff": {"job_kind": jk}}
+    rc = str(manifest.get("reviewed_commit", ""))
+    expected = build_manifest(reviewed_commit=rc, job_kind=jk)
+    # deep equality over the full manifest (both keys): rejects missing/extra/tampered fields
+    keys = set(manifest) | set(expected)
+    diff = {k: {"manifest": manifest.get(k, "<MISSING>"), "expected": expected.get(k, "<UNEXPECTED>")}
+            for k in keys if manifest.get(k) != expected.get(k)}
+    if diff:
+        problems.append("manifest_not_equal_to_trusted_reconstruction")
     if require_git_head:
         head = _git_head()
-        rc = str(manifest.get("reviewed_commit", ""))
         if not head or not rc or not (head == rc or head.startswith(rc)):
             problems.append("reviewed_commit_vs_git_head")
-    # (d) identities + source-profile hashes
-    idv = verify_identities(manifest)
-    if not idv["ok"]:
-        problems.append("identities")
-    return {"ok": not problems, "problems": problems, "identity_mismatches": idv["mismatches"]}
+    return {"ok": not problems, "problems": problems, "diff": diff}
+
+
+def verify_launch(manifest: dict, *, run_id: str, job_kind: str) -> dict:
+    """LAUNCH gate: whole-manifest verification PLUS the policy-data approval map (Pi §1). The (run_id, job_kind,
+    reviewed_commit, manifest_hash) must be present in APPROVED_STEP4_JOBS (empty => nothing launches). The
+    requested job_kind must match the manifest. Any mismatch REFUSES."""
+    from clinical_jepa.eval.oracle_realism_v2_step4_policy import APPROVED_STEP4_JOBS
+    v = verify_manifest(manifest, require_git_head=True)
+    problems = list(v["problems"])
+    if manifest.get("job_kind") != job_kind:
+        problems.append("job_kind_mismatch")
+    appr = APPROVED_STEP4_JOBS.get(run_id)
+    if appr is None:
+        problems.append("run_id_not_approved")
+    elif not (appr.get("job_kind") == job_kind
+              and appr.get("reviewed_commit") == manifest.get("reviewed_commit")
+              and appr.get("manifest_hash") == manifest.get("manifest_hash")):
+        problems.append("approval_mismatch")
+    return {"ok": not problems, "problems": problems}
 
 
 def dry_run(manifest: dict, *, n: int = 600, seeds=(1000,), components=None, require_git_head: bool = True) -> dict:
@@ -217,14 +227,35 @@ def _registered_forecast_sampler():
     return registered_base_sampler(n=REGISTERED_N)
 
 
-def run_full_battery(manifest: dict, *, run_id: str, out_base: str):
-    """The actual registered power/control run (guarded — launched only by the reviewed step-4 job, not by
-    import). Delegates to the fail-closed execution engine: manifest verification (git HEAD on), then the full
-    25-seed source-conjunction battery + controls under the cap, with per-replicate checkpoint/resume, atomic
-    result writing, and persisted denominator/runtime hashes. A cap-exceed or resume mismatch yields
-    NON-passing PARTIAL."""
+import re as _re
+
+_STATE_ROOT = os.path.join(_REPO_ROOT, "state", "realism-v2", "step4")
+_RUN_ID_RE = {"m3a-step4-power-v1": _re.compile(r"^m3a-step4-power-v1-run\d+$"),
+              "m3a-step4-ident-v1": _re.compile(r"^m3a-step4-ident-v1-run\d+$")}
+
+
+def _validate_run_id(run_id: str, job_kind: str) -> None:
+    """Strict safe run-id + realpath containment under state/realism-v2/step4/ (Pi §2). No caller out_base."""
+    if not _RUN_ID_RE[job_kind].match(run_id):
+        raise ValueError(f"run_id {run_id!r} does not match the approved pattern for {job_kind}")
+    resolved = os.path.realpath(os.path.join(_STATE_ROOT, run_id))
+    root = os.path.realpath(_STATE_ROOT)
+    if os.path.commonpath([root, resolved]) != root:
+        raise ValueError("run_id path traversal")
+
+
+def run_full_battery(manifest: dict, *, run_id: str):
+    """The registered power/control run (guarded). Output root is DERIVED internally from the repo + approved
+    run_id (no caller out_base); the exact job kind is enforced; verify_launch requires the (run_id, job_kind,
+    commit, manifest_hash) to be in the policy-data approval map. Delegates to the fail-closed execution
+    engine."""
+    job = "m3a-step4-power-v1"
+    v = verify_launch(manifest, run_id=run_id, job_kind=job)
+    if not v["ok"]:
+        return {"run_id": run_id, "status": "REFUSED", "problems": v["problems"]}
+    _validate_run_id(run_id, job)
     from clinical_jepa.eval.oracle_realism_v2_step4_exec import execute
-    return execute(manifest, run_id, out_base,
+    return execute(manifest, run_id, _REPO_ROOT,
                    base_sampler=registered_base_sampler(n=manifest["registered_n"]),
                    seeds=manifest["seeds"], sources=tuple(manifest["source_profiles"]),
                    components=manifest["components"],
@@ -232,15 +263,23 @@ def run_full_battery(manifest: dict, *, run_id: str, out_base: str):
                    verify=lambda mm: verify_manifest(mm, require_git_head=True))
 
 
-def run_full_identifiability(manifest: dict, *, run_id: str, out_base: str):
-    """The registered identifiability run (guarded — reviewed `m3a-step4-ident-v1` job only). Delegates to the
-    fail-closed identifiability engine: manifest verification (git HEAD on), then per-nuisance-profile grid
-    evaluation (strict null covariance, whitened recovery, rank, collisions) with checkpoint/resume + cap; a
-    cap-exceed or resume mismatch yields NON-passing PARTIAL."""
+def run_full_identifiability(manifest: dict, *, run_id: str):
+    """The registered identifiability run (guarded). Output root DERIVED internally; exact job kind enforced;
+    verify_launch requires policy-data approval. The structured-computation params (ref/heldout/cov seeds, grid,
+    rank points) come from the MANIFEST, not caller overrides."""
+    job = "m3a-step4-ident-v1"
+    v = verify_launch(manifest, run_id=run_id, job_kind=job)
+    if not v["ok"]:
+        return {"run_id": run_id, "status": "REFUSED", "problems": v["problems"]}
+    _validate_run_id(run_id, job)
     from clinical_jepa.eval.oracle_realism_v2_ident_runner import execute_identifiability
-    return execute_identifiability(manifest, run_id, out_base,
+    idb = manifest["identifiability"]
+    from clinical_jepa.eval.oracle_realism_v2_ident_runner import ident_grid, interior_rank_points
+    return execute_identifiability(manifest, run_id, _REPO_ROOT,
                                    base_sampler=registered_base_sampler(n=manifest["registered_n"]),
-                                   cov_seeds=manifest["seeds"],
+                                   cov_seeds=idb["cov_seeds"], ref_seed=idb["ref_seed"],
+                                   heldout_seed=idb["heldout_seed"], grid=ident_grid(),
+                                   rank_points=interior_rank_points(),
                                    cap_hours=manifest["cap"]["wall_clock_hours"], cap_gb=manifest["cap"]["ram_gb"],
                                    verify=lambda mm: verify_manifest(mm, require_git_head=True))
 
@@ -261,9 +300,12 @@ def benchmark(*, source_profile: str = "mimic_scale_control", seed: int = 1000) 
     ref = base(source_profile, seed, "benchmark"); cand = base(source_profile, seed + 1, "benchmark")
     t0 = time.monotonic(); sequence_route_checks(cand, ref); marginal_route_checks(cand, ref)
     secs = round(time.monotonic() - t0, 2)
-    return {"git_head": _git_head(), "hardware": env_hash(), "registered_n": REGISTERED_N,
-            "volume_per_source": vol, "benchmark_source": source_profile,
-            "seconds_per_verifier_call": secs}
+    import platform
+    return {"git_head": _git_head(), "environment_hash": env_hash(),   # py/numpy/scipy (Pi §7: not hardware id)
+            "platform": {"system": platform.system(), "machine": platform.machine(),
+                         "processor": platform.processor(), "python": platform.python_version()},
+            "registered_n": REGISTERED_N, "volume_per_source": vol, "benchmark_source": source_profile,
+            "seconds_per_verifier_call": secs, "workers": 1}
 
 
 def env_hash() -> str:

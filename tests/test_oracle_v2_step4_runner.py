@@ -57,34 +57,65 @@ class ManifestBinding(unittest.TestCase):
 class FailClosedVerify(unittest.TestCase):
     def test_verify_ok_against_trust_root(self) -> None:
         m = rn.build_manifest(reviewed_commit="c")
-        self.assertTrue(rn.verify_manifest(m, require_git_head=False)["ok"])   # fields match the trust root
+        self.assertTrue(rn.verify_manifest(m, require_git_head=False)["ok"])   # deep-equal to reconstruction
 
-    def test_tampered_fields_refuse(self) -> None:  # the old fail-OPEN reproductions must now refuse (Pi §1)
+    def test_whole_manifest_deep_equality(self) -> None:  # Pi §1: reject tampered/omitted/EXTRA fields
         m = rn.build_manifest(reviewed_commit="c")
-        m2 = dict(m, seeds=[1], registered_n=1)
-        v = rn.verify_manifest(m2, require_git_head=False)
-        self.assertFalse(v["ok"])
-        self.assertIn("seeds", v["problems"]); self.assertIn("registered_n", v["problems"])
+        # tampered registered field
+        self.assertFalse(rn.verify_manifest(dict(m, seeds=[1]), require_git_head=False)["ok"])
         # tampered identity
-        m3 = dict(m, identities=dict(m["identities"], verifier="deadbeef"))
-        self.assertFalse(rn.verify_manifest(m3, require_git_head=False)["ok"])
-        # arbitrary reviewed_commit is NOT its own trust root: git-head check refuses a bogus commit
+        self.assertFalse(rn.verify_manifest(
+            dict(m, identities=dict(m["identities"], verifier="deadbeef")), require_git_head=False)["ok"])
+        # tampered OMITTED field (the old allowlist bypass) — recompute hash, still refuse
+        m4 = dict(m); m4["completion_hashes"] = ["evil"]
+        m4["manifest_hash"] = None
+        import clinical_jepa.eval.oracle_contracts as _c
+        m4["manifest_hash"] = _c.canonical_hash({k: v for k, v in m4.items() if k != "manifest_hash"})
+        self.assertFalse(rn.verify_manifest(m4, require_git_head=False)["ok"])
+        # EXTRA field
+        self.assertFalse(rn.verify_manifest(dict(m, extra="x"), require_git_head=False)["ok"])
+        # bogus reviewed_commit is NOT its own trust root (git-head refuses)
         self.assertIn("reviewed_commit_vs_git_head",
                       rn.verify_manifest(rn.build_manifest(reviewed_commit="evil"))["problems"])
 
-    def test_runner_in_code_closure(self) -> None:
+    def test_runner_in_code_closure_but_policy_excluded(self) -> None:
         self.assertIn("oracle_realism_v2_step4_runner", rn._CLOSURE_MODULES)
+        self.assertNotIn("oracle_realism_v2_step4_policy", rn._CLOSURE_MODULES)   # data, not logic
         self.assertEqual(rn.code_closure_identity(), rn.code_closure_identity())
 
 
+class LaunchGate(unittest.TestCase):
+    def test_launch_refused_when_policy_empty(self) -> None:  # Pi §1: empty approval map => nothing launches
+        m = rn.build_manifest(reviewed_commit=rn._git_head() or "c", job_kind="m3a-step4-power-v1")
+        v = rn.verify_launch(m, run_id="m3a-step4-power-v1-run1", job_kind="m3a-step4-power-v1")
+        self.assertFalse(v["ok"])
+        self.assertIn("run_id_not_approved", v["problems"])
+        r = rn.run_full_battery(m, run_id="m3a-step4-power-v1-run1")
+        self.assertEqual(r["status"], "REFUSED")
+
+    def test_cross_job_manifest_refused(self) -> None:  # power entrypoint must reject an ident manifest
+        ident_m = rn.build_manifest(reviewed_commit="c", job_kind="m3a-step4-ident-v1")
+        v = rn.verify_launch(ident_m, run_id="m3a-step4-power-v1-run1", job_kind="m3a-step4-power-v1")
+        self.assertIn("job_kind_mismatch", v["problems"])
+
+    def test_run_id_pattern_and_containment(self) -> None:  # Pi §2
+        with self.assertRaises(ValueError):
+            rn._validate_run_id("../../etc/passwd", "m3a-step4-power-v1")
+        with self.assertRaises(ValueError):
+            rn._validate_run_id("m3a-step4-ident-v1-run1", "m3a-step4-power-v1")   # wrong job kind
+        rn._validate_run_id("m3a-step4-power-v1-run1", "m3a-step4-power-v1")       # ok
+
+
 class Benchmark(unittest.TestCase):
-    def test_benchmark_binds_volume_time_hardware(self) -> None:  # Pi §4
+    def test_benchmark_binds_volume_time_env(self) -> None:  # Pi §4/§7
         b = rn.benchmark()
-        for k in ("git_head", "hardware", "registered_n", "volume_per_source", "seconds_per_verifier_call"):
+        for k in ("git_head", "environment_hash", "platform", "registered_n", "volume_per_source",
+                  "seconds_per_verifier_call", "workers"):
             self.assertIn(k, b)
+        self.assertNotIn("hardware", b)                        # renamed (Pi §7)
         self.assertEqual(set(b["volume_per_source"]), {"scid_scale_control", "mimic_scale_control"})
         for v in b["volume_per_source"].values():
-            self.assertGreater(v["events"], v["n"])              # forecast scales by event volume, not N
+            self.assertGreater(v["events"], v["n"])
         self.assertGreater(b["seconds_per_verifier_call"], 0.0)
 
 

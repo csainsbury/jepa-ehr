@@ -49,10 +49,17 @@ def _source_key(profile_name: str) -> str:
     return "SCID" if "scid" in profile_name else "MIMIC"
 
 
-def _status_map(cand, ref) -> dict:
-    out = {k: v.status for k, v in sequence_route_checks(cand, ref).items()}
-    out.update({k: v.status for k, v in marginal_route_checks(cand, ref).items()})
+def _evidence_map(cand, ref) -> dict:
+    """Full reviewable evidence per check: status + scalar value + the CheckResult.detail (denominator and
+    coarsening maps). This is what a reviewer audits — WHY a check passed/failed, not just the label."""
+    out = {}
+    for k, v in {**sequence_route_checks(cand, ref), **marginal_route_checks(cand, ref)}.items():
+        out[k] = {"status": v.status, "value": v.value, "threshold": v.threshold, "detail": v.detail}
     return out
+
+
+def _status_map(cand, ref) -> dict:
+    return {k: e["status"] for k, e in _evidence_map(cand, ref).items()}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -66,6 +73,8 @@ class AblationOutcome:
     A_specificity: dict                    # per non-attributed check: True iff PASS (fail-closed)
     A_specificity_ok: bool
     known_profile_repeatability: bool      # candidate_D: every required check == PASS (NOT recovery)
+    A_evidence: dict = dataclasses.field(default_factory=dict)   # full CheckResult evidence (value + detail)
+    D_evidence: dict = dataclasses.field(default_factory=dict)
 
 
 def component_ablation(component, replicate_seed, *, base_sampler, source_profile) -> AblationOutcome:
@@ -82,13 +91,16 @@ def component_ablation(component, replicate_seed, *, base_sampler, source_profil
     candidate_A = base_sampler(source_profile, replicate_seed, "candidate_A")
     candidate_D = apply_coupling(base_sampler(source_profile, replicate_seed, "candidate_D"),
                                  component, _ABL_S, seed=cseed("candidate_D"))
-    A = _status_map(candidate_A, reference)
-    D = _status_map(candidate_D, reference)
+    A_ev = _evidence_map(candidate_A, reference)
+    D_ev = _evidence_map(candidate_D, reference)
+    A = {k: e["status"] for k, e in A_ev.items()}
+    D = {k: e["status"] for k, e in D_ev.items()}
     A_fails_primary = all(A[p] == FAIL for p in primary)
     non_attr = [k for k in A if k not in primary and k not in allowed]
     A_spec = {k: A[k] == PASS for k in non_attr}
     return AblationOutcome(component, replicate_seed, source_profile, A, D, A_fails_primary, A_spec,
-                           all(A_spec.values()), all(v == PASS for v in D.values()))
+                           all(A_spec.values()), all(v == PASS for v in D.values()),
+                           A_evidence=A_ev, D_evidence=D_ev)
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -116,9 +128,10 @@ def _multiscale(prof, source_key, tag, seed, n_each):
 
 
 def null_control(replicate_seed, *, base_sampler, source_profile) -> dict:
-    st = _status_map(base_sampler(source_profile, replicate_seed, "null_cand"),
-                     base_sampler(source_profile, replicate_seed, "null_ref"))
-    return {"all_pass": all(v == PASS for v in st.values()), "status": st,
+    ev = _evidence_map(base_sampler(source_profile, replicate_seed, "null_cand"),
+                       base_sampler(source_profile, replicate_seed, "null_ref"))
+    st = {k: e["status"] for k, e in ev.items()}
+    return {"all_pass": all(v == PASS for v in st.values()), "status": st, "evidence": ev,
             "fails": [k for k, v in st.items() if v == FAIL],
             "not_evaluable": [k for k, v in st.items() if v == NOT_EVALUABLE]}
 
@@ -128,28 +141,31 @@ def boundary_control(replicate_seed, *, n_each=600) -> dict:
     (NOT_EVALUABLE) are successful; every OTHER check must PASS (no broad 'anything except FAIL')."""
     ref = [r for i in range(3) for r in sample_fixture("MIMIC", _SHORT_PROF, n_each, seed=_derive_seed("b_ref", replicate_seed, i))]
     cand = [r for i in range(3) for r in sample_fixture("MIMIC", _SHORT_PROF, n_each, seed=_derive_seed("b_cand", replicate_seed, i))]
-    st = _status_map(cand, ref)
+    ev = _evidence_map(cand, ref)
+    st = {k: e["status"] for k, e in ev.items()}
     unexpected = [k for k in st if (k in _BOUNDARY_EXPECTED_NE and st[k] == FAIL)
                   or (k not in _BOUNDARY_EXPECTED_NE and st[k] != PASS)]
-    return {"ok": not unexpected, "status": st, "unexpected": unexpected}
+    return {"ok": not unexpected, "status": st, "evidence": ev, "unexpected": unexpected}
 
 
 def structural_zero_control(replicate_seed, *, n_each=600) -> dict:
     ref = _multiscale(_ZERO_PROF, "MIMIC", "z_ref", replicate_seed, n_each)
     cand = _multiscale(_ZERO_PROF, "MIMIC", "z_cand", replicate_seed, n_each)
-    st = _status_map(cand, ref)
+    ev = _evidence_map(cand, ref)
+    st = {k: e["status"] for k, e in ev.items()}
     present = set(np.unique(np.concatenate([r.class_ids for r in ref + cand])).tolist())
     required_pass = all(v == PASS for v in st.values())     # normal lengths => every check must PASS
     return {"zeros_absent": present.issubset({0, 1, 2}), "required_pass": required_pass, "status": st,
-            "ok": present.issubset({0, 1, 2}) and required_pass}
+            "evidence": ev, "ok": present.issubset({0, 1, 2}) and required_pass}
 
 
 def source_swap_control(replicate_seed, *, n_each=600) -> dict:
     ref = _multiscale(_MIMIC_PROF, "MIMIC", "swap_ref", replicate_seed, n_each)
     cand = _multiscale(_SWAP_PROF, "MIMIC", "swap_cand", replicate_seed, n_each)
-    st = _status_map(cand, ref)
+    ev = _evidence_map(cand, ref)
+    st = {k: e["status"] for k, e in ev.items()}
     return {"fails_nondegenerate": any(st.get(k) == FAIL for k in _NONDEGENERATE),
-            "fails": [k for k, v in st.items() if v == FAIL], "status": st}
+            "fails": [k for k, v in st.items() if v == FAIL], "status": st, "evidence": ev}
 
 
 # ---------------------------------------------------------------------------------------------------
