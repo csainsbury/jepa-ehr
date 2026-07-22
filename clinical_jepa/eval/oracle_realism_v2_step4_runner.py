@@ -20,7 +20,7 @@ from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_realism_v2 import V2_D_COMPONENT_MENU
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import PROFILES, IDENTIFIABILITY_VECTOR
 from clinical_jepa.eval.oracle_realism_v2_battery import (
-    REGISTERED_N, SOURCE_PROFILES, PRIMARY_FAIL_MIN, SPECIFICITY_MIN, battery_impl_identity,
+    REGISTERED_N, CONTROL_N, SOURCE_PROFILES, PRIMARY_FAIL_MIN, SPECIFICITY_MIN, battery_impl_identity,
     registered_base_sampler, component_ablation, null_control, boundary_control,
     structural_zero_control, source_swap_control, rate_battery, forecast,
 )
@@ -52,7 +52,7 @@ def _git_head() -> str | None:
 
 # STATIC in-code trust root: a manifest is trusted ONLY if the WHOLE thing matches these registered constants
 # (never caller-supplied fields). Any deviation refuses (Pi §1 — the old preflight was fail-OPEN).
-TRUSTED_JOB_KINDS = ("m3a-step4-power-v1", "m3a-step4-ident-v1")
+TRUSTED_JOB_KINDS = ("m3a-step4-power-v2", "m3a-step4-ident-v2")   # re-minted at the step-4 result-gate (Pi); v1 spent
 _CONTROL_ROUTING = {"source_scoped": ["null"], "global": ["boundary", "structural_zero", "source_swap"]}
 _TRUSTED_VERDICT = {"primary_fail_min": PRIMARY_FAIL_MIN, "specificity_min": SPECIFICITY_MIN,
                     "not_evaluable": "always non-passing", "source_conjunction": True,
@@ -92,7 +92,7 @@ def _identity_bindings() -> dict:
     }
 
 
-def build_manifest(*, reviewed_commit: str, job_kind: str = "m3a-step4-power-v1") -> dict:
+def build_manifest(*, reviewed_commit: str, job_kind: str = "m3a-step4-power-v2") -> dict:
     """Bind ONE step-4 JOB's run contract (Pi §6). `job_kind` is one of TRUSTED_JOB_KINDS; the two jobs
     (power / ident) get DISTINCT manifest hashes and separate checkpoints/results. `reviewed_commit` is the git
     commit this run is authorised against."""
@@ -107,6 +107,8 @@ def build_manifest(*, reviewed_commit: str, job_kind: str = "m3a-step4-power-v1"
         "components": list(V2_D_COMPONENT_MENU),
         "seeds": list(SEEDS),
         "registered_n": REGISTERED_N,
+        "control_n": CONTROL_N,                                 # global controls at the registered N (Pi re-gate §3)
+        "boundary_fixture": {"bound": "L<=7", "family": "uniform_int", "min": 1, "max": 7},  # bounded support (§4)
         "stratum_allocation": {"single_block": REGISTERED_N},   # single-scale design profiles; no strata
         "rng_derivation": {"fixture": "(source,profile,replicate_seed,role)",
                            "coupling": "(source,component,replicate_seed,role)"},
@@ -239,8 +241,8 @@ def _registered_forecast_sampler():
 
 
 _STATE_ROOT = os.path.join(_REPO_ROOT, "state", "realism-v2", "step4")
-_RUN_ID_RE = {"m3a-step4-power-v1": _re.compile(r"^m3a-step4-power-v1-run\d+$"),
-              "m3a-step4-ident-v1": _re.compile(r"^m3a-step4-ident-v1-run\d+$")}
+_RUN_ID_RE = {"m3a-step4-power-v2": _re.compile(r"^m3a-step4-power-v2-run\d+$"),
+              "m3a-step4-ident-v2": _re.compile(r"^m3a-step4-ident-v2-run\d+$")}
 
 
 def _validate_run_id(run_id: str, job_kind: str) -> None:
@@ -258,7 +260,7 @@ def run_full_battery(manifest: dict, *, run_id: str):
     run_id (no caller out_base); the exact job kind is enforced; verify_launch requires the (run_id, job_kind,
     commit, manifest_hash) to be in the policy-data approval map. Delegates to the fail-closed execution
     engine."""
-    job = "m3a-step4-power-v1"
+    job = "m3a-step4-power-v2"
     v = verify_launch(manifest, run_id=run_id, job_kind=job)
     if not v["ok"]:
         return {"run_id": run_id, "status": "REFUSED", "problems": v["problems"]}
@@ -276,7 +278,7 @@ def run_full_identifiability(manifest: dict, *, run_id: str):
     """The registered identifiability run (guarded). Output root DERIVED internally; exact job kind enforced;
     verify_launch requires policy-data approval. The structured-computation params (ref/heldout/cov seeds, grid,
     rank points) come from the MANIFEST, not caller overrides."""
-    job = "m3a-step4-ident-v1"
+    job = "m3a-step4-ident-v2"
     v = verify_launch(manifest, run_id=run_id, job_kind=job)
     if not v["ok"]:
         return {"run_id": run_id, "status": "REFUSED", "problems": v["problems"]}

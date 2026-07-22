@@ -300,7 +300,8 @@ ABLATION_MATRIX = {
     "burst_timing":                {"primary_fail": ["S3_tau", "S3_loggap"], "allowed_sensitive": []},
     "mark_burst_tie":              {"primary_fail": ["S4_abs"], "allowed_sensitive": ["S7_abs"]},
     "cluster_size_mark_diversity": {"primary_fail": ["S7_abs"], "allowed_sensitive": ["S4_abs"]},
-    "length_class_mix":            {"primary_fail": ["S6_tv"], "allowed_sensitive": []},  # S5 terminal (Pi F2)
+    # length_class_mix DROPPED at the step-4 result gate (Pi): its candidate-A violates terminal S5; S6 now
+    # terminal/no-D (see REJECTED_D_COMPONENTS).
 }
 ABLATION_ORIENTATION = {
     "reference": "independent fixture with exactly one component at 0.5",
@@ -314,7 +315,7 @@ ABLATION_ORIENTATION = {
 SIMULATION = {
     "n_seeds": 25,
     "seed_list": list(range(1000, 1025)),
-    "per_source_sample_size_candidate": 4000,      # PROVISIONAL — step 4 must demonstrate every floor is met
+    "per_source_sample_size_candidate": 8000,      # Pi re-gate: one-step N-only escalation 4000->8000 (floors met)
     "step4_must_demonstrate": ["reference-derived coarsening map", ">=3 retained length + >=3 cluster bins",
                                "all four unmerged position quartiles", "every check-specific "
                                "sequence/cluster/pair/seam floor", "the rate criteria",
@@ -339,12 +340,12 @@ FIXTURE_GENERATOR = {
 # ============================ 8. identifiability (Pi §4) ============================
 # Identifiability vector = only the D-parameter-sensitive scalars (Pi F1/F2). S1/S2/S5/S8/S9 stay mandatory
 # adequacy checks but are EXCLUDED from the D Jacobian/recovery objective.
-IDENTIFIABILITY_VECTOR = ["S3_tau", "S3_loggap", "S4_abs", "S6_tv", "S7_abs"]
+IDENTIFIABILITY_VECTOR = ["S3_tau", "S3_loggap", "S4_abs", "S7_abs"]   # S6_tv dropped with length_class_mix (Pi re-gate)
 IDENTIFIABILITY = {
     "param_ranges": {c: [0.0, 0.6] for c in V2_D_COMPONENT_MENU},
     "standardization": "AFFINE range standardization (no logit); NO epsilon clipping (no denominator needs it)",
-    "statistic_vector": IDENTIFIABILITY_VECTOR,   # S3_tau/S3_loggap/S4_abs/S6_tv/S7_abs only (Pi); S1/S2/S5/
-                        # S8/S9 remain mandatory adequacy checks but are excluded from the D Jacobian/recovery",
+    "statistic_vector": IDENTIFIABILITY_VECTOR,   # S3_tau/S3_loggap/S4_abs/S7_abs only (Pi re-gate); S1/S2/S5/
+                        # S6/S8/S9 remain mandatory adequacy checks but are excluded from the D Jacobian/recovery",
     "whitening_reference": "Sigma estimated at null_independent under CRN (seeds = SIMULATION.seed_list); ridge "
                            "Sigma_lambda = Sigma + 1e-3 * trace(Sigma)/d * I",
     "grid": "3^k joint grid over active components at 0.10/0.35/0.55; nuisance profiles = the exact named list "
@@ -363,8 +364,8 @@ IDENTIFIABILITY = {
                       "adaptive grid reduction after results",
     "nuisance": "IDENTIFIABILITY_NUISANCE (SCID/MIMIC/structural-zero); boundary-short is a terminal support "
                 "control, NOT a Jacobian/grid nuisance (its statistics can be NOT_EVALUABLE) — Pi §5",
-    "collision_tolerance_vector": "fixed, aligned to (S3_tau,S3_loggap,S4_abs,S6_tv,S7_abs) = "
-                                  "[0.05, log(1.10), 0.03, 0.05, 0.03]",
+    "collision_tolerance_vector": "fixed, aligned to (S3_tau,S3_loggap,S4_abs,S7_abs) = "
+                                  "[0.05, log(1.10), 0.03, 0.03]",
 }
 # Jacobian/grid nuisance for identifiability (Pi §5): three profiles; boundary-short excluded (terminal support).
 IDENTIFIABILITY_NUISANCE = ["scid_scale_control", "mimic_scale_control", "structural_zero_control"]
@@ -379,10 +380,10 @@ CHECK_TO_D_COMPONENTS = {
     "S3_tau":     {"components": ["burst_timing"], "semantics": "single"},
     "S3_loggap":  {"components": ["burst_timing"], "semantics": "single"},
     "S4_abs":     {"components": ["mark_burst_tie"], "semantics": "single"},
-    "S6_tv":      {"components": ["length_class_mix"], "semantics": "single"},
     "S7_abs":     {"components": ["cluster_size_mark_diversity"], "semantics": "single"},
+    # S6_tv removed with length_class_mix (Pi step-4 result gate); S6 is now terminal/no-D alongside S5.
 }
-TERMINAL_CHECKS = ["S1_density", "S1_tau", "S2_ks", "S5_abs", "S8_density", "S8_class",
+TERMINAL_CHECKS = ["S1_density", "S1_tau", "S2_ks", "S5_abs", "S6_tv", "S8_density", "S8_class",
                    "S9_zero", "S9_class", "S9_gap",
                    "length_ks", "class_tv", "count_ks", "occupancy_abs", "delta_t_zero_abs", "positive_gap_ks"]
 ESCALATION = {

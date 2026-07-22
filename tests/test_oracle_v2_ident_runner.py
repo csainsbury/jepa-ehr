@@ -28,7 +28,7 @@ _RANK_PTS = [{c: 0.35 for c in idf.COMPONENTS}]
 
 class Grid(unittest.TestCase):
     def test_grid_and_rank_points(self) -> None:
-        self.assertEqual(len(ir.ident_grid()), 81)                 # 3^4
+        self.assertEqual(len(ir.ident_grid()), 27)                 # 3^3 (length_class_mix dropped)
         self.assertEqual(len(ir.interior_rank_points()), 3)        # low/mid/high
 
 

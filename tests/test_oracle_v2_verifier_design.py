@@ -17,7 +17,7 @@ from clinical_jepa.eval.oracle_realism_v2_verifier_design import (
     m3a_design_dev_hash, M3A_DESIGN_VERSION,
 )
 
-_DESIGN_DEV_HASH = "043f1c45ed9d117c311e279e0a18461bc668d2d938e355d5682c684c513a08fe"
+_DESIGN_DEV_HASH = "206f299eb4fb1f2131d2ba742f07f99efd284df51a3471ab4ce950c488abe74e"  # re-minted (Pi step-4 result gate)
 
 
 class VerifierDesignRev2(unittest.TestCase):
@@ -58,7 +58,8 @@ class VerifierDesignRev2(unittest.TestCase):
         self.assertEqual(mapped, set(V2_D_COMPONENT_MENU))
         self.assertNotIn("S5_abs", CHECK_TO_D_COMPONENTS)      # S5 terminal (Pi F2)
         self.assertNotIn("S1_density", CHECK_TO_D_COMPONENTS)  # S1 terminal (Pi F1)
-        self.assertEqual(CHECK_TO_D_COMPONENTS["S6_tv"]["components"], ["length_class_mix"])
+        self.assertNotIn("S6_tv", CHECK_TO_D_COMPONENTS)       # S6 terminal after length_class_mix drop (Pi re-gate)
+        self.assertEqual(CHECK_TO_D_COMPONENTS["S7_abs"]["components"], ["cluster_size_mark_diversity"])
 
     def test_ablation_matrix_covers_every_component(self) -> None:
         self.assertEqual(set(ABLATION_MATRIX), set(V2_D_COMPONENT_MENU))

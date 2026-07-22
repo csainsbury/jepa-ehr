@@ -95,6 +95,10 @@ def derive_record(source: str, class_ids, timestamps) -> SequenceRecord:
 # ---------------------------------------------------------------------------------------------------
 def _sample_length(profile: dict, rng: np.random.Generator) -> int:
     lg = profile["length"]
+    if lg["family"] == "uniform_int":
+        # EXACT bounded support (Pi re-gate §4): L drawn uniformly on [min, max] — a STRUCTURAL bound, so the
+        # boundary-short control can never emit an 8-item block and its seam checks (S9) are guaranteed NE.
+        return int(rng.integers(lg.get("min", 1), lg["max"] + 1))
     if lg["family"] != "discretized_lognormal":
         raise ValueError(f"unsupported length family {lg['family']!r}")
     val = int(round(float(np.exp(rng.normal(lg["mu"], lg["sigma"])))))

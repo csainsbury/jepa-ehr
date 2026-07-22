@@ -1,8 +1,9 @@
 """Identifiability battery for the realism-v2 D components (rebuild step 3; Pi step-3 re-gate §6).
 
-Executable standardized-Jacobian rank + grid-recovery + collision search over the five-scalar D vector
-`S3_tau, S3_loggap, S4_abs, S6_tv, S7_abs` as a function of the four D-component strengths
-`theta = (burst_timing, mark_burst_tie, cluster_size_mark_diversity, length_class_mix)`.
+Executable standardized-Jacobian rank + grid-recovery + collision search over the four-scalar D vector
+`S3_tau, S3_loggap, S4_abs, S7_abs` as a function of the three D-component strengths
+`theta = (burst_timing, mark_burst_tie, cluster_size_mark_diversity)` (length_class_mix / S6_tv dropped at the
+step-4 result gate). COMPONENTS and D_VECTOR derive from the design constants, so the grid is now 3^3.
 
 Frozen numerics (design): param range [0, 0.6]; grid 0.10/0.35/0.55; central CRN finite differences (step 0.02),
 forward one-sided at 0.0, backward one-sided at 0.60; null covariance whitening with ridge
@@ -36,8 +37,8 @@ RANK_MIN = 1e-3                                            # sigma_min / sigma_m
 RECOVER_TOL = 0.05 * (PARAM_RANGE[1] - PARAM_RANGE[0])    # 0.03 of the raw range
 # 3-profile Jacobian nuisance (Pi §5); boundary-short is a terminal support control, not a grid nuisance.
 NUISANCE_PROFILES = tuple(IDENTIFIABILITY_NUISANCE)
-# FIXED raw collision tolerance vector aligned to D_VECTOR (S3_tau,S3_loggap,S4_abs,S6_tv,S7_abs), Pi §5.
-ACCEPT_TOL = np.asarray([0.05, log(1.10), 0.03, 0.05, 0.03])
+# FIXED raw collision tolerance vector aligned to D_VECTOR (S3_tau,S3_loggap,S4_abs,S7_abs), Pi re-gate.
+ACCEPT_TOL = np.asarray([0.05, log(1.10), 0.03, 0.03])
 
 
 def _cseed(component, tag) -> int:

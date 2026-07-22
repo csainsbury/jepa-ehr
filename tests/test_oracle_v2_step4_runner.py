@@ -22,14 +22,14 @@ class ManifestBinding(unittest.TestCase):
         self.assertEqual(len(self.m["seeds"]), 25)
         self.assertEqual(self.m["seeds"][0], 1000)
         self.assertEqual(self.m["seeds"][-1], 1024)
-        self.assertEqual(self.m["registered_n"], 4000)
+        self.assertEqual(self.m["registered_n"], 8000)
         self.assertEqual(set(self.m["identities"]),
                          {"fixture", "verifier", "coupling", "battery", "design", "identifiability", "code_closure"})
         self.assertIn("identifiability", self.m)
         self.assertIn("cost_forecast", self.m["identifiability"])
         self.assertEqual(set(self.m["source_profiles"]), {"scid_scale_control", "mimic_scale_control"})
         self.assertEqual(self.m["identifiability_vector"],
-                         ["S3_tau", "S3_loggap", "S4_abs", "S6_tv", "S7_abs"])
+                         ["S3_tau", "S3_loggap", "S4_abs", "S7_abs"])
 
     def test_cap_unambiguous(self) -> None:
         self.assertEqual(self.m["cap"]["workers"], 1)
@@ -43,9 +43,9 @@ class ManifestBinding(unittest.TestCase):
         self.assertNotEqual(self.m["manifest_hash"], m3["manifest_hash"])   # commit is bound
 
     def test_two_jobs_distinct_and_job_kind_verified(self) -> None:  # Pi §6
-        power = rn.build_manifest(reviewed_commit="c", job_kind="m3a-step4-power-v1")
-        ident = rn.build_manifest(reviewed_commit="c", job_kind="m3a-step4-ident-v1")
-        self.assertEqual(power["job_kind"], "m3a-step4-power-v1")
+        power = rn.build_manifest(reviewed_commit="c", job_kind="m3a-step4-power-v2")
+        ident = rn.build_manifest(reviewed_commit="c", job_kind="m3a-step4-ident-v2")
+        self.assertEqual(power["job_kind"], "m3a-step4-power-v2")
         self.assertNotEqual(power["manifest_hash"], ident["manifest_hash"])   # distinct job hashes
         with self.assertRaises(ValueError):
             rn.build_manifest(reviewed_commit="c", job_kind="bogus")
@@ -86,46 +86,46 @@ class FailClosedVerify(unittest.TestCase):
 
 class LaunchGate(unittest.TestCase):
     def test_launch_refused_when_policy_empty(self) -> None:  # Pi §1: empty approval map => nothing launches
-        m = rn.build_manifest(reviewed_commit=rn._git_head() or "c", job_kind="m3a-step4-power-v1")
-        v = rn.verify_launch(m, run_id="m3a-step4-power-v1-run1", job_kind="m3a-step4-power-v1")
+        m = rn.build_manifest(reviewed_commit=rn._git_head() or "c", job_kind="m3a-step4-power-v2")
+        v = rn.verify_launch(m, run_id="m3a-step4-power-v2-run1", job_kind="m3a-step4-power-v2")
         self.assertFalse(v["ok"])
         self.assertIn("run_id_not_approved", v["problems"])
-        r = rn.run_full_battery(m, run_id="m3a-step4-power-v1-run1")
+        r = rn.run_full_battery(m, run_id="m3a-step4-power-v2-run1")
         self.assertEqual(r["status"], "REFUSED")
 
     def test_cross_job_manifest_refused(self) -> None:  # power entrypoint must reject an ident manifest
-        ident_m = rn.build_manifest(reviewed_commit="c", job_kind="m3a-step4-ident-v1")
-        v = rn.verify_launch(ident_m, run_id="m3a-step4-power-v1-run1", job_kind="m3a-step4-power-v1")
+        ident_m = rn.build_manifest(reviewed_commit="c", job_kind="m3a-step4-ident-v2")
+        v = rn.verify_launch(ident_m, run_id="m3a-step4-power-v2-run1", job_kind="m3a-step4-power-v2")
         self.assertIn("job_kind_mismatch", v["problems"])
 
     def test_run_id_pattern_and_containment(self) -> None:  # Pi §2
         with self.assertRaises(ValueError):
-            rn._validate_run_id("../../etc/passwd", "m3a-step4-power-v1")
+            rn._validate_run_id("../../etc/passwd", "m3a-step4-power-v2")
         with self.assertRaises(ValueError):
-            rn._validate_run_id("m3a-step4-ident-v1-run1", "m3a-step4-power-v1")   # wrong job kind
-        rn._validate_run_id("m3a-step4-power-v1-run1", "m3a-step4-power-v1")       # ok
+            rn._validate_run_id("m3a-step4-ident-v2-run1", "m3a-step4-power-v2")   # wrong job kind
+        rn._validate_run_id("m3a-step4-power-v2-run1", "m3a-step4-power-v2")       # ok
 
     def test_gate_event_required(self) -> None:  # Pi §3: an approval without a canonical gate_event cannot launch
         import clinical_jepa.eval.oracle_realism_v2_step4_policy as pol
         head = rn._git_head()
         if not head:
             self.skipTest("no git head")
-        m = rn.build_manifest(reviewed_commit=head, job_kind="m3a-step4-power-v1")
-        rid = "m3a-step4-power-v1-run1"
+        m = rn.build_manifest(reviewed_commit=head, job_kind="m3a-step4-power-v2")
+        rid = "m3a-step4-power-v2-run1"
         saved = dict(pol.APPROVED_STEP4_JOBS)
         try:
-            pol.APPROVED_STEP4_JOBS[rid] = {"job_kind": "m3a-step4-power-v1", "reviewed_commit": head,
+            pol.APPROVED_STEP4_JOBS[rid] = {"job_kind": "m3a-step4-power-v2", "reviewed_commit": head,
                                             "manifest_hash": m["manifest_hash"]}   # no gate_event
-            v = rn.verify_launch(m, run_id=rid, job_kind="m3a-step4-power-v1")
+            v = rn.verify_launch(m, run_id=rid, job_kind="m3a-step4-power-v2")
             self.assertIn("gate_event_missing", v["problems"])
             self.assertIsNone(v["gate_event"])
             pol.APPROVED_STEP4_JOBS[rid]["gate_event"] = "evt-20260722T000000Z-deadbeef"
-            v2 = rn.verify_launch(m, run_id=rid, job_kind="m3a-step4-power-v1")
+            v2 = rn.verify_launch(m, run_id=rid, job_kind="m3a-step4-power-v2")
             self.assertTrue(v2["ok"], v2["problems"])
             self.assertEqual(v2["gate_event"], "evt-20260722T000000Z-deadbeef")
             # a non-canonical gate id is refused
             pol.APPROVED_STEP4_JOBS[rid]["gate_event"] = "not-an-event"
-            self.assertIn("gate_event_missing", rn.verify_launch(m, run_id=rid, job_kind="m3a-step4-power-v1")["problems"])
+            self.assertIn("gate_event_missing", rn.verify_launch(m, run_id=rid, job_kind="m3a-step4-power-v2")["problems"])
         finally:
             pol.APPROVED_STEP4_JOBS.clear(); pol.APPROVED_STEP4_JOBS.update(saved)
 

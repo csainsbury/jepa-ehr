@@ -3,7 +3,7 @@
 Exercises: the conjunctive verdict semantics (synthetic, no verifier), Wilson CI, deterministic (source,
 profile, seed, role) RNG derivation, the forecast (event/cluster/pair volume), a small mechanical orientation
 smoke for two components (known-profile repeatability, not recovery), and the fail-closed controls with exact
-expected-status maps. The full 25-seed source-conjunction run at N=4000 is the step-4 runner (not here).
+expected-status maps. The full 25-seed source-conjunction run at N=8000 is the step-4 runner (not here).
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import unittest
 
 from clinical_jepa.eval import oracle_realism_v2_battery as bat
 
-_BATTERY_IMPL_ID = "2467285a2155e57a7bd19037776fc4233de0503d60fe304221f53f33bcd3f5bd"
+_BATTERY_IMPL_ID = "7c61fe69587bf77ea653a7000369fbe9a1db3ab07a32dbbb1f560c8149ea07c0"
 
 
 def _synth(kp, ks, kr):
@@ -22,7 +22,7 @@ def _synth(kp, ks, kr):
 class BatteryContract(unittest.TestCase):
     def test_impl_identity_and_registered_contract(self) -> None:
         self.assertEqual(bat.battery_impl_identity(), _BATTERY_IMPL_ID)
-        self.assertEqual(bat.REGISTERED_N, 4000)
+        self.assertEqual(bat.REGISTERED_N, 8000)
         self.assertEqual(tuple(bat.SOURCE_PROFILES), ("scid_scale_control", "mimic_scale_control"))
         self.assertEqual(bat.PRIMARY_FAIL_MIN, 20)
         self.assertEqual(bat.SPECIFICITY_MIN, 24)
@@ -75,7 +75,10 @@ class ControlsFailClosed(unittest.TestCase):
         self.assertTrue(nc["all_pass"], f"null FAILs={nc['fails']} NE={nc['not_evaluable']}")
 
     def test_boundary_expected_status_map(self) -> None:
-        bc = bat.boundary_control(1000, n_each=500)
+        # at a representative N (S3 needs >=FLOOR eligible multi-cluster sequences); the exact predeclared
+        # NE-else-PASS map holds. (At tiny N some non-length checks are NE for lack of support — a small-N
+        # artifact, not the registered behaviour.)
+        bc = bat.boundary_control(1000, n_each=1500)
         self.assertTrue(bc["ok"], f"boundary unexpected: {bc['unexpected']}")
 
     def test_structural_zero(self) -> None:
@@ -92,6 +95,16 @@ class ControlsFailClosed(unittest.TestCase):
         nc = bat.null_control(1000, base_sampler=smoke, source_profile="mimic_scale_control")
         self.assertEqual(set(nc["status"].keys()), set(bat.ALL_CHECK_KEYS))
         self.assertEqual(set(nc["evidence"].keys()), set(bat.ALL_CHECK_KEYS))
+
+    def test_boundary_structurally_bounded_L_le_7(self) -> None:  # Pi re-gate §4 (bounded-control status only)
+        from clinical_jepa.eval.oracle_realism_v2_fixture import sample_fixture
+        from clinical_jepa.eval.oracle_realism_v2_verifier import NOT_EVALUABLE
+        recs = sample_fixture("MIMIC", bat._BOUNDED_SHORT_PROF, 3000, seed=7)
+        self.assertLessEqual(max(r.L_total for r in recs), 7)      # HARD structural bound (no 8-item block)
+        bc = bat.boundary_control(1000, n_each=1500)
+        for k in ("S9_zero", "S9_class", "S9_gap"):                # seam checks NE by construction, not by tail luck
+            self.assertEqual(bc["status"][k], NOT_EVALUABLE, k)
+        self.assertTrue(bc["ok"], f"boundary unexpected: {bc['unexpected']}")
 
 
 if __name__ == "__main__":

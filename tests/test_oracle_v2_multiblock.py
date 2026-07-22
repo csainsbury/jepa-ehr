@@ -68,15 +68,19 @@ class ReGatedIdentities(unittest.TestCase):
 
 
 class ActiveSetDIdentity(unittest.TestCase):
-    def test_menu_includes_length_class_mix(self) -> None:
-        self.assertIn("length_class_mix", v2.V2_D_COMPONENT_MENU)
+    def test_menu_excludes_dropped_length_class_mix(self) -> None:
+        # length_class_mix dropped at the step-4 result gate (violates terminal S5); preserved as rejected evidence
+        self.assertNotIn("length_class_mix", v2.V2_D_COMPONENT_MENU)
+        self.assertIn("length_class_mix", v2.REJECTED_D_COMPONENTS)
+        self.assertEqual(v2.V2_D_COMPONENT_MENU,
+                         ("burst_timing", "mark_burst_tie", "cluster_size_mark_diversity"))
 
     def test_active_sets_are_distinct_and_ordered(self) -> None:
         a = v2.v2_active_d_identity(["burst_timing"])
-        b = v2.v2_active_d_identity(["burst_timing", "length_class_mix"])
+        b = v2.v2_active_d_identity(["burst_timing", "mark_burst_tie"])
         self.assertNotEqual(a, b)
         # order-independent (set semantics)
-        self.assertEqual(v2.v2_active_d_identity(["length_class_mix", "burst_timing"]), b)
+        self.assertEqual(v2.v2_active_d_identity(["mark_burst_tie", "burst_timing"]), b)
         # dev != final
         self.assertNotEqual(v2.v2_active_d_identity(["burst_timing"]),
                             v2.v2_active_d_identity(["burst_timing"], final=True))

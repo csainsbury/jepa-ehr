@@ -31,7 +31,9 @@ from clinical_jepa.eval.oracle_realism_v2_verifier import (
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import ABLATION_MATRIX, PROFILES
 
 _ABL_S = 0.5
-REGISTERED_N = 4000                                   # design per-source/profile/seed sample size
+REGISTERED_N = 8000                                   # design per-source/profile/seed sample size (Pi re-gate: 4000->8000)
+CONTROL_N = REGISTERED_N                              # global controls run at the REGISTERED N (Pi re-gate §3; no hidden 500/600)
+_CONTROL_N_EACH = CONTROL_N // 3                      # per length-stratum / sub-draw (3 strata -> total ~= CONTROL_N)
 SOURCE_PROFILES = ("scid_scale_control", "mimic_scale_control")
 PRIMARY_FAIL_MIN = 20                                 # misspecified control FAILs its primary >=20/25
 SPECIFICITY_MIN = 24                                  # non-attributed / repeatability / null PASS >=24/25
@@ -125,7 +127,10 @@ _SWAP_PROF = {**_MIMIC_PROF, "class_prior": [0.55, 0.20, 0.15, 0.07, 0.03],
               "cluster_size": {"family": "geometric", "p": 0.55},
               "gap": {"family": "lognormal", "mu": _log(1.0), "sigma": 0.85}}   # mimic length x SCID class/run/gap
 _ZERO_PROF = {**_MIMIC_PROF, "class_prior": [0.40, 0.35, 0.25, 0.0, 0.0], "structural_zero_classes": [3, 4]}
-_SHORT_PROF = {**_MIMIC_PROF, "length": {"family": "discretized_lognormal", "mu": _log(6), "sigma": 0.3, "min": 1}}
+# Boundary-short support control: STRUCTURALLY bounded L in [1,7] (Pi re-gate §4). A hard bound (uniform_int)
+# GUARANTEES no 8-item block ever forms, so the S9 seam checks are always NOT_EVALUABLE by construction — the
+# expected refusal no longer depends on the tail of an unbounded lognormal (which produced boundary false positives).
+_BOUNDED_SHORT_PROF = {**_MIMIC_PROF, "length": {"family": "uniform_int", "min": 1, "max": 7}}
 
 
 def _multiscale(prof, source_key, tag, seed, n_each):
@@ -145,11 +150,12 @@ def null_control(replicate_seed, *, base_sampler, source_profile) -> dict:
             "not_evaluable": [k for k, v in st.items() if v == NOT_EVALUABLE]}
 
 
-def boundary_control(replicate_seed, *, n_each=600) -> dict:
-    """Boundary-short (single-scale short) self-recovery: predeclared length-conditioned refusals
-    (NOT_EVALUABLE) are successful; every OTHER check must PASS (no broad 'anything except FAIL')."""
-    ref = [r for i in range(3) for r in sample_fixture("MIMIC", _SHORT_PROF, n_each, seed=_derive_seed("b_ref", replicate_seed, i))]
-    cand = [r for i in range(3) for r in sample_fixture("MIMIC", _SHORT_PROF, n_each, seed=_derive_seed("b_cand", replicate_seed, i))]
+def boundary_control(replicate_seed, *, n_each=_CONTROL_N_EACH) -> dict:
+    """Boundary-short self-recovery on the STRUCTURALLY bounded L<=7 profile (Pi re-gate §4): predeclared
+    length-conditioned refusals (NOT_EVALUABLE) are successful; every OTHER check must PASS. Runs at the
+    registered N (3 sub-draws x n_each ~= CONTROL_N)."""
+    ref = [r for i in range(3) for r in sample_fixture("MIMIC", _BOUNDED_SHORT_PROF, n_each, seed=_derive_seed("b_ref", replicate_seed, i))]
+    cand = [r for i in range(3) for r in sample_fixture("MIMIC", _BOUNDED_SHORT_PROF, n_each, seed=_derive_seed("b_cand", replicate_seed, i))]
     ev = _evidence_map(cand, ref)
     st = {k: e["status"] for k, e in ev.items()}
     unexpected = [k for k in st if (k in _BOUNDARY_EXPECTED_NE and st[k] == FAIL)
@@ -157,7 +163,7 @@ def boundary_control(replicate_seed, *, n_each=600) -> dict:
     return {"ok": not unexpected, "status": st, "evidence": ev, "unexpected": unexpected}
 
 
-def structural_zero_control(replicate_seed, *, n_each=600) -> dict:
+def structural_zero_control(replicate_seed, *, n_each=_CONTROL_N_EACH) -> dict:
     ref = _multiscale(_ZERO_PROF, "MIMIC", "z_ref", replicate_seed, n_each)
     cand = _multiscale(_ZERO_PROF, "MIMIC", "z_cand", replicate_seed, n_each)
     ev = _evidence_map(cand, ref)
@@ -168,7 +174,7 @@ def structural_zero_control(replicate_seed, *, n_each=600) -> dict:
             "evidence": ev, "ok": present.issubset({0, 1, 2}) and required_pass}
 
 
-def source_swap_control(replicate_seed, *, n_each=600) -> dict:
+def source_swap_control(replicate_seed, *, n_each=_CONTROL_N_EACH) -> dict:
     ref = _multiscale(_MIMIC_PROF, "MIMIC", "swap_ref", replicate_seed, n_each)
     cand = _multiscale(_SWAP_PROF, "MIMIC", "swap_cand", replicate_seed, n_each)
     ev = _evidence_map(cand, ref)
@@ -278,8 +284,10 @@ BATTERY_IMPL = {
     "components": list(V2_D_COMPONENT_MENU),
     "controls": ["null", "boundary_short", "structural_zero", "source_swap"],
     "boundary_expected_not_evaluable": sorted(_BOUNDARY_EXPECTED_NE),
+    "boundary_fixture": {"bound": "L<=7", "family": "uniform_int", "min": 1, "max": 7},  # Pi re-gate §4 (structural)
     "ablation_strength": _ABL_S,
     "registered_n": REGISTERED_N,
+    "control_n": CONTROL_N,                         # global controls at the registered N (Pi re-gate §3)
     "source_profiles": list(SOURCE_PROFILES),
     "rng_derivation": "fixture: (source,profile,replicate_seed,role); coupling: (source,component,seed,role)",
     "verdict": {"primary_fail_min": PRIMARY_FAIL_MIN, "specificity_min": SPECIFICITY_MIN,

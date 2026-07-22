@@ -115,14 +115,14 @@ def _run_replicate(kind, name, src, seed, *, base_sampler) -> dict:
         return {"kind": kind, "name": name, "source": src, "seed": seed, "all_pass": r["all_pass"],
                 "status": r["status"], "evidence": r["evidence"]}
     if name == "boundary":
-        r = boundary_control(seed, n_each=500)
+        r = boundary_control(seed)                 # registered-N default (Pi re-gate §3); bounded L<=7 (§4)
         return {"kind": kind, "name": name, "source": src, "seed": seed, "ok": r["ok"], "status": r["status"],
                 "evidence": r["evidence"]}
     if name == "structural_zero":
-        r = structural_zero_control(seed, n_each=600)
+        r = structural_zero_control(seed)          # registered-N default
         return {"kind": kind, "name": name, "source": src, "seed": seed, "ok": r["ok"],
                 "zeros_absent": r["zeros_absent"], "status": r["status"], "evidence": r["evidence"]}
-    r = source_swap_control(seed, n_each=600)
+    r = source_swap_control(seed)                  # registered-N default
     return {"kind": kind, "name": name, "source": src, "seed": seed,
             "fails_nondegenerate": r["fails_nondegenerate"], "status": r["status"], "evidence": r["evidence"]}
 

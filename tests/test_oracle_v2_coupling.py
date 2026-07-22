@@ -13,7 +13,7 @@ import unittest
 from clinical_jepa.eval import oracle_realism_v2_fixture as fx
 from clinical_jepa.eval import oracle_realism_v2_coupling as cp
 
-_COUPLING_IMPL_ID = "839204245178abe069b6d4f959600054d4474d2cf71df809fb1e9fae695ee85c"
+_COUPLING_IMPL_ID = "059706b7d12c4b2be0f8055dbaf6b4b039f8b16bafa3031a8cf4e2ad205481be"
 _PROF = {"length": {"family": "discretized_lognormal", "mu": log(120), "sigma": 0.9, "min": 1},
          "class_prior": [0.3, 0.25, 0.2, 0.15, 0.1], "structural_zero_classes": [],
          "cluster_size": {"family": "geometric", "p": 0.5},
@@ -75,8 +75,11 @@ class CouplingInvariants(unittest.TestCase):
         self.assertEqual(_seq_counts(out), _seq_counts(self.s))
         self.assertEqual(_seq_runs(out), _seq_runs(self.s))
 
-    def test_length_class_mix_preserves_pooled_class_counts(self) -> None:
-        out = cp.apply_coupling(self.s, "length_class_mix", 0.5, seed=1)
+    def test_length_class_mix_dropped_but_coupling_preserved(self) -> None:  # Pi re-gate: off menu, code retained
+        with self.assertRaises(KeyError):                                    # not dispatchable via the active menu
+            cp.apply_coupling(self.s, "length_class_mix", 0.5, seed=1)
+        # explored-space evidence: the retained coupling still preserves pooled class counts exactly
+        out = cp._couple_length_class_mix(list(self.s), 0.5, cp._rng(1, "length_class_mix"))
         self.assertTrue(np.array_equal(_pooled_class(out), _pooled_class(self.s)))
 
     def test_rejects_bad_component_and_strength(self) -> None:

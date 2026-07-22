@@ -58,11 +58,13 @@ class CouplingDirection(unittest.TestCase):
         self.assertEqual(c["class_tv"].status, vf.PASS)
         self.assertIn(c["S2_ks"].status, (vf.PASS, vf.NOT_EVALUABLE))  # cluster sizes preserved
 
-    def test_length_class_mix_moves_S6_not_S5(self) -> None:  # finding F2
-        c = self._checks("length_class_mix", 0.6, 6)
-        self.assertEqual(c["S6_tv"].status, vf.FAIL)                # class mix by length -> strong
-        self.assertNotEqual(c["S5_abs"].status, vf.FAIL)           # occupancy NOT moved by class relabel
-        self.assertEqual(c["class_tv"].status, vf.PASS)             # pooled class counts exact
+    def test_length_class_mix_dropped(self) -> None:  # Pi step-4 result gate: it VIOLATES terminal S5 -> dropped
+        # the earlier F2 belief ("moves S6 not S5") was refuted at the result gate: candidate-A vs
+        # length_class_mix@0.5 gives S5_abs ~19 FAIL/25 on MIMIC (real cross-loading, worse at higher N). Off the
+        # active menu; coupling code retained as explored-space evidence but no longer dispatchable.
+        self.assertNotIn("length_class_mix", cp.V2_D_COMPONENT_MENU)
+        with self.assertRaises(KeyError):
+            cp.apply_coupling(self.ref, "length_class_mix", 0.6, seed=1)
 
     def test_burst_count_length_dropped(self) -> None:             # finding F1 -> Pi dropped it (fast, no verifier)
         self.assertNotIn("burst_count_length", cp.V2_D_COMPONENT_MENU)

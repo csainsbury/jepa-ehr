@@ -275,17 +275,22 @@ V2_VARIANT_A_INDEPENDENT = {
 }
 
 # D component MENU. Operationally, escalation mints an identity over the exact ACTIVE subset via
-# `v2_active_d_identity` (never the generic all-components identity, Pi). `length_class_mix` is the length→
-# class-mix (S6) coupling component. `burst_count_length` was REJECTED (Pi F1 ruling): under the canonical
-# maximal-run law L, K, and run sizes are structurally linked (baseline tau(L,K)~0.92), so it is not a
-# separable dependence and S1 is a terminal/structural check — see REJECTED_D_COMPONENTS.
-V2_D_COMPONENT_MENU = ("burst_timing", "mark_burst_tie", "cluster_size_mark_diversity", "length_class_mix")
+# `v2_active_d_identity` (never the generic all-components identity, Pi). `burst_count_length` was REJECTED (Pi F1
+# ruling). `length_class_mix` was REJECTED at the M3a step-4 result gate (Pi): its candidate-A run genuinely
+# VIOLATES the terminal S5 check (S5_abs ~19 FAIL/25 on MIMIC) — a real cross-loading, not sampling noise, that
+# worsens with N — so S5 cannot be exempted/weakened; the component is dropped and S6 becomes terminal/no-D.
+V2_D_COMPONENT_MENU = ("burst_timing", "mark_burst_tie", "cluster_size_mark_diversity")
 
 # Components tried and rejected as Option-D knobs (kept as historical diagnostics; NEVER selectable by D).
 REJECTED_D_COMPONENTS = {
     "burst_count_length": "F1 (Pi): baseline maximal-run process already induces tau(L,K)~0.92; K/L density "
                           "cannot move without breaking the S2 run-size marginal (K/L/run-size linked). S1 is "
                           "terminal/structural, not a separable dependence.",
+    "length_class_mix": "M3a step-4 result gate (Pi): the length-bin class-mix coupling (S6) also drives the "
+                        "TERMINAL S5 occupancy check — candidate-A vs length_class_mix@0.5 gives S5_abs ~19 FAIL "
+                        "/ 2 PASS / 4 NE on MIMIC. Real cross-loading (not noise; more visible at higher N). S5 "
+                        "is terminal/non-attributed and must PASS, so the component is unusable; dropped and S6 "
+                        "moved to terminal/no-D. Preserved as explored-space evidence.",
 }
 
 V2_VARIANT_D_COPULA = {
