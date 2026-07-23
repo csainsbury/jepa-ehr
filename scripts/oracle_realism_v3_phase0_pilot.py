@@ -31,7 +31,7 @@ from scipy.stats import kendalltau
 
 from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_realism_v2_fixture import sample_fixture
-from clinical_jepa.eval.oracle_realism_v2_verifier import _positive_gaps_and_prev_size, sequence_route_checks
+from clinical_jepa.eval.oracle_realism_v2_verifier import _positive_gaps_and_prev_size, sequence_route_checks, s3
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import PROFILES
 from clinical_jepa.eval.oracle_realism_v2_coupling import apply_coupling
 
@@ -117,15 +117,15 @@ def validate_tie_formula():
 
 
 # ---------------------------------------------------------------------------------------------------
-# regimes (dev): full-support (multiscale) SCID/MIMIC; bounded-short (canonical uniform_int[1,7])
+# regimes (dev): EXACT registered source profiles (single-profile draws, Pi rev-3 §3 — NOT a 3-mu smoke);
+# bounded-short = canonical uniform_int[1,7].
 # ---------------------------------------------------------------------------------------------------
-def full_support(source_key, profile, n, seed):
-    from math import log
-    recs = []
-    for i, mu in enumerate((log(18), log(60), log(250))):
-        p = dict(profile, length={**profile["length"], "mu": mu})
-        recs += sample_fixture(source_key, p, n // 3, seed=dseed("full", source_key, seed, i))
-    return recs
+def _skey(profile_name):
+    return "SCID" if "scid" in profile_name else "MIMIC"
+
+
+def exact_source(profile_name, n, seed):
+    return sample_fixture(_skey(profile_name), PROFILES[profile_name], n, seed=dseed("src", profile_name, seed))
 
 
 def bounded_short(n, seed):
@@ -133,8 +133,8 @@ def bounded_short(n, seed):
 
 
 REGIMES = {
-    "full_MIMIC": ("MIMIC", lambda n, s: full_support("MIMIC", PROFILES["mimic_scale_control"], n, s)),
-    "full_SCID":  ("SCID",  lambda n, s: full_support("SCID", PROFILES["scid_scale_control"], n, s)),
+    "full_MIMIC": ("MIMIC", lambda n, s: exact_source("mimic_scale_control", n, s)),
+    "full_SCID":  ("SCID",  lambda n, s: exact_source("scid_scale_control", n, s)),
     "bounded":    ("MIMIC", lambda n, s: bounded_short(n, s)),
 }
 
@@ -177,32 +177,58 @@ def concentration(sample):
     return {"uncapped": ef(pf), "phasespan": ef(pc)}
 
 
+def _s3loggap(cand, ref):
+    r = s3(cand, ref)["S3_loggap"]
+    return r.status, (None if r.value is None else float(r.value))
+
+
+def _statcounts(statuses):
+    from collections import Counter
+    c = Counter(statuses)
+    return {k: c.get(k, 0) for k in ("PASS", "FAIL", "NOT_EVALUABLE")}
+
+
 def null_and_power(regime_key, reps=DEV_SEEDS):
+    """T_pool (S3_tau replacement) AND S3_loggap (existing coarsened check), null vs burst_timing@0.5-coupled,
+    over the exact-profile draws. S3_tau/S3_loggap exemptions are decided SEPARATELY (Pi rev-3 §3)."""
     src, gen = REGIMES[regime_key]
     nulls, powers = [], []
+    lg_null_st, lg_null_v, lg_pow_st, lg_pow_v = [], [], [], []
     for k in reps:
         A = gen(N, ("A", k)); B = gen(N, ("B", k))
-        dn = _two_sample_d(A, B)
         Bc = apply_coupling(list(B), "burst_timing", 0.5, seed=dseed("cpl", regime_key, k))
-        dp = _two_sample_d(A, Bc)
+        dn = _two_sample_d(A, B); dp = _two_sample_d(A, Bc)
         if dn is not None:
             nulls.append(dn)
         if dp is not None:
             powers.append(dp)
+        sn, vn = _s3loggap(B, A); sp, vp = _s3loggap(Bc, A)   # cand vs ref (A = reference)
+        lg_null_st.append(sn); lg_pow_st.append(sp)
+        if vn is not None:
+            lg_null_v.append(vn)
+        if vp is not None:
+            lg_pow_v.append(vp)
     nulls, powers = np.asarray(nulls), np.asarray(powers)
     null_p96 = float(np.quantile(nulls, 0.96)) if len(nulls) else None
-    # power = fraction of coupled draws whose d exceeds the null 96th pct (a distribution, not one comparison)
     sep = float(np.mean(powers > null_p96)) if (len(powers) and null_p96 is not None) else None
-    return {"n_null": len(nulls), "null_mean": round(float(nulls.mean()), 5), "null_sd": round(float(nulls.std()), 5),
-            "null_p96": round(null_p96, 5) if null_p96 is not None else None,
-            "n_pow": len(powers), "pow_mean": round(float(powers.mean()), 5), "pow_min": round(float(powers.min()), 5),
-            "power_frac_gt_null_p96": round(sep, 3) if sep is not None else None}
+    # S3_loggap "power" proxy: fraction of coupled draws detected (status FAIL) — reported alongside status mix.
+    lg_pow = round(float(np.mean(np.array(lg_pow_st) == "FAIL")), 3) if lg_pow_st else None
+    return {
+        "S3_tau_pool": {"n_null": len(nulls), "null_mean": round(float(nulls.mean()), 5) if len(nulls) else None,
+                        "null_p96": round(null_p96, 5) if null_p96 is not None else None,
+                        "pow_mean": round(float(powers.mean()), 5) if len(powers) else None,
+                        "pow_min": round(float(powers.min()), 5) if len(powers) else None,
+                        "power_frac_gt_null_p96": round(sep, 3) if sep is not None else None},
+        "S3_loggap_check": {"null_status": _statcounts(lg_null_st), "coupled_status": _statcounts(lg_pow_st),
+                            "null_val_mean": round(float(np.mean(lg_null_v)), 5) if lg_null_v else None,
+                            "coupled_val_mean": round(float(np.mean(lg_pow_v)), 5) if lg_pow_v else None,
+                            "power_frac_detected_FAIL": lg_pow}}
 
 
 def s8_interaction(seed=1):
     """burst_timing must NOT cross-load onto the S8 phase check: S8 on null-vs-coupled should behave like null."""
-    ref = full_support("MIMIC", PROFILES["mimic_scale_control"], N, ("s8ref", seed))
-    null_cand = full_support("MIMIC", PROFILES["mimic_scale_control"], N, ("s8null", seed))
+    ref = exact_source("mimic_scale_control", N, ("s8ref", seed))
+    null_cand = exact_source("mimic_scale_control", N, ("s8null", seed))
     coupled = apply_coupling(list(ref), "burst_timing", 0.5, seed=dseed("s8cpl", seed))
     def s8(cand):
         ch = sequence_route_checks(cand, ref)
@@ -212,14 +238,14 @@ def s8_interaction(seed=1):
 
 
 def main():
-    agg = {"cap": CAP, "dev_namespace": DEV_NS, "dev_seeds": DEV_SEEDS, "N": N,
+    agg = {"cap": CAP, "dev_namespace": DEV_NS, "dev_seeds": DEV_SEEDS, "N": N, "regimes": "exact registered profiles (single-profile) + boundary_short",
            "cap_rule": "phase-spanning: m<=6 -> all; else 6 quantile-spaced indices round(linspace(0,m-1,6))",
            "tie_formula": "standard tau-b: C-D=sum sign(dx)sign(dy); n1=#tied-in-x; n2=#tied-in-y; "
                           "den=sqrt((n0-n1)(n0-n2)); pooled across within-sequence pairs"}
 
     agg["formula_max_abs_err_vs_scipy"] = round(validate_tie_formula(), 12)
 
-    cov = phase_coverage(full_support("MIMIC", PROFILES["mimic_scale_control"], N, ("cov", 7)))
+    cov = phase_coverage(exact_source("mimic_scale_control", N, ("cov", 7)))
     agg["phase_coverage_MIMIC"] = cov
 
     agg["concentration"] = {k: concentration(REGIMES[k][1](N, ("conc", 7))) for k in ("full_MIMIC", "full_SCID")}
