@@ -31,7 +31,9 @@ from scipy.stats import kendalltau
 
 from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_realism_v2_fixture import sample_fixture
-from clinical_jepa.eval.oracle_realism_v2_verifier import _positive_gaps_and_prev_size, sequence_route_checks, s3
+from clinical_jepa.eval.oracle_realism_v2_verifier import (
+    _positive_gaps_and_prev_size, sequence_route_checks, s3, _TAU, _LOGGAP,
+)
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import PROFILES
 from clinical_jepa.eval.oracle_realism_v2_coupling import apply_coupling
 
@@ -182,6 +184,117 @@ def _s3loggap(cand, ref):
     return r.status, (None if r.value is None else float(r.value))
 
 
+# ---------------------------------------------------------------------------------------------------
+# Δ-aligned boundary recompute via a reference-OWNED FROZEN coarsening map (Pi rev-4 #6)
+# ---------------------------------------------------------------------------------------------------
+FLOOR_DEV = 200            # dev-scale conditional floor (registered N=8000 uses 500; dev N=3000 is smaller)
+
+
+def _prevsize_loggap(sample):
+    """(preceding cluster size x, log positive gap) over all within-sequence adjacencies with a positive gap."""
+    xs, logys = [], []
+    for r in sample:
+        y, x = _positive_gaps_and_prev_size(r)          # y = gap, x = preceding cluster size
+        for xi, yi in zip(x, y):
+            if yi > 0:
+                xs.append(int(xi)); logys.append(float(np.log(yi)))
+    return np.asarray(xs, float), np.asarray(logys, float)
+
+
+def frozen_prevsize_bins(map_ref, floor=FLOOR_DEV):
+    """Reference-OWNED frozen bins over preceding-cluster-size, greedy-merged ascending until each bin holds
+    >= floor adjacencies in the DISJOINT dev map-reference. Returns ascending closing sizes (or None if <floor
+    total). The candidate never influences these bins (anti-masking; Pi rev-3 §2)."""
+    xs, _ = _prevsize_loggap(map_ref)
+    if xs.size < floor:
+        return None
+    sizes, counts = np.unique(xs, return_counts=True)
+    edges, acc = [], 0
+    for s, c in zip(sizes, counts):
+        acc += int(c)
+        if acc >= floor:
+            edges.append(int(s)); acc = 0
+    if acc > 0:                                          # merge leftover tail into the last bin
+        if edges:
+            edges[-1] = int(sizes[-1])
+        else:
+            edges = [int(sizes[-1])]
+    return edges
+
+
+def _binid(x, edges):
+    """bin = first closing size >= x (clamped to the last bin)."""
+    return np.clip(np.searchsorted(edges, x, side="left"), 0, len(edges) - 1)
+
+
+def s3loggap_frozen(cand, ref, edges, floor=FLOOR_DEV):
+    """Frozen-map S3_loggap discrepancy d = max_bin |mean(log gap)_cand - mean(log gap)_ref| under the FROZEN
+    reference-owned `edges`. Floor breach on either arm in any bin => None (NOT_EVALUABLE). d>Δ is the MM-aligned
+    detection criterion (Pi rev-4 #6) — NOT the v2 adaptive PASS/FAIL status."""
+    if edges is None:
+        return None
+    xc, yc = _prevsize_loggap(cand); xr, yr = _prevsize_loggap(ref)
+    if xc.size == 0 or xr.size == 0:
+        return None
+    bc, br = _binid(xc, edges), _binid(xr, edges)
+    d = 0.0
+    for b in range(len(edges)):
+        cv, rv = yc[bc == b], yr[br == b]
+        if cv.size < floor or rv.size < floor:
+            return None
+        d = max(d, abs(cv.mean() - rv.mean()))
+    return d
+
+
+def delta_aligned_boundary():
+    """For each S3 subcheck, dev-only P[d > exact Δ under @0.5] (detection) and under null (specificity), on the
+    BOUNDED and FULL-support regimes. S3_tau uses d=|T_pool(cand)-T_pool(ref)| vs Δ=_TAU; S3_loggap uses the
+    FROZEN-map discrepancy vs Δ=_LOGGAP. Makes the boundary exemption decision Δ-ALIGNED (Pi rev-4 #6)."""
+    out = {}
+    for regime_key in ("bounded", "full_MIMIC"):
+        _, gen = REGIMES[regime_key]
+        edges = frozen_prevsize_bins(gen(N, ("mapref", 0)))     # disjoint dev map-reference (never calibration)
+        tau_pow, tau_null, lg_pow, lg_null, lg_ne = [], [], [], [], 0
+        for k in DEV_SEEDS:
+            A = gen(N, ("A", k)); B = gen(N, ("B", k))
+            Bc = apply_coupling(list(B), "burst_timing", 0.5, seed=dseed("cpl_da", regime_key, k))
+            dn, dp = _two_sample_d(A, B), _two_sample_d(A, Bc)
+            if dn is not None:
+                tau_null.append(dn > _TAU)
+            if dp is not None:
+                tau_pow.append(dp > _TAU)
+            ln, lp = s3loggap_frozen(B, A, edges), s3loggap_frozen(Bc, A, edges)
+            if ln is not None:
+                lg_null.append(ln > _LOGGAP)
+            if lp is None:
+                lg_ne += 1
+            else:
+                lg_pow.append(lp > _LOGGAP)
+        rate = lambda v: round(float(np.mean(v)), 3) if v else None
+        out[regime_key] = {
+            "delta_tau": _TAU, "delta_loggap": round(_LOGGAP, 8), "frozen_bins": edges,
+            "S3_tau": {"detect_P[d>delta]@0.5": rate(tau_pow), "false_P[d>delta]_null": rate(tau_null),
+                       "n_pow": len(tau_pow), "n_null": len(tau_null)},
+            "S3_loggap": {"detect_P[d>delta]@0.5": rate(lg_pow), "false_P[d>delta]_null": rate(lg_null),
+                          "frozen_map_ne_rate": round(lg_ne / len(DEV_SEEDS), 3),
+                          "n_pow": len(lg_pow), "n_null": len(lg_null)},
+        }
+    bnd = out["bounded"]
+    out["provisional_decision"] = {
+        "criterion": "boundary EXEMPT (provisional) iff bounded detection P[d>Δ @0.5] < 0.5 (un-calibratable at Δ)",
+        "S3_tau_bounded_detect": bnd["S3_tau"]["detect_P[d>delta]@0.5"],
+        "S3_loggap_bounded_detect": bnd["S3_loggap"]["detect_P[d>delta]@0.5"],
+        "note": "PROVISIONAL — final exemption only after the reference-owned frozen-map CALIBRATION draw (blocked). "
+                "Full-support detection reported alongside for contrast (checks work where supported).",
+        "caveat": "P[d>Δ] here is the DIRECT (MM-aligned) two-independent-draw discrepancy used ONLY for the "
+                  "boundary detection/exemption decision. It is NOT the SD gate's type-I control (that is the "
+                  "permutation test). The elevated full-support S3_loggap null-exceedance is dev-scale (N=3000, "
+                  "floor=200, max-over-bins) sampling noise and a flag for MM-specificity calibration at the "
+                  "registered N — not a boundary-decision or SD-gate defect.",
+    }
+    return out
+
+
 def _statcounts(statuses):
     from collections import Counter
     c = Counter(statuses)
@@ -253,6 +366,8 @@ def main():
     agg["null_and_power"] = {k: null_and_power(k) for k in REGIMES}
 
     agg["s8_interaction"] = s8_interaction()
+
+    agg["delta_aligned_boundary"] = delta_aligned_boundary()
 
     agg_hash = canonical_hash(agg)
     print(json.dumps(agg, indent=2))

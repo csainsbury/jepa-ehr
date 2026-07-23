@@ -57,6 +57,96 @@ def cell_e_over_assignments(values, assignments, nA, delta=0.0):
     return np.asarray(out)
 
 
+# ==================================================================================================
+# the ACTUAL evaluator path (Pi rev-4 defect #7): product/stratified FINITE-B Monte-Carlo group test,
+# with within-stratum permutation, product permutation across independent experiments, nested cell/group
+# ranks, deadbands + ties, deterministic replay, and malformed-input REFUSAL.
+# ==================================================================================================
+class RefusalError(ValueError):
+    """Raised when the permutation spec violates an exchangeability / integrity precondition (fail-closed)."""
+
+
+def _canonical_mask(strata):
+    """Observed split: first n_candidate items of each stratum are candidate."""
+    parts = []
+    for nA, nB in strata:
+        parts.append(np.array([True] * nA + [False] * nB))
+    return np.concatenate(parts)
+
+
+def _perm_mask(rng, strata):
+    """WITHIN-stratum label permutation preserving each stratum's (n_candidate, n_reference) quota."""
+    parts = []
+    for nA, nB in strata:
+        idx = rng.permutation(nA + nB)
+        m = np.zeros(nA + nB, bool); m[idx[:nA]] = True
+        parts.append(m)
+    return np.concatenate(parts)
+
+
+def _exp_total(strata):
+    return sum(nA + nB for nA, nB in strata)
+
+
+def validate_group_spec(cells, experiments, *, registered_quota, declared_B, used_B,
+                        rng_law_by_role, item_index_by_exp=None):
+    """Fail-closed refusal of the seven malformed-input classes (Pi #7). Raises RefusalError."""
+    for e, strata in experiments.items():
+        rq = registered_quota[e]
+        # (2) wrong stratum quota
+        if [tuple(s) for s in strata] != [tuple(s) for s in rq]:
+            raise RefusalError(f"wrong stratum quota for {e}: {strata} != registered {rq}")
+        for nA, nB in strata:
+            # (1) unequal candidate/reference size (SD design is balanced within stratum)
+            if nA != nB:
+                raise RefusalError(f"unequal candidate/reference size in {e}: nA={nA} nB={nB}")
+        # (3)(4) duplicate / missing pooled index (must be a bijection onto 0..M-1)
+        if item_index_by_exp is not None:
+            idx = list(item_index_by_exp[e]); M = _exp_total(strata)
+            if len(idx) != len(set(idx)):
+                raise RefusalError(f"duplicate pooled index in {e}")
+            if sorted(idx) != list(range(M)):
+                raise RefusalError(f"missing/non-bijective pooled index in {e}: not a permutation of 0..{M-1}")
+    # (6) B / RNG mismatch (replay integrity)
+    if declared_B != used_B:
+        raise RefusalError(f"B mismatch: declared {declared_B} != used {used_B}")
+    # (5) role-dependent coupling/RNG law (candidate and reference must share the law under H0)
+    laws = set(rng_law_by_role.values())
+    if len(laws) != 1:
+        raise RefusalError(f"role-dependent law: {rng_law_by_role}")
+    # (7) truncated cell vector
+    for c in cells:
+        need = _exp_total(experiments[c["exp_id"]])
+        if len(c["values"]) != need:
+            raise RefusalError(f"truncated cell vector {c.get('cell_id','?')}: {len(c['values'])} != {need}")
+
+
+def _cell_e_for_masks(values, masks, delta):
+    v = np.asarray(values, float)
+    out = np.empty(len(masks))
+    for j, m in enumerate(masks):
+        out[j] = max(0.0, abs(v[m].mean() - v[~m].mean()) - delta)
+    return out
+
+
+def group_p_mc(cells, experiments, B, seed, *, assignments=None):
+    """Finite-B product/stratified group p-value. Index 0 = observed (canonical split); 1..B = product
+    permutations (each experiment permuted INDEPENDENTLY within its strata under one synchronized MC index).
+    Nested: cell upper-tail p_c, group S_g = min_c p_c, group lower-tail p_g. Deterministic in `seed`."""
+    exp_ids = sorted(experiments)
+    if assignments is None:
+        rng = np.random.default_rng(seed)
+        assignments = {e: [_canonical_mask(experiments[e])] for e in exp_ids}
+        for _ in range(B):
+            for e in exp_ids:                                  # independent per experiment, shared index
+                assignments[e].append(_perm_mask(rng, experiments[e]))
+    E = [_cell_e_for_masks(c["values"], assignments[c["exp_id"]], c["delta"]) for c in cells]
+    P = np.stack([cell_upper_p(e) for e in E], 0)              # (ncells, B+1) upper-tail cell ranks
+    S = P.min(0)                                              # group min-p per assignment
+    p_g = float((S <= S[0]).sum() / len(S))                   # lower tail; observed = index 0
+    return p_g, S
+
+
 # --------------------------------------------------------------------------------------------------
 # exhaustive validation
 # --------------------------------------------------------------------------------------------------
@@ -128,7 +218,104 @@ def main():
     ok = ok and tie_ok
     print(f"  tie exact P[p<=0.2]={rej/len(asg):.4f} <= 0.2: {tie_ok}")
 
-    print(f"\nALL EXHAUSTIVE CHECKS PASS: {ok}")
+    # ==============================================================================================
+    # the ACTUAL evaluator path: product/stratified finite-B MC + refusals (Pi rev-4 #7)
+    # ==============================================================================================
+    print("\n=== MC-vs-EXHAUSTIVE: finite-B engine with FULL enumeration reproduces the exhaustive p_g ===")
+    rng = np.random.default_rng(3)
+    values = rng.normal(size=8) + np.array([0, 0, 0, 0, 0.4, 0.4, 0.4, 0.4])   # mild planted split
+    asg_sets = all_balanced_assignments(4, 4)                                   # canonical {0,1,2,3} is first
+    exhaustive_pg, _ = group_p([cell_e_over_assignments(values, asg_sets, 4, 0.02)])
+    masks = [np.isin(np.arange(8), list(s)) for s in asg_sets]
+    mc_pg, _ = group_p_mc([{"cell_id": "c", "exp_id": "e0", "values": values, "delta": 0.02}],
+                          {"e0": [(4, 4)]}, B=len(masks) - 1, seed=0, assignments={"e0": masks})
+    eq_ok = abs(exhaustive_pg - mc_pg) < 1e-12
+    ok = ok and eq_ok
+    print(f"  exhaustive p_g={exhaustive_pg:.6f}  MC(full-enum) p_g={mc_pg:.6f}  match: {eq_ok}")
+
+    print("\n=== STRATIFIED quota preservation: every within-stratum permutation keeps (nA,nB) exactly ===")
+    strata = [(3, 3), (2, 2), (4, 4)]
+    rng = np.random.default_rng(5)
+    quota_ok = True
+    for _ in range(200):
+        m = _perm_mask(rng, strata); off = 0
+        for nA, nB in strata:
+            if int(m[off:off + nA + nB].sum()) != nA:
+                quota_ok = False
+            off += nA + nB
+    ok = ok and quota_ok
+    print(f"  per-stratum candidate count preserved over 200 draws: {quota_ok}")
+
+    print("\n=== PRODUCT + finite-B CONSERVATIVE SIZE: 2 independent experiments, null => P[p_g<=a] <= a ===")
+    experiments = {"e0": [(3, 3)], "e1": [(3, 3)]}
+    T, Bfin, a = 400, 199, 0.1
+    rej = 0
+    for s in range(T):
+        rg = np.random.default_rng(20000 + s)
+        cells = [{"cell_id": "c0", "exp_id": "e0", "values": rg.normal(size=6), "delta": 0.0},
+                 {"cell_id": "c1", "exp_id": "e1", "values": rg.normal(size=6), "delta": 0.0}]
+        pg, _ = group_p_mc(cells, experiments, B=Bfin, seed=70000 + s)
+        rej += pg <= a
+    size = rej / T
+    size_ok = size <= a + 0.045                                                 # MC noise margin (valid test)
+    ok = ok and size_ok
+    print(f"  finite-B (B={Bfin}) product null size P[p_g<={a}]={size:.4f} <= {a} (+margin): {size_ok}")
+
+    print("\n=== DETERMINISTIC REPLAY: same seed => identical p_g and S ===")
+    cells = [{"cell_id": "c0", "exp_id": "e0", "values": np.random.default_rng(9).normal(size=6), "delta": 0.0},
+             {"cell_id": "c1", "exp_id": "e1", "values": np.random.default_rng(10).normal(size=6), "delta": 0.0}]
+    p1, S1 = group_p_mc(cells, experiments, B=300, seed=123)
+    p2, S2 = group_p_mc(cells, experiments, B=300, seed=123)
+    replay_ok = (p1 == p2) and np.array_equal(S1, S2)
+    ok = ok and replay_ok
+    print(f"  replay identical: {replay_ok}")
+
+    print("\n=== TIE handling under finite-B: heavy integer ties still conservative ===")
+    rej = 0
+    for s in range(400):
+        rg = np.random.default_rng(30000 + s)
+        cells = [{"cell_id": "c0", "exp_id": "e0", "values": rg.integers(0, 3, 6).astype(float), "delta": 0.0}]
+        pg, _ = group_p_mc(cells, {"e0": [(3, 3)]}, B=199, seed=40000 + s)
+        rej += pg <= 0.2
+    tie_mc_ok = rej / 400 <= 0.2 + 0.05
+    ok = ok and tie_mc_ok
+    print(f"  finite-B tie size P[p_g<=0.2]={rej/400:.4f} <= 0.2 (+margin): {tie_mc_ok}")
+
+    print("\n=== REFUSAL: the seven malformed-input classes each fail closed ===")
+    base = dict(experiments={"e0": [(3, 3)]}, registered_quota={"e0": [(3, 3)]},
+                cells=[{"cell_id": "c0", "exp_id": "e0", "values": [0.] * 6, "delta": 0.0}],
+                declared_B=100, used_B=100, rng_law_by_role={"candidate": "L1", "reference": "L1"},
+                item_index_by_exp={"e0": [0, 1, 2, 3, 4, 5]})
+    def _refused(**over):
+        spec = {**base, **over}
+        try:
+            validate_group_spec(spec["cells"], spec["experiments"], registered_quota=spec["registered_quota"],
+                                declared_B=spec["declared_B"], used_B=spec["used_B"],
+                                rng_law_by_role=spec["rng_law_by_role"],
+                                item_index_by_exp=spec["item_index_by_exp"])
+            return False
+        except RefusalError:
+            return True
+    refusals = {
+        "unequal_cand_ref": _refused(experiments={"e0": [(4, 2)]}, registered_quota={"e0": [(4, 2)]},
+                                     cells=[{"cell_id": "c0", "exp_id": "e0", "values": [0.] * 6, "delta": 0.0}]),
+        "wrong_stratum_quota": _refused(experiments={"e0": [(2, 2)]}),
+        "duplicate_index": _refused(item_index_by_exp={"e0": [0, 1, 2, 2, 4, 5]}),
+        "missing_index": _refused(item_index_by_exp={"e0": [0, 1, 2, 3, 4, 9]}),
+        "role_dependent_law": _refused(rng_law_by_role={"candidate": "LA", "reference": "LB"}),
+        "B_rng_mismatch": _refused(used_B=200),
+        "truncated_cell_vector": _refused(cells=[{"cell_id": "c0", "exp_id": "e0", "values": [0.] * 5, "delta": 0.0}]),
+    }
+    refuse_ok = all(refusals.values())
+    ok = ok and refuse_ok
+    for k, v in refusals.items():
+        print(f"  {k:22s} refused: {v}")
+    # a fully-valid spec must NOT refuse
+    valid_ok = not _refused()
+    ok = ok and valid_ok
+    print(f"  valid spec accepted (not refused): {valid_ok}")
+
+    print(f"\nALL CHECKS PASS: {ok}")
     assert ok, "randomization p-value validation FAILED"
     return ok
 

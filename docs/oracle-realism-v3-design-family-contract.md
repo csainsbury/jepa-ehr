@@ -1,23 +1,30 @@
-# Oracle Realism Verifier — Design Family v3 (rev-4, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-5, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-3. Folds Pi rev-2 ruling (§1–§9) AND Pi rev-3 structure ruling
-(partial-pass corrections). Phase-0 estimator CONCEPT frozen (`docs/oracle-realism-v3-phase0-estimator-pilot.md`,
-committed pilot `scripts/oracle_realism_v3_phase0_pilot.py`) — pending the exact-profile rerun (below). New design
-family; no calibration build or run until Pi re-gates. Written before any calibration/audit/evaluation seed.
+**Status:** DRAFT for Pi review. Supersedes rev-4. Folds Pi rev-2 (§1–§9), rev-3 structure ruling, AND the Pi
+rev-4 deliverable gate (8 defects). All work below is development-only, synthetic-only; no calibration build,
+reference-map draw, audit/evaluation seed, policy population, or run — Pi rev-4 authorized the dev work here but
+NOT any of those. Written before any calibration/audit/evaluation seed.
 
-**Corrections folded (Pi rev-2 + rev-3):**
-1. **Per-draw p-value, not transported** — the SD permutation test is computed on each fresh evaluation draw (§1).
-2. **Grouping does NOT erase multiplicity** — min-p over `K_g` cells has critical value ~`α_group/K_g`; the "dissolves
-   M0" claim is withdrawn; the architecture removes only the independent-calibration-corpus cost (§2).
-3. **Group-p direction fixed (rev-3 §1):** `p_g = (1+#{S_g^(b) ≤ S_g^obs})/(B+1)` — smaller min-p is more extreme
-   (§3). Per-cell is the opposite (upper) tail.
-4. **Coarsening: independent REFERENCE-OWNED frozen map, not pooled (rev-3 §2)** — a pooled map lets the candidate
-   influence the bins (anti-masking defect). The reference-design-draw map preserves randomization validity AND
-   anti-masking AND O(N) (§9).
-5. **Estimator/exemptions provisional (rev-3 §3):** rerun on the EXACT registered profiles; `S3_tau` and `S3_loggap`
-   exemptions decided SEPARATELY, Δ-aligned (§7); estimator not fully frozen until that reruns.
-6. **Benchmark unit + whole-JOB forecast (rev-3 §6):** ~0.45 ms/perm (not µs); forecast the full job (main + 15
-   audit batteries + 25 MM), which may need separately-gated jobs (§9).
+**Rev-5 changes folded (Pi rev-4 gate defects #1–#8):**
+1. **Benchmark now executes + is route-weighted (#1/#2).** The prior forecast did not run (`NameError`) and
+   averaged three surrogate routes; it now runs and is a route-weighted `Σ_route(cells × measured cost/perm)` +
+   generation/serialization + a labelled MM upper-bound proxy. The distribution-comparison (KS) routes dominate
+   (~92% of a permutation's cost); the honest whole-job cost is far above the earlier "~6h" (§9).
+2. **Audit B declared honestly (#3).** The min-p resolution requirement is `B ≥ K_max/α_group` (= **8100** for the
+   deepest group); main `B=20,000` meets it, audit `B=2,000` does NOT — so the audit is predeclared as a DISTINCT
+   coarser screen (valid level at any B, less power), with an exact false-park proof; the job is split into
+   separately-gated stop-on-failure jobs rather than weakening B to fit the cap (§3, §4, §9).
+3. **Exact schema-validated registry (#4/#5).** Every cell binds estimator/required-property/direct-group_id/
+   map+floor/RNG-law/exact-stratum-quota/expected-status/malformed-input/Δ-provenance and is schema-validated
+   (missing/extra/mistyped REFUSE, proven). `Δ` is bound to the LIVE verifier constants with an exact-equality
+   test (`S3_loggap` rounding corrected to `log(1.10)`); the Δ-table is hashed (§8, Δ table).
+4. **Both boundary-exemption variants emitted (#6).** M0 = 192 with / 194 without the provisional `S3` exemption;
+   the Δ-aligned boundary recompute uses the MM-aligned `P[d>Δ @0.5]` via the frozen map (§7).
+5. **Real product/stratified finite-B randomization + refusals (#7).** The actual evaluator path (within-stratum
+   + product permutation, nested ranks, deadbands/ties, deterministic replay) plus the seven malformed-input
+   refusals are implemented and tested against the exhaustive universe (§3, §8).
+6. **Frozen-map builder SPECIFIED, not executed (#8).** The reference-owned map schema/derivation/seed-namespace/
+   floor/artifact-format/support-failure behaviour is frozen in §9; the one-time draw remains blocked.
 
 ## 0. Retained from v2 (works): N=8000, exact control allocation (2667,2667,2666), the three D components
 {burst_timing, mark_burst_tie, cluster_size_mark_diversity}, fail-closed runner/exec, manifest deep-equality trust
@@ -67,9 +74,18 @@ Directions are OPPOSITE at the cell and group levels (Pi rev-3 §1):
 - **Synchronized permutations:** one permutation index drives all cells in a group in a replicate (preserves
   cross-cell dependence). For groups spanning independent experiments, independent per-experiment permutations are
   drawn under one synchronized MC index.
-- **`B` sizing:** frozen by a resolution criterion, not a default. Require the MC granularity `1/(B+1)` ≤
-  `α_group/20` and benchmark-bounded; provisional `B = 20,000` pending the exact `G`. Fisher/Cauchy combiners are
-  **OUT** for v3.
+- **`B` sizing (exact resolution rule):** the min-p over `K_g` cells shares its floor `1/(B+1)` across ~`K_g`
+  permutations (each cell's own extreme), so a single-cell effect resolves below `α_group` only when
+  **`B ≥ K_max/α_group`**. With the deepest in-scope group `K_max = 54` and `α_group = 0.04/6`, this is
+  **`B ≥ 8100`**. Main **`B = 20,000`** meets it; the coarse audit **`B = 2,000`** does NOT (a distinct coarser
+  evaluator — §4). `B` is frozen by this rule, not a default. Fisher/Cauchy combiners are **OUT** for v3.
+- **Real evaluator path (implemented + validated).** The product/stratified finite-`B` engine (within-stratum
+  label permutation preserving each stratum's quota; independent per-experiment permutation under one synchronized
+  MC index; nested cell upper-tail then group lower-tail min-p; deadbands and ties) reproduces the exhaustive
+  group `p_g` exactly, stays conservative under a finite-`B` product null, and replays deterministically. All
+  seven malformed-input classes (unequal candidate/reference size, wrong stratum quota, duplicate/missing pooled
+  index, non-bijection, role-dependent RNG law, `B`/RNG mismatch, truncated cell vector) fail closed BEFORE any
+  statistic is computed.
 
 ## 4. Error split + independent audit stopping rule (Pi §4)
 
@@ -82,9 +98,17 @@ audit_park_rule    = park if >= 4 of 15 complete fresh SD batteries reject
 ```
 
 If each valid SD battery rejects a true null with probability ≤ `alpha_main_SD = 0.04`,
-`P(Binom(15, 0.04) ≥ 4) ≈ 0.002454 ≤ 0.01`. Main draw + audit ≤ 0.05 total false-park by union bound. The audit is
-a **gross implementation/seed-pathology guard**, not a tail estimate; a miss parks with no retuning. Audit seeds
-are a disjoint namespace (§8).
+`P(Binom(15, 0.04) ≥ 4) ≈ 0.002454 ≤ 0.01` (exact). Main draw + audit ≤ 0.05 total false-park by union bound. The
+audit is a **gross implementation/seed-pathology guard**, not a tail estimate; a miss parks with no retuning.
+Audit seeds are a disjoint namespace (§8).
+
+**`B_main` vs `B_audit` — declared honestly (Pi rev-4 #3).** The main SD draw uses `B_main = 20,000`, which meets
+the resolution rule `B ≥ K_max/α_group = 8100` (§3). The audit uses `B_audit = 2,000`, which does NOT meet it: the
+plus-one randomization test is level-controlled at ANY `B` (a smaller `B` costs power/resolution, not level), so
+`B_audit = 2,000` is a **valid but distinctly coarser** pathology screen — predeclared as such, with its own
+`B`, and NOT a silently-weakened main evaluator. The false-park proof above holds for the coarse screen because
+per-rep false-reject stays ≤ `α`. Because the exact route-weighted forecast (§9) exceeds the 8 h cap as one job,
+SD-main / SD-audit / MM run as **separately-gated stop-on-failure jobs**, not a weakened single job.
 
 ## 5. Mismatched-arm (MM) requirements — direct effect (Pi §5)
 
@@ -100,10 +124,10 @@ discrepancy directly, over 25 fresh MM replicates:
 
 Phase-spanning capped, tie-corrected pooled Kendall tau-b for burst-timing (`T_pool`); exact cap formula
 (`m≤6→all; else 6 quantile-spaced indices round(linspace(0,m−1,6))`), standard tau-b `n1`/`n2` (all x/y ties incl.
-joint), pair-count-weighted pooling across within-sequence pairs. Frozen + evidenced in the pilot doc: formula err
-vs scipy `1.7e-16`; phase coverage mean-pos 0.10→0.50; concentration MIMIC 0.045→0.905 / SCID 0.014→0.934;
-source-wise power full=1.00, bounded=0.125; S8 no cross-load. Other coarse-null rank statistics, if any, adopt the
-same pool-within/synchronized-permute pattern (enumerated in the registry).
+joint), pair-count-weighted pooling across within-sequence pairs. Frozen + evidenced in the committed pilot (hash
+`86dd8ab5…`): formula err vs scipy `0.0`; phase coverage mean-pos 0.086→0.500; concentration MIMIC 0.034→0.989 /
+SCID 0.083→1.00; source-wise power full=1.00, bounded (non-Δ proxy) 0.125; S8 no cross-load. Other coarse-null
+rank statistics adopt the same pool-within/synchronized-permute pattern (enumerated in the registry).
 
 ## 7. Effect deadband, scope, un-calibratable — exact semantics (Pi §7)
 
@@ -118,11 +142,19 @@ same pool-within/synchronized-permute pattern (enumerated in the registry).
   the pilot). A property-specific support cell failing it is EXEMPT; a **core/full-support cell failing it PARKS**.
   The criterion therefore **cannot finalize an exemption until the numeric `Δ` table exists** (the earlier
   `P[d > matched-null p96]` proxy is not equivalent).
-- **Per-statistic exemption status (Pi rev-3 §3 — each boundary exemption decided separately, on exact-profile +
-  Δ-aligned evidence):** boundary-short × `S3_tau` is **provisional but plausible** (dev power 0.125 on the
-  earlier non-Δ proxy); boundary-short × `S3_loggap` is **NOT accepted** (no S3_loggap power result exists yet);
-  neither is frozen until the exact-registered-profile, Δ-aligned pilot evidence is routed. Full-support
-  burst-timing is RETAINED (non-exemptible).
+- **Per-statistic exemption status (Δ-aligned, Pi rev-4 #6 — each decided on `P[d>Δ @0.5]` via the frozen map):**
+  the pilot now computes the MM-aligned criterion `P_dev[d_c > Δ_c | @0.5]` for BOTH S3 subchecks, using the
+  frozen reference-owned coarsening for `S3_loggap` (NOT the earlier `P[d>null p96]` proxy, NOT the v2 adaptive
+  PASS/FAIL). Dev evidence: on **bounded** support `S3_tau` detects at **0.15** and `S3_loggap` at **0.10** (both
+  ≪ the 0.5 retain criterion → **both provisional-EXEMPT**); on **full** support both detect at **1.00** (checks
+  work where supported; full-support burst-timing is RETAINED, non-exemptible). These remain **PROVISIONAL** — the
+  final exemption is only confirmed after the reference-owned frozen-map CALIBRATION draw (still blocked). Both M0
+  variants (with/without the provisional exemption: 192 / 194) are carried in the registry so the exemption cannot
+  manufacture favourable group size or power.
+  - *Caveat surfaced honestly:* the `P[d>Δ]` here is the DIRECT two-independent-draw discrepancy used ONLY for the
+    boundary exemption decision — NOT the SD gate's type-I control (that is the permutation test). The elevated
+    full-support `S3_loggap` null-exceedance under the direct rule is a dev-scale (N=3000, floor=200, max-over-bins)
+    artifact and a flag for MM-specificity calibration at the registered N, not a boundary or SD-gate defect.
 - The full `Δ` table + required-property matrix is the "Δ / required-property" deliverable (below); values are
   sourced from prior/first-principles before calibration and hashed, and preserve existing v2 practical-effect
   semantics unless a separately-justified change is identified.
@@ -161,38 +193,55 @@ pooled map), and (c) O(N)-per-permutation recomputation remains possible. The ma
 verifier-DEFINITION artifact (bind seed/profile/code/hash); it is NOT a transported null threshold and must not be
 used to alter `Δ` or scope. **Generating this reference-design draw is NOT authorized by this review** (Pi rev-3 §7).
 
-**Provisional benchmark (dev, N=8000/side; NOT yet reproducibly committed — committed harness is a deliverable).**
-- **Naive** whole-battery recompute per permutation = **20.1 s** → B=20,000 ≈ **112 h/group** → INFEASIBLE.
-- **Permutation-efficient route** (precompute per-sequence contributions once; per permutation an O(N) group
-  re-summation): pooled-tau re-sum ≈ **0.45 ms/perm** (B=20k ≈ 9 s) [unit corrected per Pi rev-3 §6, was mis-stated
-  as µs]; KS via one pooled sort + O(N) cumsum ≈ 0.19 ms/perm (B=20k ≈ 3.8 s); frozen-map group-mean-diff ≈
-  0.34 ms/perm (B=20k ≈ 6.8 s). Whole battery (~14 stats, all O(N)) ≈ **74 s/group at B=20k** — PROVISIONAL pending
-  the exact registry + executable coverage of every nonlinear route (conditional bins, KS, seam floors) under the
-  reference-owned map. Non-additive checks not reducible to precompute+O(N) are excluded from the SD gate / park.
+**Frozen reference-owned map builder — SPECIFICATION (Pi rev-4 #8; specified, NOT executed).** The one-time
+coarsening-map draw stays blocked; its identity is frozen here so that (a) it can be reviewed before any draw and
+(b) the Δ-aligned boundary evidence (§7) uses the same algorithm. Map-carrying checks (proved by executable
+evidence — reference coarsening in the verifier detail) are `{S1_density, S5_abs, S7_abs, S6_tv, S3_loggap}`.
+- **Derivation.** For each `(check, source_profile, support_regime)`, draw ONE synthetic reference-design sample
+  in a disjoint `map-design` namespace; coarsen the reference bins (length bins for `S1_density/S5_abs`; cluster-
+  size bins for `S3_loggap/S7_abs`; class coarsening for `S6_tv`) by ascending greedy merge until every bin holds
+  ≥ the registered floor (`ORACLE_ENV_MIN_DENOM = 500`) adjacencies/sequences in the reference; freeze the bin
+  edges. The candidate never influences the bins (anti-masking).
+- **Seed namespace + N.** `map-design` seed namespace, disjoint from estimator-dev / locked-calibration / audit /
+  evaluation; registered `N = 8000` per profile. Bind `(seed_namespace, profile, regime, check, code_version)`.
+- **Floor / tie / support-failure.** Floor breach on either arm in any frozen bin ⇒ `NOT_EVALUABLE` (never
+  zero-filled); ties resolved by the standard bin assignment (first closing edge ≥ value); if a frozen map yields
+  inadequate candidate OR reference support at evaluation, the cell is `NOT_EVALUABLE` (fail-closed), never
+  re-binned. A regime whose reference cannot reach the floor at all (e.g. bounded support collapsing to one bin)
+  makes its conditional check un-calibratable → the §7 exemption path, not a re-derived map.
+- **Artifact / hash.** Emit `{check, profile, regime, bin_edges, floor, seed_namespace, N, code_version}` and a
+  per-map hash + a map-set hash; the frozen set is bound into the verifier identity before audit/evaluation. The
+  draw is a verifier-DEFINITION artifact and must NOT alter `Δ` or scope. **The draw itself is NOT authorized.**
 
-**Whole-JOB wall-time forecast (Pi rev-3 §6 — account for the entire job, not one group):**
-`1 main SD battery + 15 audit SD batteries + (all SD experiments/groups × B permutations) + 25 MM
-power/specificity replicates + global controls + persistence + verdict aggregation`. v2's MM work alone was
-≈ 4.9 h, so audit ×15 + permutations may approach the 8 h cap. The preflight must give the total forecast and
-either **fit one job under the cap OR predeclare separately-gated jobs** (without weakening sequential
-stop-on-failure semantics). Committed benchmark lands code/environment/seed/raw timing/event-cluster-pair
-volumes/extrapolation formula/aggregate hash.
+**Route-weighted benchmark (executable, committed harness; Pi rev-4 #1/#2).** Every registered statistic maps to
+one of five per-permutation recompute route classes; each is measured at the registered `N` and true operating
+volume, and the whole job is `(B_main + audits·B_audit)·Σ_inscope_cells cost_perm(route(cell)) + generation/
+precompute + serialization + MM_proxy`. Findings (dev, N=8000/side, aggregate-hashed):
+- **Naive** whole-battery recompute ≈ **17.6 s/perm** → INFEASIBLE.
+- Efficient O(volume) route costs: `tau_pooled` ≈ **0.25 ms/perm** (~0.45 ms at the label unit, NOT µs);
+  `tau_source` ≈ 1.3 ms; `marginal`/`frozen_map` ≈ 0.35–0.42 ms; and the **distribution-comparison (KS) routes
+  dominate** at the large event/cluster/gap volumes — `S9_gap` ≈ **56 ms/perm**, `S2_ks`/`positive_gap_ks` ≈
+  **14 ms/perm** each. **KS routes are ≈ 92 % of one permutation's cost.**
+- **Whole-job:** a single combined job is **≈ 16–81 h** (audit at coarse `B=2,000` vs same `B=20,000`) — the
+  earlier "~6 h" was the flawed surrogate-average. But **separately-gated stop-on-failure jobs each fit the 8 h
+  cap**: SD-main (`B=20,000`) ≈ **4.8 h**, audit (coarse `B=2,000`) ≈ **7.2 h**, MM (v2 upper-bound proxy) ≈
+  **4.9 h**. (An alternative lever is optimising the dominant KS routes; flagged, not pursued.) Compute is driven
+  by `M0·B`, NOT by `G` (`G` only sets `α_group`).
 
-**Preflight persistence:** per experiment/group report `sequences, events, clusters, eligible pairs, strata,
-cells, B, statistic recomputation route, wall time, peak RAM, checkpoint size`; aggregate-only (per-cell/group
-permutation summaries + hashes; no sequence arrays).
+**Preflight persistence:** per experiment/group report `sequences, events, clusters, positive-gaps, eligible
+pairs, strata, cells, B, statistic recomputation route, wall time, peak RAM, checkpoint size`; aggregate-only
+(per-cell/group permutation summaries + hashes; no sequence arrays).
 
-## Deliverables status
-1. Rev-3 contract — **this document**.
-2. Exact SD/MM registry (M0/G/groups/strata/proofs) — structure frozen (§8); the enumerated machine-readable
-   artifact + coupling-exchangeability proofs is the next concrete build step.
-3. Δ / required-property / exemption table — framework frozen (§5,§7); boundary-S3 exemption decided; the numeric
-   Δ table is sourced + hashed at design freeze (values flagged for Pi/Chris ratification).
-4. Exact min-p / randomization p-value algorithm + α/audit — §3,§4.
-5. Phase-spanning pooled-tau pilot (code/seeds/hash) — **DONE** (committed script + doc + hash `1e930132…`).
-6. Exact MM 20/25 & 24/25 logic — §5.
-7. Whole-battery permutation benchmark + cap/checkpoint plan — feasibility PROVEN (§9); the full exact-registry
-   benchmark is produced at the calibration-build preflight, separately authorized.
+## Deliverables status (rev-5 — all DONE + tested; see "Delivered" below for hashes)
+1. Rev-5 contract — **this document**.
+2. Exact schema-validated SD/MM registry (M0/G/groups/strata/proofs, both exemption variants) — **DONE**.
+3. Δ / required-property / exemption table — **DONE** (Δ bound to live constants, exact-equality test, Δ-hash;
+   boundary exemption Δ-aligned via the frozen map).
+4. Exact min-p / product-stratified randomization p-value algorithm + α/audit split + refusals — **DONE** (§3,§4).
+5. Δ-aligned phase-spanning pooled-tau pilot (code/seeds/hash) — **DONE** (hash `86dd8ab5…`).
+6. Exact MM 20/25 & 24/25 logic — **DONE** (§5; registry MM cells).
+7. Route-weighted whole-job benchmark + cap/checkpoint plan — **DONE** (executes; separately-gated jobs; §9).
+8. Dev-seed group critical-value + power demonstration — **DONE** (calibrated null + demonstrated power).
 
 ## Revised phases (Pi's, adapted)
 0. Estimator pilot — DONE. 1. Design freeze — this contract + registry artifact + Δ table + Pi ratification of the
@@ -208,32 +257,39 @@ finite-`B` with observed assignment included; no Fisher/Cauchy; phase-spanning p
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (Pi rev-3 §4/§5/§6 authorized scope)
-- **Exact machine-readable SD/MM registry + self-tests** — `scripts/oracle_realism_v3_registry.py` (hash
-  `7adb3369…`). **10 SD experiments** (null×2, candidate-D repeatability per component×source ×6, structural-zero,
-  boundary-short); **M0 = 192** in-scope SD cells; **G = 6** groups by (support-regime × substantive-family) — 5
-  full-support family groups (product-permutation across the 9 full experiments) + 1 bounded support-control group;
-  `α_group = 0.04/6 = 0.00667`; deepest group min-p critical ≈ `α_group/54 ≈ 1.2e-4` (the honest within-group
-  multiplicity — grouping is NOT claimed a power gain; dev-seed group critical values + power are demonstrated
-  next). 117 MM cells. All self-tests pass: exact partition `Σ K_g = M0`, reachability, explicit exemptions, core
-  (full-support) cells non-exemptible, source-swap + S4↔S7 matching the executable ABLATION_MATRIX.
-- **`Δ` / exemption table** — `Δ` = the v2 per-check practical-effect thresholds (embedded in the registry);
-  boundary exemptions: degenerate `{S1_density,S5_abs,S6_tv,S9_zero,S9_class,S9_gap}` + provisional-uncalibratable
-  `{S3_tau,S3_loggap}` (Δ-aligned confirmation pending).
-- **Exact-profile Phase-0 pilot rerun** — DONE (`scid_scale_control`/`mimic_scale_control`; `S3_tau` and
-  `S3_loggap` measured separately; hash `0e1680fc…`).
-- **Randomization p-value algorithm + EXHAUSTIVE tests** — `scripts/oracle_realism_v3_randomization.py`: exact-null
-  rejection ≤ α in all configurations (finite-sample exactness), correct opposite tail directions, ties exact.
-- **Committed benchmark harness + whole-JOB forecast** — `scripts/oracle_realism_v3_benchmark.py` (hash
-  `acd8704f…`): job cost is driven by `M0·B` (NOT `G`). With **main B=20,000 + audit B=2,000** (15 audit reps) the
-  whole job ≈ 6 h under the 8 h cap; with audit B=20,000 it exceeds → separately-gated SD/MM jobs.
+## Delivered (rev-5, Pi rev-4 authorized dev-only scope — all tested)
+- **Exact schema-validated SD/MM registry** — `scripts/oracle_realism_v3_registry.py`. Every cell binds estimator
+  identity / required-property / DIRECT group_id / map+floor identity / RNG-law / exact stratum quotas /
+  expected-status / malformed-input behaviour / per-Δ provenance, and is **schema-validated** (missing/extra/
+  mistyped fields REFUSE — proven by a baked-in negative test). `Δ` is bound to the LIVE verifier thresholds with
+  an EXACT float-equality self-test (`S3_loggap` corrected to `log(1.10)`), Δ-table hash **`ec6f4dff…`**.
+  **BOTH boundary-exemption variants** are emitted: **M0 = 192** (with provisional `S3` exemption, hash
+  **`d547efb2…`**) / **M0 = 194** (without, hash **`2e21ce00…`**). **G = 6** groups (5 full-support family groups
+  product-permuted across the 9 full experiments + 1 bounded group); `α_group = 0.04/6 = 0.00667`; deepest group
+  `K_max = 54` ⇒ resolution `B ≥ K_max/α_group = 8100`. 117 MM cells. Self-tests: partition `Σ K_g = M0`,
+  reachability, core non-exemptible, map-carrying set by executable evidence, source-swap + S4↔S7 matching the
+  executable ABLATION_MATRIX.
+- **Δ-aligned Phase-0 pilot** — `scripts/oracle_realism_v3_phase0_pilot.py` (hash **`86dd8ab5…`**), formula error
+  vs scipy `0.0`. The boundary exemption is now decided on `P_dev[d_c>Δ_c | @0.5]` via the frozen map (§7):
+  bounded detection `S3_tau = 0.15`, `S3_loggap = 0.10` (both ≪ 0.5 → provisional-EXEMPT); full-support `1.00`.
+- **Product/stratified randomization engine + refusals + exhaustive validation** —
+  `scripts/oracle_realism_v3_randomization.py`: MC-with-full-enumeration reproduces the exhaustive `p_g` exactly;
+  stratified quotas preserved; finite-`B` product null conservative; deterministic replay; all **seven** malformed-
+  input classes fail closed; exact-null ≤ α and correct tail directions retained.
+- **Route-weighted benchmark + whole-job forecast** — `scripts/oracle_realism_v3_benchmark.py` (hash
+  **`798ae250…`**), executes cleanly (the `NameError` is fixed); KS routes ≈ 92 % of cost; single job 16–81 h,
+  separately-gated jobs each < 8 h (§9); exact audit false-park `P(Binom(15,0.04)≥4) = 0.00245`.
+- **Dev-seed group critical-value + power demonstration** — `scripts/oracle_realism_v3_group_demo.py`
+  (hash `29da0411…`): under the same-distribution null the grouped min-p gate is calibrated (size `0.0` at both
+  `0.05` and `α_group`); with a single burst-timing cell coupled at 0.5 the group detects at `α_group` with rate
+  `1.00` (power demonstrated — grouping does not dissolve a real single-cell effect); a two-experiment PRODUCT
+  permutation is likewise calibrated (`0.0`); group sizes reported for both exemption variants (bounded 12 / 14).
 
-## Still open (Pi rev-3, next after this package is reviewed)
-- **Executable exchangeability proofs at RUNTIME** (§5): the registry binds each experiment's stratum + passes the
-  structural self-tests; the gate implementation must additionally refuse before statistics on a malformed stratum
-  / unequal group size / duplicate-missing index / non-bijection (flagged; part of the gate build).
-- **Dev-seed group critical values + sparse/diffuse power demonstration** under the actual joint permutation null.
-- **Reference-design coarsening-map draw + calibration-build preflight** — NOT authorized until this package passes.
+## Still open (next, ONLY after this rev-5 package passes review + Pi separately authorizes)
+- **Runtime exchangeability-refusal checks wired into the gate implementation** (the refusal logic is implemented
+  and tested in the randomization module; wiring it into the production gate path is the gate-build step).
+- **Reference-owned frozen-map CALIBRATION draw + calibration-build preflight** — SPECIFIED (§9) but the draw is
+  **NOT authorized**; it stays blocked until `Δ`/exemptions/routes/`B` are frozen and Pi separately authorizes.
 
 ## Cog imports
 - **Fixed-evaluator-before-keep/discard** (Cog): freeze the conditional-randomization *algorithm* (not a
