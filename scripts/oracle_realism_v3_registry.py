@@ -12,8 +12,8 @@ fields REFUSE). The self-tests prove, on executable evidence rather than prose:
     malformed-input behaviour are all bound (defect #4).
   * BOTH boundary-exemption variants are emitted and partition exactly (with and without the PROVISIONAL
     uncalibratable S3 exemption) so an exemption cannot silently shrink M0 or a group (defect #6).
-  * the min-p resolution requirement B >= K_max/alpha_group is computed from the deepest group and the main
-    B is checked against it (audit B is a SEPARATE coarser evaluator — see the benchmark).
+  * the conservative sparse-effect design rule B >= K_max/alpha_group is computed from the deepest group and the
+    main B is checked against it (no audit gate — removed per Pi rev-5 #5).
   * map-carrying checks are detected by EXECUTABLE evidence (reference coarsening in CheckResult.detail).
 
 Development-only, synthetic-only; no governed read, no calibration/audit/evaluation seed, no map draw. Run:
@@ -83,11 +83,11 @@ ESTIMATOR = {
     "S1_tau":     "v2.source_tau_b(length,cluster_count)",
     "S2_ks":      "v2.ks(cluster_size_ecdf)",
     "S3_tau":     "v3.pooled_tau_b.phasespanning_cap6(prev_cluster_size,positive_gap)"
-                  "@pilot=oracle_realism_v3_phase0_pilot.py#0e1680fc",
+                  "@frozen_estimator=oracle_realism_v3_phase0_pilot.py::T_pool(cap6,quantile_spaced,tie_corrected)",
     "S3_loggap":  "v2.cond_maxbin.maxabs(mean_log_positive_gap)@CLUSTER_BINS[ref_coarsen]",
     "S4_abs":     "v2.abs(P(same_class|same_cluster)-P(same_class|adjacent))",
     "S5_abs":     "v2.cond_maxbin.mean(per_bin_occupancy)@LENGTH_BINS[ref_coarsen]",
-    "S6_tv":      "v2.maxabs_tv(class_prior)@ref_class_coarsen",
+    "S6_tv":      "v2.maxabs_tv(class_prior)@LENGTH_BINS[ref_coarsen]",
     "S7_abs":     "v2.cond_maxbin.mean(per_bin_distinct_class_frac)@CLUSTER_BINS[ref_coarsen]",
     "S8_class":   "v2.maxabs_tv(class_prior|phase_quartile)[terminal]",
     "S8_density": "v2.maxabs(density|phase_quartile)[terminal]",
@@ -354,9 +354,10 @@ def _resolution(groups):
     k_max = max(len(g["cells"]) for g in groups.values())
     b_res_min = ceil(k_max / alpha_group)
     return {"alpha_sd": alpha_sd, "G": G, "alpha_group": alpha_group, "K_max": k_max,
-            "B_resolution_min": b_res_min, "rule": "B >= K_max/alpha_group (min-p floor-tie resolution)",
-            "B_main_20000_resolves": 20000 >= b_res_min, "B_audit_2000_resolves": 2000 >= b_res_min,
-            "audit_note": "audit B=2000 does NOT meet resolution => a SEPARATE coarser evaluator (see benchmark)"}
+            "B_resolution_min": b_res_min,
+            "rule": "B >= K_max/alpha_group is a CONSERVATIVE sparse-effect DESIGN RULE (min-p floor-tie), NOT a "
+                    "universal exact theorem under ties/correlation; actual group power remains a required falsifier",
+            "B_main_20000_resolves": 20000 >= b_res_min}
 
 
 def selftest(reg):
@@ -458,8 +459,9 @@ def main():
         "delta_table_hash": canonical_hash(delta_table),
         "delta_binds_to": "LIVE registered verifier thresholds (exact float equality; provenance per Δ)",
         "variants": variants,
-        "compute_note": "job driven by M0*B (not G). Main B must meet B>=K_max/alpha_group (see resolution). "
-                        "Audit is a SEPARATE coarser evaluator; route-weighted forecast in the benchmark.",
+        "compute_note": "job driven by M0*B (not G). Main B satisfies the conservative sparse-effect design rule "
+                        "B>=K_max/alpha_group (see resolution). No audit gate (removed, Pi rev-5 #5). Per-profile "
+                        "route-weighted forecast + per-group job plan in the benchmark.",
         "authorization": "dev-only registry; NO map draw, NO calibration/audit/evaluation seed, NO policy.",
     }
     print(json.dumps(summary, indent=2, default=str))

@@ -205,6 +205,38 @@ def main():
 
     forecasts = {"with_exemption": forecast(True, B_MAIN), "without_exemption": forecast(False, B_MAIN)}
 
+    # --- WIRED-ENGINE measurement (Pi rev-6 #6): the ACTUAL engine's MEASURED generation (precompute) + per-perm
+    #     recompute + serialization for the burst-timing group, with a CONSERVATIVE cap margin (not merely <8h) ---
+    from scripts.oracle_realism_v3_engine import ESTIMATORS as _EST
+    from scripts.oracle_realism_v3_map import build_frozen_map as _bfm
+    poolw = A + Bs; nAw = len(A); Mw = len(poolw); BW = 500
+    wired = {}
+    for chk in ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S3_loggap"):
+        est = _EST[chk]
+        t = time.perf_counter(); pre = est["precompute"](poolw); gen = time.perf_counter() - t     # MEASURED generation
+        groups = (_bfm(Bs, chk, profile="mimic_scale_control", regime="full", N=N)["groups"]
+                  if est["map_carrying"] else None)
+        t = time.perf_counter()
+        for _ in range(BW):
+            idx = rng.permutation(Mw); m = np.zeros(Mw, bool); m[idx[:nAw]] = True
+            est["recompute"](pre, m, groups)
+        wired[chk] = {"generation_secs": round(gen, 3), "per_perm_ms": round((time.perf_counter() - t) / BW * 1000, 4)}
+    BT_CELLS, BT_EXP, MARGIN = 36, 9, 1.5
+    B_bt = int(np.ceil(BT_CELLS / (0.04 / 6) / 100.0)) * 100                                       # 5400
+    gen_total = sum(w["generation_secs"] for w in wired.values()) * BT_EXP
+    perperm_sum = sum(w["per_perm_ms"] / 1000 for w in wired.values()) * BT_EXP
+    bt_secs = B_bt * perperm_sum + gen_total + serialize_per_cell * BT_CELLS
+    bt_h = bt_secs / 3600
+    wired_engine = {"group": "burst_timing", "cells": BT_CELLS, "B": B_bt, "per_check": wired,
+                    "measured_generation_secs_total": round(gen_total, 1),
+                    "measured_serialize_secs_per_cell": round(serialize_per_cell, 8),
+                    "job_hours_measured": round(bt_h, 3), "margin": MARGIN,
+                    "job_hours_with_margin": round(bt_h * MARGIN, 3), "fits_8h_with_margin": bt_h * MARGIN <= 8,
+                    "note": "ACTUAL engine estimators (generation + per-perm recompute) MEASURED at the REGISTERED "
+                            "N=8000; the class-mark group's generation is heavier (S4/S6/S7 precompute) — the full "
+                            "per-group wired benchmark follows once all five groups' estimators are wired. "
+                            "Conservative margin 1.5x required, not merely <8h."}
+
     # DETERMINISTIC config identity (no timing): formula + routes + per-experiment routing + per-profile volumes + B
     sd = REG.build_sd_cells(True)
     routing = {c["cell_id"]: [ROUTE_OF[c["statistic"]], PROFILE_FOR[c["source"]]]
@@ -229,6 +261,7 @@ def main():
     }
     out = {"namespace": BENCH_NS, "N": N, "B_main": B_MAIN, "audit": "REMOVED (Pi #5 preferred)",
            "config_identity_deterministic": config_identity,
+           "wired_engine_measurement": wired_engine,
            "profile_volumes": prof_vol, "timing_artifact": timing_artifact,
            "feasibility": ("SD-main is costed PER PROFILE (SCID heavier than MIMIC); do NOT assume one 8h job — "
                            "see per_group_job_hours and sd_main_fits_one_8h_job. If it does not fit, run SEPARATELY "

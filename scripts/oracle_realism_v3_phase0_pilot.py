@@ -193,14 +193,21 @@ def _s3loggap(cand, ref):
 from scripts.oracle_realism_v3_map import build_frozen_map, apply_frozen_map, map_identity
 
 
+_REGIME_IDENTITY = {"bounded": ("boundary_short", "bounded"), "full_MIMIC": ("mimic_scale_control", "full")}
+
+
 def delta_aligned_boundary():
-    """For each S3 subcheck, dev-only P[d > exact Δ under @0.5] (detection) and under null (specificity), on the
-    BOUNDED and FULL-support regimes. S3_tau uses d=|T_pool(cand)-T_pool(ref)| vs Δ=_TAU; S3_loggap uses the
-    CORRECTED frozen-map discrepancy (registered estimand) vs Δ=_LOGGAP. Δ-ALIGNED (Pi rev-5 #1/#6)."""
+    """DEV-SCALE (N=3000) Δ-aligned evidence for each S3 subcheck. S3_tau uses d=|T_pool(cand)-T_pool(ref)| vs
+    Δ=_TAU; S3_loggap uses the corrected reference-owned frozen map (registered estimand) vs Δ=_LOGGAP.
+    NOTE (Pi rev-6 #2): this is dev-scale only — it does NOT decide the boundary exemption. A bounded S3_loggap map
+    refusal here is a DEV-scale floor refusal (N=3000 < registered floor 500), not structural un-calibratability.
+    The exemption is decided by the REGISTERED-N=8000 preflight (scripts/oracle_realism_v3_regn_preflight.py)."""
     out = {}
     for regime_key in ("bounded", "full_MIMIC"):
         _, gen = REGIMES[regime_key]
-        fm = build_frozen_map(gen(N, ("mapref", 0)), "S3_loggap")   # reference-owned, original CLUSTER_BINS grouping
+        prof, reg = _REGIME_IDENTITY[regime_key]
+        fm = build_frozen_map(gen(N, ("mapref", 0)), "S3_loggap", profile=prof, regime=reg,
+                              seed=int(dseed("mapref", regime_key)), N=N)
         tau_pow, tau_null, lg_pow, lg_null, lg_ne = [], [], [], [], 0
         for k in DEV_SEEDS:
             A = gen(N, ("A", k)); B = gen(N, ("B", k))
@@ -210,7 +217,8 @@ def delta_aligned_boundary():
                 tau_null.append(dn > _TAU)
             if dp is not None:
                 tau_pow.append(dp > _TAU)
-            ln, lp = apply_frozen_map(B, A, "S3_loggap", fm), apply_frozen_map(Bc, A, "S3_loggap", fm)
+            ln = apply_frozen_map(B, A, "S3_loggap", fm, expect_profile=prof, expect_regime=reg)
+            lp = apply_frozen_map(Bc, A, "S3_loggap", fm, expect_profile=prof, expect_regime=reg)
             if ln is not None:
                 lg_null.append(ln > _LOGGAP)
             if lp is None:
@@ -228,24 +236,13 @@ def delta_aligned_boundary():
                           "frozen_map_ne_rate": round(lg_ne / len(DEV_SEEDS), 3),
                           "n_pow": len(lg_pow), "n_null": len(lg_null)},
         }
-    bnd = out["bounded"]
-    lg_bnd_detect = bnd["S3_loggap"]["detect_P[d>delta]@0.5"]
-    lg_bnd_ne = bnd["S3_loggap"]["frozen_map_ne_rate"]
-    out["provisional_decision"] = {
-        "criterion": "boundary EXEMPT (provisional) iff bounded detection P[d>Δ @0.5] < 0.5, OR the reference-owned "
-                     "frozen map REFUSES on bounded support (un-calibratable by construction).",
-        "S3_tau_bounded_detect": bnd["S3_tau"]["detect_P[d>delta]@0.5"],
-        "S3_tau_exempt": (bnd["S3_tau"]["detect_P[d>delta]@0.5"] or 0.0) < 0.5,
-        "S3_loggap_bounded_detect": lg_bnd_detect,
-        "S3_loggap_bounded_map_ne_rate": lg_bnd_ne,
-        "S3_loggap_exempt": (lg_bnd_detect is None and lg_bnd_ne >= 0.99) or ((lg_bnd_detect or 0.0) < 0.5),
-        "estimator": "S3_loggap now uses the REGISTERED estimand via the corrected reference-owned frozen map "
-                     "(original CLUSTER_BINS, per-sequence mean-log-gap, equal-weight, seq+pair floors). The "
-                     "corrected estimand's FULL-support null-exceedance is ~0 (the earlier ~0.53 was the wrong "
-                     "data-driven-bins/pooled-mean estimator, not a harmless artifact — Pi rev-5 #1 confirmed).",
-        "note": "PROVISIONAL — final exemption only after the reserved reference-owned frozen-map CALIBRATION draw "
-                "(blocked). On bounded support the frozen map REFUSES (cluster-bin floor unreachable at L<=7) => "
-                "S3_loggap is NOT_EVALUABLE there => un-calibratable => exempt; S3_tau bounded detect < 0.5 => exempt.",
+    out["decision_deferred"] = {
+        "note": "DEV-SCALE evidence only (N=3000). The boundary exemption is NOT decided here (Pi rev-6 #2): a "
+                "bounded S3_loggap map refusal at N=3000 is a dev-scale floor refusal, not structural. The "
+                "exemption is decided at REGISTERED N=8000 by scripts/oracle_realism_v3_regn_preflight.py, per "
+                "regime, and reported with AND without each exemption independently. Both S3 exemptions remain "
+                "PROVISIONAL. The corrected estimand's full-support null-exceedance ~0 (was ~0.53 with the wrong "
+                "data-driven-bins/pooled-mean estimator; Pi rev-5 #1 confirmed).",
     }
     return out
 
