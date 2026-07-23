@@ -185,75 +185,22 @@ def _s3loggap(cand, ref):
 
 
 # ---------------------------------------------------------------------------------------------------
-# Δ-aligned boundary recompute via a reference-OWNED FROZEN coarsening map (Pi rev-4 #6)
+# Δ-aligned boundary recompute via the CORRECTED reference-OWNED FROZEN map (Pi rev-5 #1/#6)
+# S3_loggap now uses the registered estimand: original CLUSTER_BINS, per-sequence mean-log-gap, equal-weight
+# pooling, seq + adjacent-pair floors, with an independently-frozen reference-owned grouping of the ORIGINAL bins
+# (scripts/oracle_realism_v3_map.py) — NOT the earlier data-driven unique-size bins + pooled adjacency means.
 # ---------------------------------------------------------------------------------------------------
-FLOOR_DEV = 200            # dev-scale conditional floor (registered N=8000 uses 500; dev N=3000 is smaller)
-
-
-def _prevsize_loggap(sample):
-    """(preceding cluster size x, log positive gap) over all within-sequence adjacencies with a positive gap."""
-    xs, logys = [], []
-    for r in sample:
-        y, x = _positive_gaps_and_prev_size(r)          # y = gap, x = preceding cluster size
-        for xi, yi in zip(x, y):
-            if yi > 0:
-                xs.append(int(xi)); logys.append(float(np.log(yi)))
-    return np.asarray(xs, float), np.asarray(logys, float)
-
-
-def frozen_prevsize_bins(map_ref, floor=FLOOR_DEV):
-    """Reference-OWNED frozen bins over preceding-cluster-size, greedy-merged ascending until each bin holds
-    >= floor adjacencies in the DISJOINT dev map-reference. Returns ascending closing sizes (or None if <floor
-    total). The candidate never influences these bins (anti-masking; Pi rev-3 §2)."""
-    xs, _ = _prevsize_loggap(map_ref)
-    if xs.size < floor:
-        return None
-    sizes, counts = np.unique(xs, return_counts=True)
-    edges, acc = [], 0
-    for s, c in zip(sizes, counts):
-        acc += int(c)
-        if acc >= floor:
-            edges.append(int(s)); acc = 0
-    if acc > 0:                                          # merge leftover tail into the last bin
-        if edges:
-            edges[-1] = int(sizes[-1])
-        else:
-            edges = [int(sizes[-1])]
-    return edges
-
-
-def _binid(x, edges):
-    """bin = first closing size >= x (clamped to the last bin)."""
-    return np.clip(np.searchsorted(edges, x, side="left"), 0, len(edges) - 1)
-
-
-def s3loggap_frozen(cand, ref, edges, floor=FLOOR_DEV):
-    """Frozen-map S3_loggap discrepancy d = max_bin |mean(log gap)_cand - mean(log gap)_ref| under the FROZEN
-    reference-owned `edges`. Floor breach on either arm in any bin => None (NOT_EVALUABLE). d>Δ is the MM-aligned
-    detection criterion (Pi rev-4 #6) — NOT the v2 adaptive PASS/FAIL status."""
-    if edges is None:
-        return None
-    xc, yc = _prevsize_loggap(cand); xr, yr = _prevsize_loggap(ref)
-    if xc.size == 0 or xr.size == 0:
-        return None
-    bc, br = _binid(xc, edges), _binid(xr, edges)
-    d = 0.0
-    for b in range(len(edges)):
-        cv, rv = yc[bc == b], yr[br == b]
-        if cv.size < floor or rv.size < floor:
-            return None
-        d = max(d, abs(cv.mean() - rv.mean()))
-    return d
+from scripts.oracle_realism_v3_map import build_frozen_map, apply_frozen_map, map_identity
 
 
 def delta_aligned_boundary():
     """For each S3 subcheck, dev-only P[d > exact Δ under @0.5] (detection) and under null (specificity), on the
     BOUNDED and FULL-support regimes. S3_tau uses d=|T_pool(cand)-T_pool(ref)| vs Δ=_TAU; S3_loggap uses the
-    FROZEN-map discrepancy vs Δ=_LOGGAP. Makes the boundary exemption decision Δ-ALIGNED (Pi rev-4 #6)."""
+    CORRECTED frozen-map discrepancy (registered estimand) vs Δ=_LOGGAP. Δ-ALIGNED (Pi rev-5 #1/#6)."""
     out = {}
     for regime_key in ("bounded", "full_MIMIC"):
         _, gen = REGIMES[regime_key]
-        edges = frozen_prevsize_bins(gen(N, ("mapref", 0)))     # disjoint dev map-reference (never calibration)
+        fm = build_frozen_map(gen(N, ("mapref", 0)), "S3_loggap")   # reference-owned, original CLUSTER_BINS grouping
         tau_pow, tau_null, lg_pow, lg_null, lg_ne = [], [], [], [], 0
         for k in DEV_SEEDS:
             A = gen(N, ("A", k)); B = gen(N, ("B", k))
@@ -263,7 +210,7 @@ def delta_aligned_boundary():
                 tau_null.append(dn > _TAU)
             if dp is not None:
                 tau_pow.append(dp > _TAU)
-            ln, lp = s3loggap_frozen(B, A, edges), s3loggap_frozen(Bc, A, edges)
+            ln, lp = apply_frozen_map(B, A, "S3_loggap", fm), apply_frozen_map(Bc, A, "S3_loggap", fm)
             if ln is not None:
                 lg_null.append(ln > _LOGGAP)
             if lp is None:
@@ -272,7 +219,9 @@ def delta_aligned_boundary():
                 lg_pow.append(lp > _LOGGAP)
         rate = lambda v: round(float(np.mean(v)), 3) if v else None
         out[regime_key] = {
-            "delta_tau": _TAU, "delta_loggap": round(_LOGGAP, 8), "frozen_bins": edges,
+            "delta_tau": _TAU, "delta_loggap": round(_LOGGAP, 8),
+            "frozen_map": {"bins_id": fm["bins_id"], "groups": fm["groups"], "status": fm["status"],
+                           "identity": map_identity(fm)},
             "S3_tau": {"detect_P[d>delta]@0.5": rate(tau_pow), "false_P[d>delta]_null": rate(tau_null),
                        "n_pow": len(tau_pow), "n_null": len(tau_null)},
             "S3_loggap": {"detect_P[d>delta]@0.5": rate(lg_pow), "false_P[d>delta]_null": rate(lg_null),
@@ -280,17 +229,23 @@ def delta_aligned_boundary():
                           "n_pow": len(lg_pow), "n_null": len(lg_null)},
         }
     bnd = out["bounded"]
+    lg_bnd_detect = bnd["S3_loggap"]["detect_P[d>delta]@0.5"]
+    lg_bnd_ne = bnd["S3_loggap"]["frozen_map_ne_rate"]
     out["provisional_decision"] = {
-        "criterion": "boundary EXEMPT (provisional) iff bounded detection P[d>Δ @0.5] < 0.5 (un-calibratable at Δ)",
+        "criterion": "boundary EXEMPT (provisional) iff bounded detection P[d>Δ @0.5] < 0.5, OR the reference-owned "
+                     "frozen map REFUSES on bounded support (un-calibratable by construction).",
         "S3_tau_bounded_detect": bnd["S3_tau"]["detect_P[d>delta]@0.5"],
-        "S3_loggap_bounded_detect": bnd["S3_loggap"]["detect_P[d>delta]@0.5"],
-        "note": "PROVISIONAL — final exemption only after the reference-owned frozen-map CALIBRATION draw (blocked). "
-                "Full-support detection reported alongside for contrast (checks work where supported).",
-        "caveat": "P[d>Δ] here is the DIRECT (MM-aligned) two-independent-draw discrepancy used ONLY for the "
-                  "boundary detection/exemption decision. It is NOT the SD gate's type-I control (that is the "
-                  "permutation test). The elevated full-support S3_loggap null-exceedance is dev-scale (N=3000, "
-                  "floor=200, max-over-bins) sampling noise and a flag for MM-specificity calibration at the "
-                  "registered N — not a boundary-decision or SD-gate defect.",
+        "S3_tau_exempt": (bnd["S3_tau"]["detect_P[d>delta]@0.5"] or 0.0) < 0.5,
+        "S3_loggap_bounded_detect": lg_bnd_detect,
+        "S3_loggap_bounded_map_ne_rate": lg_bnd_ne,
+        "S3_loggap_exempt": (lg_bnd_detect is None and lg_bnd_ne >= 0.99) or ((lg_bnd_detect or 0.0) < 0.5),
+        "estimator": "S3_loggap now uses the REGISTERED estimand via the corrected reference-owned frozen map "
+                     "(original CLUSTER_BINS, per-sequence mean-log-gap, equal-weight, seq+pair floors). The "
+                     "corrected estimand's FULL-support null-exceedance is ~0 (the earlier ~0.53 was the wrong "
+                     "data-driven-bins/pooled-mean estimator, not a harmless artifact — Pi rev-5 #1 confirmed).",
+        "note": "PROVISIONAL — final exemption only after the reserved reference-owned frozen-map CALIBRATION draw "
+                "(blocked). On bounded support the frozen map REFUSES (cluster-bin floor unreachable at L<=7) => "
+                "S3_loggap is NOT_EVALUABLE there => un-calibratable => exempt; S3_tau bounded detect < 0.5 => exempt.",
     }
     return out
 

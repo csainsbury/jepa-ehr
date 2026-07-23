@@ -116,8 +116,9 @@ REQUIRED_PROPERTY = {
 }
 # reference-OWNED coarsening-map carriers (verifier coarsen_reference / _conditional_maxbin callers).
 # Verified by executable evidence in the self-test (CheckResult.detail carries 'per_group' iff map-carrying).
+# Pi rev-5 #1: S6 conditions class-mix on LENGTH_BINS (NOT class coarsening); the map GROUPS original bin indices.
 MAP_BINS = {"S1_density": "LENGTH_BINS", "S5_abs": "LENGTH_BINS", "S3_loggap": "CLUSTER_BINS",
-            "S7_abs": "CLUSTER_BINS", "S6_tv": "REF_CLASS_COARSEN"}
+            "S7_abs": "CLUSTER_BINS", "S6_tv": "LENGTH_BINS"}
 MAP_CARRYING = set(MAP_BINS)
 FLOOR_POLICY = f"denom<{ORACLE_ENV_MIN_DENOM}(ORACLE_ENV_MIN_DENOM)=>NOT_EVALUABLE; never zero-fill"
 
@@ -127,6 +128,15 @@ RNG_LAW = {
     "coupling": "seed=sha256(('coupling',source_key,component,replicate_seed,role))",
     "permutation": "within-stratum label permutation; MC index synchronized across a group's experiments",
 }
+
+
+def _cell_rng_law(coupled_component):
+    """Per-experiment RNG-law binding (Pi rev-5 #7): fixture law for all cells; PLUS the coupled role law for
+    candidate-D repeatability experiments (where the reference AND candidate_D carry the component at 0.5)."""
+    if coupled_component is None:
+        return RNG_LAW["fixture"]
+    return (f"{RNG_LAW['fixture']} ; COUPLED role law (component={coupled_component}@0.5 on reference+candidate_D): "
+            f"{RNG_LAW['coupling']} — role-symmetric (candidate_D and reference share the law under H0)")
 
 # --- SD experiments (each a distinct candidate/reference pair) --------------------------------------------
 # (experiment_id, condition, source_profile, coupled_component_or_None, support_regime)
@@ -203,7 +213,7 @@ def build_sd_cells(apply_uncalibratable_exemption=True):
                 "G_bounded_support" if inside else None)
             cells.append({
                 "cell_id": f"SD|{exp_id}|{stat}", "class": "SD", "experiment_id": exp_id, "condition": cond,
-                "source": src, "source_role_rng_law": RNG_LAW["fixture"], "coupled_component": comp,
+                "source": src, "source_role_rng_law": _cell_rng_law(comp), "coupled_component": comp,
                 "support_regime": regime, "statistic": stat, "family": CHECK_FAMILY[stat],
                 "estimator_identity": ESTIMATOR[stat], "required_property": REQUIRED_PROPERTY[stat],
                 "delta": float(DELTA[stat]), "delta_provenance": DELTA_PROVENANCE[stat],
