@@ -37,6 +37,11 @@ from scripts.oracle_realism_v3_randomization import cell_upper_p, RefusalError
 from scripts.oracle_realism_v3_phase0_pilot import _seq_components
 from scripts.oracle_realism_v3_map import validate_map_artifact, map_identity, FLOOR
 import scripts.oracle_realism_v3_registry as REG
+import sys as _sys
+import scripts.oracle_realism_v3_map as _map_mod
+import scripts.oracle_realism_v3_randomization as _rand_mod
+import scripts.oracle_realism_v3_phase0_pilot as _pilot_mod
+from clinical_jepa.eval import oracle_realism_v2_verifier as _v2ver_mod
 
 MAP_CHECKS = {"S3_loggap", "S5_abs", "S6_tv", "S7_abs", "S1_density"}   # map-carrying checks (engine-wired subset)
 
@@ -286,35 +291,47 @@ ESTIMATORS = {
                "map_carrying": True, "identity": "v2.cond_maxbin.mean(distinct_class_frac)@CLUSTER_BINS[ref_coarsen]"},
 }
 
-# Estimator identities — SEMANTIC vs CODE are DISTINCT (Pi rev-11 Correction 2).
-# SEMANTIC = calling convention + declared estimand identity STRINGS. It catches a protocol change or a re-declared
-# estimand, but NOT a silent change to an estimator's implementation (the strings can stay fixed).
+# FIVE explicit identity layers (Pi rev-13 #3). Pi's guidance: hashing REVIEWED FULL MODULE FILES is safer than
+# manually chasing helper closure (it transitively covers e.g. phase_spanning_indices, verifier `_runs`,
+# coarsen_reference) even though it re-mints on unrelated edits in those files. All SOURCE layers are deterministic
+# (env-independent); the dependency layer is the only version-bearing one and never enters a "deterministic" hash.
+def _modsrc(mod):
+    try:
+        return hashlib.sha256(inspect.getsource(mod).encode("utf-8")).hexdigest()
+    except (OSError, TypeError):
+        return "SOURCE_UNAVAILABLE"
+
+
+_MODULE_SRC = {name: _modsrc(mod) for name, mod in (
+    ("engine", _sys.modules[__name__]), ("v2_verifier", _v2ver_mod), ("phase0_pilot", _pilot_mod),
+    ("map", _map_mod), ("randomization", _rand_mod))}
+
+# (1) SEMANTIC — calling convention + declared estimand identity STRINGS (catches a protocol/estimand re-declaration,
+#     not an implementation change).
 ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY = canonical_hash({
     "protocol": "recompute(pre, mask, *, groups, floor) keyword-only",
     "estimators": {k: v["identity"] for k, v in ESTIMATORS.items()}})
-
-# IMPLEMENTATION SOURCE identity — DETERMINISTIC (source only; NO versions). Covers what actually executes: the
-# dispatch table + wrapper lambdas (each recompute callable's source, so a check->function swap or wrapper change
-# shows up), every precompute, the local map reducers, the imported executable estimator dependencies
-# (_seq_components, _positive_gaps_and_prev_size, _s4_contrast, _bin_index), and the frozen bin definitions
-# (Pi rev-12 #3). The map-BUILDER lives in a separate module and is bound per-artifact via `map_identity`.
-_IMPL_SRC_FNS = (_tau_pre, _dt0_pre, _gap_pre, _loggap_pre, _s4_pre, _classtv_pre, _occ_pre,
-                 _lenbin_scalar_pre, _s5_pre, _s6_pre, _s7_pre, _map_re_scalar, _map_re_vector,
-                 _tau_re, _dt0_re, _gap_re, _loggap_re, _s4_re, _classtv_re, _occ_re,
-                 _seq_components, _positive_gaps_and_prev_size, _s4_contrast, _bin_index)
-ESTIMATOR_IMPL_SOURCE_IDENTITY = canonical_hash({
-    "recompute_src": {k: inspect.getsource(v["recompute"]) for k, v in ESTIMATORS.items()},   # dispatch + wrappers
-    "precompute_src": {k: inspect.getsource(v["precompute"]) for k, v in ESTIMATORS.items()},
-    "helper_src": {fn.__name__: inspect.getsource(fn) for fn in _IMPL_SRC_FNS},
-    "map_carrying": {k: v["map_carrying"] for k, v in ESTIMATORS.items()},
-    "bins": {"LENGTH_BINS": np.asarray(LENGTH_BINS).tolist(), "CLUSTER_BINS": np.asarray(CLUSTER_BINS).tolist()}})
-
-# DEPENDENCY / ENVIRONMENT identity — NOT deterministic across environments (interpreter + library versions +
-# estimand constants). Kept SEPARATE so a deterministic config/identity stays version-independent (Pi rev-12 #3):
-# only source identities go into deterministic hashes; this one belongs in environment-dependent artifacts.
+# (2) IMPLEMENTATION SOURCE — the modules that contain estimator implementations + ALL transitively-called helpers
+#     (engine estimators; verifier `_positive_gaps_and_prev_size`/`_runs`/`_s4_contrast`/`_bin_index`/bins; pilot
+#     `_seq_components`/`phase_spanning_indices`). Full-file, transitively complete.
+ESTIMATOR_IMPL_SOURCE_IDENTITY = canonical_hash({m: _MODULE_SRC[m] for m in ("engine", "v2_verifier", "phase0_pilot")})
+# (3) ENGINE CANONICALIZATION / SCHEMA / GATE source — the derive-not-trust, precompute-schema, and gate-kernel code
+#     (engine module) + the randomization kernel it calls.
+ENGINE_CANON_SCHEMA_GATE_IDENTITY = canonical_hash({m: _MODULE_SRC[m] for m in ("engine", "randomization")})
+# (4) MAP BUILDER / APPLY source — the map-builder + reducer modules. A map artifact's `map_identity` binds its
+#     OUTPUT + semantic fields, NOT the builder implementation (rev-13 #3); the builder source is bound HERE.
+MAP_SOURCE_IDENTITY = canonical_hash({m: _MODULE_SRC[m] for m in ("map", "v2_verifier")})
+# (5) DEPENDENCY / ENVIRONMENT — interpreter + library versions + estimand constants. The ONLY version-bearing layer;
+#     never enters a deterministic hash — it lives in environment-dependent artifacts.
 ESTIMATOR_DEPENDENCY_IDENTITY = canonical_hash({
     "python": platform.python_version(), "numpy": np.__version__,
     "constants": {"C": int(C), "FLOOR": int(FLOOR)}})
+
+# The DETERMINISTIC source-identity bundle bound into config / dev-stable identities (all env-independent).
+SOURCE_IDENTITY_BUNDLE = {"estimator_semantic": ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY,
+                          "estimator_impl_source": ESTIMATOR_IMPL_SOURCE_IDENTITY,
+                          "engine_canon_schema_gate": ENGINE_CANON_SCHEMA_GATE_IDENTITY,
+                          "map_source": MAP_SOURCE_IDENTITY}
 
 
 # --- executable per-experiment RNG identity (a hash of the seed-derivation, not a string; Pi #4/#7) ------
@@ -457,6 +474,12 @@ def _is_int_arr(a):
     return isinstance(a, np.ndarray) and np.issubdtype(a.dtype, np.integer) and a.dtype != np.bool_
 
 
+# Explicit canonical profile -> fixture skeleton map (rev-13 #4): fail-closed identity code must NOT map every
+# unknown string to MIMIC via a substring heuristic. Every registered SD source is enumerated; unknowns refuse.
+_PROFILE_SKELETON = {"mimic_scale_control": "MIMIC", "scid_scale_control": "SCID",
+                     "structural_zero_control": "MIMIC", "boundary_short": "MIMIC"}
+
+
 def _canonicalize_pool(pool, exp_source, exp_id):
     """DERIVE-NOT-TRUST canonicalization (Pi rev-12 #1/#4). The SequenceRecord contract trusts ONLY
     (source, class_ids, timestamps); cluster_ids/L_total/K/positions are DERIVED under exact dt==0 run semantics.
@@ -465,9 +488,11 @@ def _canonicalize_pool(pool, exp_source, exp_id):
     canonicalized, not silently trusted) — and binds the experiment's expected skeleton source. Run ONCE per
     experiment (not once per cell). Malformed TRUSTED fields (bad source, class id out of [0,C), non-finite or
     non-monotone timestamps) refuse via derive_record."""
-    expect = "SCID" if "scid" in exp_source else "MIMIC"           # profile -> skeleton (REQUIRED_SOURCES)
+    if exp_source not in _PROFILE_SKELETON:                        # explicit map; unknown profile refuses (rev-13 #4)
+        raise RefusalError(f"{exp_id}: unknown profile {exp_source!r} has no canonical skeleton mapping")
+    expect = _PROFILE_SKELETON[exp_source]
     if expect not in REQUIRED_SOURCES:
-        raise RefusalError(f"{exp_id}: expected source {expect!r} not in {REQUIRED_SOURCES}")
+        raise RefusalError(f"{exp_id}: skeleton {expect!r} not in {REQUIRED_SOURCES}")
     out = []
     for i, r in enumerate(pool):
         for attr in ("source", "class_ids", "timestamps"):
@@ -490,8 +515,10 @@ def _canonicalize_pool(pool, exp_source, exp_id):
 def _pc_arr(a, name, check):
     if not isinstance(a, np.ndarray):
         raise RefusalError(f"{check} precompute {name} must be an ndarray, got {type(a).__name__}")
-    if a.dtype == np.bool_ or not np.issubdtype(a.dtype, np.number):    # explicit numeric non-bool dtype (rev-12 #2)
-        raise RefusalError(f"{check} precompute {name} dtype {a.dtype} is not a numeric non-bool type")
+    # REAL integer/floating only (rev-13 #1): np.number ADMITS complex, which would be silently cast to float with an
+    # imaginary-part loss — refuse it. bool is also excluded.
+    if a.dtype == np.bool_ or not (np.issubdtype(a.dtype, np.integer) or np.issubdtype(a.dtype, np.floating)):
+        raise RefusalError(f"{check} precompute {name} dtype {a.dtype} is not a real integer/floating non-bool type")
     return a
 
 
@@ -536,6 +563,26 @@ def _pc_rows_all_or_nothing(a, name, check):
             raise RefusalError(f"{check} precompute {name} has a partially-absent row (must be all-NaN or all-finite)")
 
 
+def _pc_finite_iff_positive(sm_list, cnt_list, name, check):
+    """CROSS-CHANNEL (rev-13 #2): per bin/sequence the summary `sm` is finite IFF its count channel is > 0 (a NaN
+    summary with a positive count, or a finite summary with a zero count, is a structurally impossible state)."""
+    for b, (sm, cnt) in enumerate(zip(sm_list, cnt_list)):
+        fin = np.isfinite(np.asarray(sm, float)); pos = np.asarray(cnt, float) > 0
+        if not bool(np.array_equal(fin, pos)):
+            raise RefusalError(f"{check} precompute {name}[{b}]: summary finite must match count>0 exactly")
+
+
+def _pc_exactly_one_length_bin(bin_arrays, name, check, n):
+    """CROSS-CHANNEL (rev-13 #2): LENGTH_BINS partition every canonical sequence, so each of the n sequences is
+    present in EXACTLY one length bin (col-0 finite for vectors; finite for scalars)."""
+    present = np.zeros(n, int)
+    for arr in bin_arrays:
+        a = np.asarray(arr, float)
+        present += np.isfinite(a if a.ndim == 1 else a[:, 0]).astype(int)
+    if not bool((present == 1).all()):
+        raise RefusalError(f"{check} precompute {name}: each sequence must be present in EXACTLY one length bin")
+
+
 def _validate_precompute(pre, check, n):
     """Fail-closed per-estimator precompute schema. `n` is the pooled sequence count. Returns `pre` if valid, else
     raises RefusalError BEFORE any statistic runs."""
@@ -576,8 +623,11 @@ def _validate_precompute(pre, check, n):
     if check == "S3_tau":                                          # EXACT (n,4): [C-D, n0(total), n1(ties_x), n2(ties_y)]
         a = col2d(pre, "components", 4, nan_ok=False)
         _pc_nonneg(a[:, 1:], "components[n0,n1,n2]", check)        # pair counts nonnegative
+        _pc_int_valued(a[:, 1:], "components[n0,n1,n2]", check)    # ...and integer-valued (rev-13 #2)
         if bool((a[:, 1] < a[:, 2] - 1e-9).any()) or bool((a[:, 1] < a[:, 3] - 1e-9).any()):
             raise RefusalError("S3_tau: total pairs n0 must be >= ties n1, n2")
+        if bool((np.abs(a[:, 0]) > a[:, 1] + 1e-9).any()):        # |C-D| <= n0 (concordance can't exceed total pairs)
+            raise RefusalError("S3_tau: |C-D| must be <= n0 (total pairs)")
     elif check == "delta_t_zero_abs":                             # [nz=L-K, na=L-1]; nonneg ints, nz <= na
         a = col2d(pre, "dt0", 2, nan_ok=False); _pc_nonneg(a, "dt0", check); _pc_int_valued(a, "dt0", check)
         if bool((a[:, 0] > a[:, 1] + 1e-9).any()):
@@ -614,19 +664,24 @@ def _validate_precompute(pre, check, n):
         keys(pre, ("sm", "sp"))
         scalar_binlist(pre["sm"], "sm", nbC)                      # mean log gap: unrestricted finite-or-NaN
         scalar_binlist(pre["sp"], "sp", nbC, count=True)          # pair counts: finite nonneg integer
-    elif check == "S4_abs":                                        # per row: absent(all-NaN) OR [contrast in[-1,1], >=0 ints]
+        _pc_finite_iff_positive(pre["sm"], pre["sp"], "sm/sp", check)   # cross-channel: sm finite IFF sp>0
+    elif check == "S4_abs":                                        # per row: absent(all-NaN) OR [contrast in[-1,1], >0 ints]
         a = _pc_arr(pre, "s4", check)
         if a.ndim != 2 or a.shape[0] != n or a.shape[1] != 3:
             raise RefusalError(f"S4_abs precompute shape {a.shape} != ({n},3)")
         _pc_rows_all_or_nothing(a, "s4", check)
         _pc_range(a[:, 0], "s4[contrast]", check, -1.0, 1.0)
-        _pc_nonneg(a[:, 1:], "s4[pair-counts]", check); _pc_int_valued(a[:, 1:], "s4[pair-counts]", check)
+        _pc_int_valued(a[:, 1:], "s4[pair-counts]", check)
+        pres = np.isfinite(a[:, 0])                               # present rows require BOTH pair counts strictly > 0
+        if bool(pres.any()) and (bool((a[pres, 1] <= 0).any()) or bool((a[pres, 2] <= 0).any())):
+            raise RefusalError("S4_abs: present rows require same_pairs>0 AND adj_pairs>0")
     elif check == "class_tv":                                      # per-class counts: nonneg integer
         a = col2d(pre, "class_tv", C, nan_ok=False); _pc_nonneg(a, "class_tv", check); _pc_int_valued(a, "class_tv", check)
     elif check == "occupancy_abs":
         _pc_range(row1d(pre, "occ", nan_ok=False), "occ", check, 0.0, 1.0)
     elif check == "S5_abs":                                        # per-bin occupancy in [0,1]; NaN=absent
         keys(pre, ("sm",)); scalar_binlist(pre["sm"], "sm", nbL, rng=(0.0, 1.0))
+        _pc_exactly_one_length_bin(pre["sm"], "sm", check, n)     # each sequence present in exactly one length bin
     elif check == "S6_tv":                                         # per-bin class-fraction rows: absent OR sum-to-1 nonneg
         keys(pre, ("vec",))
         if not isinstance(pre["vec"], list) or len(pre["vec"]) != nbL:
@@ -639,10 +694,12 @@ def _validate_precompute(pre, check, n):
             rs = np.asarray(a, float).sum(axis=1); fin = np.isfinite(rs)
             if bool(fin.any()) and bool((np.abs(rs[fin] - 1.0) > 1e-6).any()):
                 raise RefusalError(f"S6_tv vec[{b}] present rows must be class fractions summing to 1")
+        _pc_exactly_one_length_bin(pre["vec"], "vec", check, n)   # each sequence present in exactly one length bin
     elif check == "S7_abs":                                        # per-bin distinct-class-frac in [0,1]; cc = counts
         keys(pre, ("sm", "cc"))
         scalar_binlist(pre["sm"], "sm", nbC, rng=(0.0, 1.0))
         scalar_binlist(pre["cc"], "cc", nbC, count=True)
+        _pc_finite_iff_positive(pre["sm"], pre["cc"], "sm/cc", check)   # cross-channel: sm finite IFF cc>0
     return pre
 
 
@@ -753,10 +810,9 @@ def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_
               "map_identities": map_ids,
               "map_set_identity": canonical_hash([map_ids[k] for k in sorted(map_ids)]),
               "registry_identity": CANONICAL_REGISTRY_HASH,
-              # Pi rev-12 #3: the DETERMINISTIC stable identity carries source identities only (semantic + impl-source);
-              # the environment-dependent dependency identity is recorded in the full dev_config, not the stable hash.
-              "estimator_protocol_semantic_identity": ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY,
-              "estimator_impl_source_identity": ESTIMATOR_IMPL_SOURCE_IDENTITY,
+              # Pi rev-12 #3 / rev-13 #3: the DETERMINISTIC stable identity carries the four SOURCE identity layers
+              # only; the environment-dependent dependency identity is recorded in the full dev_config, not the hash.
+              "source_identities": SOURCE_IDENTITY_BUNDLE,
               "namespace": (nss[0] if nss else None),
               "seed_law": "caller-supplied dev seed; assignments = numpy default_rng(seed) per-stratum permutation"}
     res["dev_config"] = {**stable, "seed": seed, "estimator_dependency_identity": ESTIMATOR_DEPENDENCY_IDENTITY}
@@ -977,6 +1033,8 @@ def selftest():
     s4_hi = np.full((npool, 3), np.nan); s4_hi[0] = [2.0, 1.0, 1.0]                # contrast outside [-1,1]
     s6_partial = {"vec": [np.full((npool, C), np.nan) for _ in range(len(LENGTH_BINS))]}
     s6_partial["vec"][0][0, 0] = 1.0                                              # row 0: one finite + rest NaN
+    # rev-13 #1/#2 — real-dtype + cross-channel cases Pi reproduced as WRONGLY ACCEPTED:
+    s4_zero_pair = np.full((npool, 3), np.nan); s4_zero_pair[0] = [0.5, 0.0, 1.0]                 # present but pair count 0
     exact_cases = {
         "s3_tau_extra_col": ("S3_tau", tau5),
         "occupancy_object_dtype": ("occupancy_abs", occ_obj),
@@ -984,10 +1042,22 @@ def selftest():
         "s4_partial_nan_row": ("S4_abs", s4_partial),
         "s4_contrast_out_of_range": ("S4_abs", s4_hi),
         "s6_partial_nan_row": ("S6_tv", s6_partial),
+        "complex_dtype": ("occupancy_abs", occ.astype(complex)),                                  # rev-13 #1: no complex
+        "s3_tau_fractional_count": ("S3_tau", _corrupt(_tau_pre(pool), lambda b: b.__setitem__((0, 1), b[0, 1] + 0.5))),
+        "s3_loggap_sm_nan_sp_positive": ("S3_loggap", _corrupt(lgp, lambda b: (b["sm"][0].__setitem__(0, np.nan),
+                                                                               b["sp"][0].__setitem__(0, 1.0)))),
+        "s7_sm_nan_cc_positive": ("S7_abs", _corrupt(s7p, lambda b: (b["sm"][0].__setitem__(0, np.nan),
+                                                                     b["cc"][0].__setitem__(0, 1.0)))),
+        "s4_present_zero_pair": ("S4_abs", s4_zero_pair),
     }
     for label, (chk, bad) in exact_cases.items():
         if not _srefused(chk, bad):
-            errs.append(f"precompute schema did NOT refuse {label} (rev-12 #2)")
+            errs.append(f"precompute schema did NOT refuse {label} (rev-12/rev-13)")
+    # rev-13 #4 — _canonicalize_pool refuses an unknown profile (no MIMIC fallback):
+    try:
+        _canonicalize_pool(pool[:1], "NOT_A_PROFILE", "test"); errs.append("canonicalize did NOT refuse unknown profile")
+    except RefusalError:
+        pass
     # POSITIVE — valid support-empty positive_gap_ks (no positive gaps) is a NE state, NOT a schema refusal:
     try:
         _validate_precompute({"owner": np.array([], int), "inv": np.array([], int), "nu": 0}, "positive_gap_ks", npool)

@@ -1,12 +1,30 @@
-# Oracle Realism Verifier — Design Family v3 (rev-14, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-15, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-13. The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Status:** DRAFT for Pi review. Supersedes rev-14 (Pi rev-13 GO-WITH-CHANGES). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
 build, reserved map-design draw, audit/evaluation seed, policy population, or run. There is **no production/trusted
 readiness claim.** Registered mode is a **BLOCKED STUB**: its invariants are DECLARED and its structured assembly +
 identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED — it never runs a statistic, never
 consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
 can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
+
+**Rev-15 changes folded (Pi rev-13 GO-WITH-CHANGES — 4 schema/identity refinements):**
+1. **Real dtype only (#1)** — `_pc_arr` requires real integer/floating (not `np.number`, which admits complex and
+   would lossily cast to float); bool excluded. Complex `occupancy`/`S3_tau` now refuse.
+2. **Cross-channel consistency (#2)** — the schema now refuses structurally impossible states each field would pass
+   alone: `S3_tau` `n0/n1/n2` integer-valued with `|C−D| ≤ n0` (retaining `n0 ≥ n1,n2`); `S3_loggap` `sm` finite IFF
+   `sp>0`; `S7` `sm` finite IFF `cc>0`; `S4` present rows require BOTH pair counts strictly `>0`; `S5`/`S6` each
+   sequence present in EXACTLY one LENGTH_BIN (S6 present rows nonneg summing to 1). Support-absence stays NE.
+3. **Five explicit identity layers (#3)** via reviewed FULL-MODULE-FILE hashes (transitively covering
+   `phase_spanning_indices`, verifier `_runs`, `coarsen_reference`, etc.): (1) estimator semantic, (2) estimator
+   implementation-source {engine, v2_verifier, phase0_pilot}, (3) engine canonicalization/schema/gate {engine,
+   randomization}, (4) map builder/apply source {map, v2_verifier}, (5) dependency/environment. The deterministic
+   config/dev-stable identities bind the four SOURCE layers (`SOURCE_IDENTITY_BUNDLE`); dependency stays in the
+   env-dependent timing artifact/dev_config. Walked back "map builder bound per-artifact via `map_identity`":
+   `map_identity` binds the map OUTPUT, not the builder implementation source (bound in layer 4).
+4. **Explicit profile→skeleton map (#4)** — `_canonicalize_pool` uses `_PROFILE_SKELETON` (all registered SD sources
+   enumerated) and REFUSES an unknown profile instead of a `"scid" in name` substring heuristic that mapped every
+   unknown string to MIMIC.
 
 **Rev-14 changes (Pi rev-12 authorized estimator wiring — FIRST group: run_size):**
 1. **`S2_ks` estimator wired.** `_s2_pre`/`_s2_re` implement the v2 run-size KS (MEAN over sequences of the
@@ -416,7 +434,7 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-14, Pi rev-9/rev-10/rev-12 authorized dev-only scope — all tested)
+## Delivered (rev-15, Pi rev-9/rev-10/rev-12/rev-13 authorized dev-only scope — all tested)
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
@@ -472,9 +490,9 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   artifact records the EXACT seed/namespace. Both PROVISIONAL; finalisation needs a separately-authorized power
   battery (Pi #7).
 - **SPARSE + PAIRED dev-boundary demo (Pi rev-7 #1, rev-8 #7; RC1/RC4/RC5 + rev-11–rev-14 follow-through)** —
-  `scripts/oracle_realism_v3_group_power.py` (hash **`1d33f94c…`** — successively
-  `cfdd4d67`→`2ffec14a`→`abe5c6f6`→`1d33f94c` as the dev stable identity was rebound to the semantic +
-  implementation-source identities and then the registry grew by the wired run_size group; the schemas AND the
+  `scripts/oracle_realism_v3_group_power.py` (hash **`e0384ee2…`** — successively
+  `cfdd4d67`→`2ffec14a`→`abe5c6f6`→`1d33f94c`→`e0384ee2` as the dev stable identity was rebound to the source
+  identity layers and the registry grew by the wired run_size group; the schemas AND the
   derive-not-trust canonicalization are a NO-OP on valid pipeline data — the component p-values/verdicts/evald/argmin
   are unchanged, confirming `sample_fixture`/`apply_coupling` already emit canonical records), via `gate_group_dev`
   with STRUCTURED arms:
@@ -500,16 +518,16 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   7 refusals; strict `p_g > α_group` (Pi #7).
 - **Per-profile + wired-engine benchmark (Pi #6; rev-11 repair, rev-12/rev-13 provenance/identity)** —
   `scripts/oracle_realism_v3_benchmark.py`: per-profile `Σ_experiment Σ_cell cost(route, profile volume)·B_main`,
-  DETERMINISTIC `config_identity` **`b3c1b00a…`** (re-minted `ef7a9280 → 34d1a50a → 25846fa2 → f3a75308 → b3c1b00a`; it now
-  binds SOURCE identities ONLY — `ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY` + `ESTIMATOR_IMPL_SOURCE_IDENTITY` — and is no
-  longer version-bearing; the env-dependent `ESTIMATOR_DEPENDENCY_IDENTITY` moved to the timing artifact, Pi rev-12
-  #3). The wired timing map records the EXACT `Bs` fixture seed (`236460273103544`) and is labelled TIMING-ONLY
+  DETERMINISTIC `config_identity` **`0e3b5b5c…`** (re-minted through `…→ b3c1b00a → 0e3b5b5c`; it now
+  binds the FOUR deterministic SOURCE identity layers (`SOURCE_IDENTITY_BUNDLE`: semantic + impl-source +
+  engine-canon/schema/gate + map-source) and is no longer version-bearing; the env-dependent
+  `ESTIMATOR_DEPENDENCY_IDENTITY` lives in the timing artifact, Pi rev-12/rev-13 #3). The wired timing map records the EXACT `Bs` fixture seed (`236460273103544`) and is labelled TIMING-ONLY
   (namespace `v3-benchmark-timing-map`, distinct from any reserved map-design artifact), with an assertion binding
   artifact seed to the fixture invocation. **Measured serialization + measured generation**; a **conservative 1.5×
   cap margin** (not merely <8h). Honest: SD-main ≈ 10.3 h does NOT fit one 8 h job → separately-gated per-group SD
   jobs. (Full per-group wired benchmark + re-mint follows as each remaining group's estimators are wired.)
 
-## Still open (Pi-authorized next scope; NOT yet done in rev-14)
+## Still open (Pi-authorized next scope; NOT yet done in rev-15)
 - **Reserved map-set + RNG-manifest generation** (generate, do NOT execute) — `gate_group_registered` binds to
   `RESERVED_MAP_SET_NOT_DRAWN` / `RESERVED_RNG_MANIFEST_NOT_BOUND`, so a real registered run is BLOCKED. The RNG
   manifest must bind exact per-role/stratum seeds + generator/coupling CODE identities + profile identity +
