@@ -1,12 +1,41 @@
-# Oracle Realism Verifier — Design Family v3 (rev-11, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-12, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-10 (which Pi PASSed for RC1–RC5). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Status:** DRAFT for Pi review. Supersedes rev-11. The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
 build, reserved map-design draw, audit/evaluation seed, policy population, or run. There is **no production/trusted
 readiness claim.** Registered mode is a **BLOCKED STUB**: its invariants are DECLARED and its structured assembly +
 identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED — it never runs a statistic, never
 consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
 can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
+
+**Rev-12 changes folded (Pi rev-10 authorized scope #3 — estimator/precompute/raw-record schemas):**
+1. **Per-estimator precompute schema.** `_validate_precompute(pre, check, n)` replaces the Inf-only check with a
+   fail-closed per-estimator schema: exact keys (dicts), shapes/dtypes, pooled length `n`, class-vector width `C`,
+   per-bin list lengths (`LENGTH_BINS`/`CLUSTER_BINS`), owner/inverse index ranges (`[0,n)` / `[0,nu)`), and legal
+   NaN locations — NaN is permitted ONLY as the per-sequence absent-in-bin sentinel (map/S4); count channels
+   (`sp`, `cc`, `class_tv`, `dt0`, S4 pair-columns) must be finite + nonnegative; Inf is never legal.
+2. **Raw-record schema.** `_validate_raw_records(pool)` runs in `_gate_core` BEFORE any precompute: each record must
+   satisfy the SequenceRecord invariants the estimators rely on — positive non-bool `L_total`, `K∈[1,L_total]`,
+   equal-length 1-D arrays, `class_ids` non-bool ints in `[0,C)`, finite nondecreasing float `timestamps`,
+   `cluster_ids` non-bool ints in `[0,K)`. A hand-built/corrupt record now refuses at the boundary instead of
+   crashing (or silently mis-binning) inside a precompute. Confirmed no-op on the real fixture / structural-zero /
+   coupled pools.
+3. **Adversarial self-tests.** Every real precompute validates clean; the malformed classes Pi enumerated refuse —
+   missing/extra keys, wrong dims/pooled length, wrong class width, owner/inverse length mismatch, out-of-range
+   owner/inverse indices, illegal NaN in a finite-only field, negative counts, Inf; and corrupt raw records
+   (non-finite timestamp, out-of-range class/cluster id, length mismatch) refuse.
+4. **Benchmark map provenance seed (Pi rev-11 Correction 1).** The wired benchmark's timing map is built from `Bs`
+   (`draw("mimic_scale_control", 2)`); its artifact now records the EXACT generating seed
+   `bseed("mimic_scale_control", 2) = 236460273103544` (not the convenient `seed=1`), is labelled a TIMING-ONLY map
+   (namespace `v3-benchmark-timing-map`, distinct from any reserved map-design artifact), and an assertion binds the
+   artifact seed to the fixture invocation. Owned: satisfying a mandatory provenance field with a convenient value is
+   the exact anti-pattern flagged before.
+5. **Semantic vs executable code identity (Pi rev-11 Correction 2).** `ESTIMATOR_PROTOCOL_IDENTITY` (which hashes only
+   the protocol + estimand identity STRINGS) is renamed `ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY`, and a distinct
+   `ESTIMATOR_CODE_IDENTITY` (hash of the actual estimator implementation source + numpy version) is added. BOTH are
+   bound into the benchmark `config_identity` and the dev stable identity. The rev-11 claim that a "positional/altered
+   estimator shows as identity drift" is withdrawn for the code case: the semantic hash does NOT catch an
+   implementation change with unchanged strings — the code identity does.
 
 **Rev-11 changes folded (Pi rev-10 PASS: required integration repair + RC5 follow-through):**
 1. **Required benchmark repair.** The rev-10 keyword-only estimator protocol broke `oracle_realism_v3_benchmark.py`,
@@ -15,10 +44,12 @@ can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Ac
    floor=500)` — registered benchmark floor semantics; `build_frozen_map(..., seed=1, N=N)`); the benchmark reruns
    clean. My rev-10 "all scripts rerun clean" claim was false — I had not executed every downstream caller after the
    protocol change; owned and corrected.
-2. **Estimator/protocol code identity + benchmark re-mint.** New `ESTIMATOR_PROTOCOL_IDENTITY` (hash of the
-   keyword-only calling convention + every estimator identity) is bound into the deterministic benchmark
-   `config_identity`, which is re-minted (`ef7a9280…` → `34d1a50a…`) rather than cited stale; a positional/altered
-   estimator now shows as identity drift.
+2. **Estimator/protocol identity + benchmark re-mint.** A new estimator identity is bound into the deterministic
+   benchmark `config_identity`, which is re-minted (`ef7a9280…` → `34d1a50a…`) rather than cited stale. *(Corrected by
+   rev-12 Correction 2: that identity is SEMANTIC — protocol + estimand strings — and is renamed
+   `ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY`; the rev-11 claim that "a positional/altered estimator shows as identity
+   drift" OVERCLAIMED for the code case. A distinct executable `ESTIMATOR_CODE_IDENTITY` now catches implementation
+   changes; both are bound.)*
 3. **RC5 follow-through.** The dev stable identity is extended with `ESTIMATOR_PROTOCOL_IDENTITY`; the demo asserts the
    base and perturbed stable identities are EQUAL in every paired trial (same counts/maps/registry/protocol/namespace;
    only sequence content differs). Input content hashes remain separate evidence (deferred to the manifest work).
@@ -346,7 +377,7 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-11, Pi rev-9/rev-10 authorized dev-only scope — all tested)
+## Delivered (rev-12, Pi rev-9/rev-10 authorized dev-only scope — all tested)
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
@@ -381,6 +412,15 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   quotas/order only** (no divisibility refusal), NOT registered statistic execution. Each per-permutation recompute
   reproduces the EXACT v2 estimand to `<1e-9`. The low-level kernel is `_gate_group` (private/test-only). 10
   estimators wired (burst-timing + class-mark); the other three groups are the next wiring step.
+- **Fail-closed input schemas (Pi rev-8 #5 / rev-10 #3; rev-12)** — `_validate_raw_records(pool)` (run in
+  `_gate_core` BEFORE precompute) enforces the SequenceRecord invariants the estimators rely on
+  (`L_total`/`K`/array-length consistency, `class_ids∈[0,C)`, finite nondecreasing `timestamps`, `cluster_ids∈[0,K)`),
+  and `_validate_precompute(pre, check, n)` is a per-estimator schema (exact keys, shapes/dtypes, pooled length,
+  class-width `C`, per-bin list lengths, owner/inverse index ranges, legal-NaN-only-as-absent-sentinel, finite
+  nonnegative count channels). Adversarial self-tests: every real precompute validates; each malformed class (missing/
+  extra keys, wrong dims/width/length, index out-of-range, illegal NaN/Inf, negative counts) and each corrupt raw
+  record (non-finite timestamp, out-of-range class/cluster id, length mismatch) refuses. Confirmed a no-op on real
+  fixture / structural-zero / coupled pools.
 - **Registered-N boundary preflight (Pi #2, canonical constructor Pi #3, provenance Pi #6)** —
   `scripts/oracle_realism_v3_regn_preflight.py` (hash **`da499057…`**): at N=8000 the bounded S3_loggap map ISSUES
   (evaluable) — the dev-scale "structurally un-calibratable" claim is WITHDRAWN; both S3 exemptions rest on the
@@ -388,8 +428,10 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   without each. **structural-zero uses the CANONICAL multiscale constructor** (means 18/60/250), and the map
   artifact records the EXACT seed/namespace. Both PROVISIONAL; finalisation needs a separately-authorized power
   battery (Pi #7).
-- **SPARSE + PAIRED dev-boundary demo (Pi rev-7 #1, rev-8 #7; RC1/RC4/RC5 + rev-11 follow-through)** —
-  `scripts/oracle_realism_v3_group_power.py` (hash **`cfdd4d67…`**), via `gate_group_dev` with STRUCTURED arms:
+- **SPARSE + PAIRED dev-boundary demo (Pi rev-7 #1, rev-8 #7; RC1/RC4/RC5 + rev-11/rev-12 follow-through)** —
+  `scripts/oracle_realism_v3_group_power.py` (hash **`2ffec14a…`** — `cfdd4d67…` before rev-12 Correction 2 rebound
+  the dev stable identity to the SEMANTIC + CODE identities; the precompute/raw-record schemas are a no-op on valid
+  data and the component p-values/verdicts are unchanged), via `gate_group_dev` with STRUCTURED arms:
   perturbs EXACTLY one experiment and ASSERTS (hashed, timestamps included) every non-target arm is identical to null
   AND the target arm changed; evaluates base AND its perturbation under the SAME permutation seed and compares
   `p_g(perturbed)` to `p_g(base)` with a STRICT `<` (RC4); structural-zero data AND map-design sample via the
@@ -410,16 +452,19 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   S3_loggap null-exceedance `0.0`.
 - **Randomization** — `scripts/oracle_realism_v3_randomization.py`: MC == exhaustive `p_g`; conservative finite-`B`;
   7 refusals; strict `p_g > α_group` (Pi #7).
-- **Per-profile + wired-engine benchmark (Pi #6; rev-11 repair + re-mint)** — `scripts/oracle_realism_v3_benchmark.py`:
-  per-profile `Σ_experiment Σ_cell cost(route, profile volume)·B_main`, DETERMINISTIC `config_identity`
-  **`34d1a50a…`** (re-minted from the stale `ef7a9280…`: the wired measurement's keyword-only `recompute`/seeded
-  `build_frozen_map` calls were repaired and the new `ESTIMATOR_PROTOCOL_IDENTITY` bound into the config), separate
-  from the timing artifact; **measured serialization + measured generation**; a **conservative 1.5× cap margin** (not
-  merely <8h); a WIRED-ENGINE measurement of the burst-timing group's actual engine costs. Honest: SD-main ≈ 10.3 h
-  does NOT fit one 8 h job → separately-gated per-group SD jobs. (Full per-group wired benchmark + re-mint follows as
-  each remaining group's estimators are wired.)
+- **Per-profile + wired-engine benchmark (Pi #6; rev-11 repair, rev-12 provenance/identity)** —
+  `scripts/oracle_realism_v3_benchmark.py`: per-profile `Σ_experiment Σ_cell cost(route, profile volume)·B_main`,
+  DETERMINISTIC `config_identity` **`25846fa2…`** (re-minted across `ef7a9280…` → `34d1a50a…` → `25846fa2…`: the
+  wired measurement's keyword-only `recompute`/seeded `build_frozen_map` calls were repaired, and BOTH the
+  `ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY` and the new executable `ESTIMATOR_CODE_IDENTITY` are bound). The wired
+  timing map records the EXACT `Bs` fixture seed (`236460273103544`) and is labelled TIMING-ONLY (namespace
+  `v3-benchmark-timing-map`, distinct from any reserved map-design artifact), with an assertion binding artifact
+  seed to the fixture invocation. Separate from the timing artifact; **measured serialization + measured generation**;
+  a **conservative 1.5× cap margin** (not merely <8h). Honest: SD-main ≈ 10.3 h does NOT fit one 8 h job →
+  separately-gated per-group SD jobs. (Full per-group wired benchmark + re-mint follows as each remaining group's
+  estimators are wired.)
 
-## Still open (Pi-authorized next scope; NOT yet done in rev-11)
+## Still open (Pi-authorized next scope; NOT yet done in rev-12)
 - **Reserved map-set + RNG-manifest generation** (generate, do NOT execute) — `gate_group_registered` binds to
   `RESERVED_MAP_SET_NOT_DRAWN` / `RESERVED_RNG_MANIFEST_NOT_BOUND`, so a real registered run is BLOCKED. The RNG
   manifest must bind exact per-role/stratum seeds + generator/coupling CODE identities + profile identity +
@@ -428,9 +473,6 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   missing/extra/duplicate failing closed (Pi rev-7 #6). The final Δ-aligned exemption then needs a separately-
   authorized calibration/power battery using the frozen map (Pi rev-7 #7). *(This single bullet consolidates the
   previously duplicated RNG-manifest and map-set bullets — Pi rev-9 contract change.)*
-- **Estimator/precompute/raw-record schemas** (Pi rev-8 #5) — `_validate_precompute` rejects Inf only; add
-  per-estimator key/shape/owner-index/vector-width/pooled-length + legal-NaN + raw-record finiteness schemas.
-  (Marking the low-level kernel private/test-only is DONE in rev-10 RC5: it is renamed `_gate_group`.)
 - **Boundary-short canonical map** (Pi rev-8 #8) — route boundary-short through its canonical control constructor.
 - **Wire the length_density / run_size / phase_seam estimators** into the engine (burst-timing + class-mark are
   wired); then a full per-group **wired benchmark at the registered `B=20000`** per exact profile/stratum, with the

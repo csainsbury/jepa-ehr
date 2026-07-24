@@ -207,15 +207,25 @@ def main():
 
     # --- WIRED-ENGINE measurement (Pi rev-6 #6): the ACTUAL engine's MEASURED generation (precompute) + per-perm
     #     recompute + serialization for the burst-timing group, with a CONSERVATIVE cap margin (not merely <8h) ---
-    from scripts.oracle_realism_v3_engine import ESTIMATORS as _EST, ESTIMATOR_PROTOCOL_IDENTITY
+    from scripts.oracle_realism_v3_engine import (ESTIMATORS as _EST, ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY,
+                                                   ESTIMATOR_CODE_IDENTITY)
     from scripts.oracle_realism_v3_map import build_frozen_map as _bfm
     poolw = A + Bs; nAw = len(A); Mw = len(poolw); BW = 500
+    # Pi rev-11 Correction 1: the benchmark timing map is built from Bs, so its provenance seed MUST be the EXACT
+    # fixture seed that generated Bs (not a convenient seed=1); it is labelled a TIMING-ONLY map, distinct from any
+    # reserved map-design artifact.
+    bs_seed = bseed("mimic_scale_control", 2)                              # the seed that generated Bs = draw(...,2)
+    BENCH_MAP_NS = "v3-benchmark-timing-map"
     wired = {}
     for chk in ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S3_loggap"):
         est = _EST[chk]
         t = time.perf_counter(); pre = est["precompute"](poolw); gen = time.perf_counter() - t     # MEASURED generation
-        groups = (_bfm(Bs, chk, profile="mimic_scale_control", regime="full", seed=1, N=N)["groups"]
-                  if est["map_carrying"] else None)
+        groups = None
+        if est["map_carrying"]:
+            _tmap = _bfm(Bs, chk, profile="mimic_scale_control", regime="full", namespace=BENCH_MAP_NS,
+                         seed=bs_seed, N=N)
+            assert _tmap["seed"] == bs_seed, "benchmark timing-map seed must equal the fixture seed that drew Bs"
+            groups = _tmap["groups"]
         t = time.perf_counter()
         for _ in range(BW):
             idx = rng.permutation(Mw); m = np.zeros(Mw, bool); m[idx[:nAw]] = True
@@ -229,6 +239,8 @@ def main():
     bt_secs = B_bt * perperm_sum + gen_total + serialize_per_cell * BT_CELLS
     bt_h = bt_secs / 3600
     wired_engine = {"group": "burst_timing", "cells": BT_CELLS, "B": B_bt, "per_check": wired,
+                    "timing_map_provenance": {"namespace": BENCH_MAP_NS, "seed": bs_seed, "source": "mimic_scale_control",
+                                              "note": "TIMING-ONLY map (exact Bs fixture seed); NOT the reserved map-design artifact"},
                     "measured_generation_secs_total": round(gen_total, 1),
                     "measured_serialize_secs_per_cell": round(serialize_per_cell, 8),
                     "job_hours_measured": round(bt_h, 3), "margin": MARGIN,
@@ -246,8 +258,10 @@ def main():
         "formula": "sum_experiment sum_cell cost(route, profile_volume) * B_main + serialize + MM_proxy; NO audit",
         "route_of": ROUTE_OF, "ks_volume": KS_VOLUME, "ks_mult": KS_MULT,
         "profile_volumes": prof_vol, "cell_routing": routing, "B_main": B_MAIN,
-        # Pi rev-10: bind the engine/estimator protocol identity so the wired benchmark's compute basis is not stale.
-        "estimator_protocol_identity": ESTIMATOR_PROTOCOL_IDENTITY})
+        # Pi rev-11 Correction 2: bind BOTH the semantic estimator identity AND the executable code identity so the
+        # wired benchmark's compute basis is neither stale nor blind to an implementation change.
+        "estimator_protocol_semantic_identity": ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY,
+        "estimator_code_identity": ESTIMATOR_CODE_IDENTITY})
 
     timing_artifact = {
         "environment": {"python": sys.version.split()[0], "numpy": np.__version__,

@@ -22,6 +22,7 @@ Development-only. Run: PYTHONPATH=<repo> python3 scripts/oracle_realism_v3_engin
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 
 import numpy as np
@@ -258,12 +259,22 @@ ESTIMATORS = {
                "map_carrying": True, "identity": "v2.cond_maxbin.mean(distinct_class_frac)@CLUSTER_BINS[ref_coarsen]"},
 }
 
-# ESTIMATOR/protocol CODE identity (Pi rev-10 RC5 follow-through + benchmark re-mint): a hash of the calling
-# convention + every registered estimator identity. Any change to the recompute protocol or an estimator's estimand
-# changes this hash — so a stale positional caller or a silently altered estimator is caught by identity drift.
-ESTIMATOR_PROTOCOL_IDENTITY = canonical_hash({
+# Estimator identities — SEMANTIC vs CODE are DISTINCT (Pi rev-11 Correction 2).
+# SEMANTIC = calling convention + declared estimand identity STRINGS. It catches a protocol change or a re-declared
+# estimand, but NOT a silent change to an estimator's implementation (the strings can stay fixed).
+ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY = canonical_hash({
     "protocol": "recompute(pre, mask, *, groups, floor) keyword-only",
     "estimators": {k: v["identity"] for k, v in ESTIMATORS.items()}})
+
+# CODE = a deterministic hash of the actual estimator IMPLEMENTATION source (precompute/recompute helpers + map
+# reducers) plus the numpy version. A change to any estimator's code changes this hash even if every identity string
+# is unchanged — this is what actually catches an altered implementation. Both identities are bound together.
+_ESTIMATOR_IMPL_FNS = (_tau_pre, _tau_re, _dt0_pre, _dt0_re, _gap_pre, _gap_re, _loggap_pre, _loggap_re,
+                       _s4_pre, _s4_re, _classtv_pre, _classtv_re, _occ_pre, _occ_re,
+                       _lenbin_scalar_pre, _s5_pre, _s6_pre, _s7_pre, _map_re_scalar, _map_re_vector)
+ESTIMATOR_CODE_IDENTITY = canonical_hash({
+    "impl_src": {fn.__name__: inspect.getsource(fn) for fn in _ESTIMATOR_IMPL_FNS},
+    "numpy": np.__version__})
 
 
 # --- executable per-experiment RNG identity (a hash of the seed-derivation, not a string; Pi #4/#7) ------
@@ -402,19 +413,137 @@ REGISTERED = {"N_per_arm": 8000, "B": 20000, "floor": 500, "alpha_group": ALPHA_
               "rng_manifest_identity": "RESERVED_RNG_MANIFEST_NOT_BOUND"}
 
 
-def _validate_precompute(pre, check):
-    """Refuse an Inf / malformed precompute BEFORE any statistic (Pi #4). NaN is permitted ONLY as the explicit
-    per-sequence 'absent-in-bin' sentinel in map/S4 precomputes; Inf is always malformed."""
-    def bad(a):
-        a = np.asarray(a, float)
-        return a.size and np.isinf(a).any()
-    if isinstance(pre, dict):
-        for k, v in pre.items():
-            for arr in (v if isinstance(v, list) else [v]):
-                if isinstance(arr, np.ndarray) and bad(arr):
-                    raise RefusalError(f"infinite precompute in {check}:{k}")
-    elif isinstance(pre, np.ndarray) and bad(pre):
-        raise RefusalError(f"infinite precompute in {check}")
+def _is_int_arr(a):
+    return isinstance(a, np.ndarray) and np.issubdtype(a.dtype, np.integer) and a.dtype != np.bool_
+
+
+def _validate_raw_records(pool):
+    """Refuse a malformed RAW pool BEFORE precompute (Pi rev-8 #5): each record must satisfy the SequenceRecord
+    invariants the estimators rely on (finite nondecreasing timestamps, class_ids in [0,C), cluster_ids in [0,K),
+    consistent lengths). A hand-built / corrupt record thus refuses at the boundary instead of crashing (or silently
+    mis-binning) inside a precompute. The engine derives nothing from a record it has not validated."""
+    for i, r in enumerate(pool):
+        for attr in ("L_total", "K", "class_ids", "timestamps", "cluster_ids"):
+            if not hasattr(r, attr):
+                raise RefusalError(f"raw record {i} missing attribute {attr}")
+        L, K = r.L_total, r.K
+        if isinstance(L, bool) or not isinstance(L, (int, np.integer)) or int(L) < 1:
+            raise RefusalError(f"raw record {i} L_total {L!r} must be a positive non-bool int")
+        if isinstance(K, bool) or not isinstance(K, (int, np.integer)) or not (1 <= int(K) <= int(L)):
+            raise RefusalError(f"raw record {i} K {K!r} must be an int in [1, L_total]")
+        L = int(L); K = int(K)
+        ci, ts, cl = np.asarray(r.class_ids), np.asarray(r.timestamps), np.asarray(r.cluster_ids)
+        if not (ci.ndim == ts.ndim == cl.ndim == 1 and ci.shape[0] == ts.shape[0] == cl.shape[0] == L):
+            raise RefusalError(f"raw record {i} class_ids/timestamps/cluster_ids must be 1-D of length L_total")
+        if not _is_int_arr(ci) or int(ci.min()) < 0 or int(ci.max()) >= C:
+            raise RefusalError(f"raw record {i} class_ids must be non-bool ints in [0,{C})")
+        if (ts.dtype == np.bool_ or not np.issubdtype(ts.dtype, np.floating) or not np.isfinite(ts).all()):
+            raise RefusalError(f"raw record {i} timestamps must be finite floats")
+        if L > 1 and bool(np.any(np.diff(ts) < 0)):
+            raise RefusalError(f"raw record {i} timestamps must be nondecreasing")
+        if not _is_int_arr(cl) or int(cl.min()) < 0 or int(cl.max()) >= K:
+            raise RefusalError(f"raw record {i} cluster_ids must be non-bool ints in [0,K)")
+    return pool
+
+
+# --- per-estimator precompute SCHEMA (Pi rev-8 #5 / rev-10 #3): validate keys/shapes/dtypes/index-ranges and legal
+#     NaN locations BEFORE any statistic. NaN is legal ONLY as the per-sequence 'absent-in-bin' sentinel (map/S4);
+#     Inf is never legal; count/pair channels (sp, cc, class_tv, dt0, S4 pair-cols) must be finite + nonnegative. ---
+def _pc_arr(a, name, check):
+    if not isinstance(a, np.ndarray):
+        raise RefusalError(f"{check} precompute {name} must be an ndarray, got {type(a).__name__}")
+    return a
+
+
+def _pc_no_inf(a, name, check):
+    aa = np.asarray(a, float)
+    if aa.size and bool(np.isinf(aa).any()):
+        raise RefusalError(f"{check} precompute {name} contains Inf (never legal)")
+
+
+def _pc_all_finite(a, name, check):
+    aa = np.asarray(a, float)
+    if aa.size and not bool(np.isfinite(aa).all()):
+        raise RefusalError(f"{check} precompute {name} must be all-finite (no NaN/Inf here)")
+
+
+def _pc_nonneg(a, name, check):
+    aa = np.asarray(a, float); fin = np.isfinite(aa)
+    if bool(fin.any()) and bool((aa[fin] < 0).any()):
+        raise RefusalError(f"{check} precompute {name} must be nonnegative")
+
+
+def _validate_precompute(pre, check, n):
+    """Fail-closed per-estimator precompute schema. `n` is the pooled sequence count. Returns `pre` if valid, else
+    raises RefusalError BEFORE any statistic runs."""
+    if check not in ESTIMATORS:
+        raise RefusalError(f"precompute schema: unknown/unregistered estimator {check}")
+    nbL, nbC = len(LENGTH_BINS), len(CLUSTER_BINS)
+
+    def col2d(a, name, cols, *, nan_ok):
+        a = _pc_arr(a, name, check)
+        if a.ndim != 2 or a.shape[0] != n or a.shape[1] != cols:
+            raise RefusalError(f"{check} precompute {name} shape {a.shape} != ({n},{cols})")
+        (_pc_no_inf if nan_ok else _pc_all_finite)(a, name, check)
+        return a
+
+    def row1d(a, name, *, nan_ok):
+        a = _pc_arr(a, name, check)
+        if a.ndim != 1 or a.shape[0] != n:
+            raise RefusalError(f"{check} precompute {name} shape {a.shape} != ({n},)")
+        (_pc_no_inf if nan_ok else _pc_all_finite)(a, name, check)
+        return a
+
+    def keys(d, want):
+        if not isinstance(d, dict):
+            raise RefusalError(f"{check} precompute must be a dict, got {type(d).__name__}")
+        if set(d) != set(want):
+            raise RefusalError(f"{check} precompute keys {sorted(d)} != {sorted(want)}")
+
+    def binlist(x, name, nb, cols, *, nonneg=False):
+        if not isinstance(x, list) or len(x) != nb:
+            raise RefusalError(f"{check} precompute {name} must be a list of {nb} per-bin arrays (got {len(x) if isinstance(x, list) else type(x).__name__})")
+        for b, arr in enumerate(x):
+            a = row1d(arr, f"{name}[{b}]", nan_ok=True) if cols is None else col2d(arr, f"{name}[{b}]", cols, nan_ok=True)
+            if nonneg:                                          # count channels are finite + nonneg (no NaN)
+                _pc_all_finite(a, f"{name}[{b}]", check); _pc_nonneg(a, f"{name}[{b}]", check)
+
+    if check == "S3_tau":
+        a = _pc_arr(pre, "components", check)
+        if a.ndim != 2 or a.shape[0] != n or a.shape[1] < 4:
+            raise RefusalError(f"S3_tau precompute shape {a.shape} invalid (want (n,>=4))")
+        _pc_all_finite(a, "components", check)
+    elif check == "delta_t_zero_abs":
+        _pc_nonneg(col2d(pre, "dt0", 2, nan_ok=False), "dt0", check)
+    elif check == "positive_gap_ks":
+        keys(pre, ("owner", "inv", "nu"))
+        owner, inv, nu = pre["owner"], pre["inv"], pre["nu"]
+        if not (_is_int_arr(np.asarray(owner)) and _is_int_arr(np.asarray(inv))):
+            raise RefusalError("positive_gap_ks owner/inv must be integer arrays")
+        owner, inv = np.asarray(owner), np.asarray(inv)
+        if owner.ndim != 1 or inv.ndim != 1 or owner.shape[0] != inv.shape[0]:
+            raise RefusalError("positive_gap_ks owner/inv must be equal-length 1-D arrays")
+        if isinstance(nu, bool) or not isinstance(nu, (int, np.integer)) or int(nu) <= 0:
+            raise RefusalError("positive_gap_ks nu must be a positive non-bool int")
+        if owner.size and (int(owner.min()) < 0 or int(owner.max()) >= n):
+            raise RefusalError("positive_gap_ks owner index out of [0,n)")
+        if inv.size and (int(inv.min()) < 0 or int(inv.max()) >= int(nu)):
+            raise RefusalError("positive_gap_ks inv index out of [0,nu)")
+    elif check == "S3_loggap":
+        keys(pre, ("sm", "sp")); binlist(pre["sm"], "sm", nbC, None); binlist(pre["sp"], "sp", nbC, None, nonneg=True)
+    elif check == "S4_abs":
+        a = col2d(pre, "s4", 3, nan_ok=True)                    # [contrast, same_pairs, adj_pairs]; NaN row = absent
+        _pc_nonneg(a[:, 1:], "s4[pair-counts]", check)
+    elif check == "class_tv":
+        _pc_nonneg(col2d(pre, "class_tv", C, nan_ok=False), "class_tv", check)
+    elif check == "occupancy_abs":
+        row1d(pre, "occ", nan_ok=False)
+    elif check == "S5_abs":
+        keys(pre, ("sm",)); binlist(pre["sm"], "sm", nbL, None)
+    elif check == "S6_tv":
+        keys(pre, ("vec",)); binlist(pre["vec"], "vec", nbL, C)
+    elif check == "S7_abs":
+        keys(pre, ("sm", "cc")); binlist(pre["sm"], "sm", nbC, None); binlist(pre["cc"], "cc", nbC, None, nonneg=True)
     return pre
 
 
@@ -454,7 +583,8 @@ def _gate_core(group_id, experiments, *, floor, B, seed, alpha_group, map_for_ce
     canon = CANONICAL_GROUPS[group_id]; cells = []
     for cc in canon["cells"]:
         est = ESTIMATORS[cc["check"]]; pool = experiments[cc["exp"]]["pool"]
-        pre = _validate_precompute(est["precompute"](pool), cc["check"])
+        _validate_raw_records(pool)                               # raw-record schema BEFORE precompute (Pi rev-8 #5)
+        pre = _validate_precompute(est["precompute"](pool), cc["check"], len(pool))
         cell = {"cell_id": cc["cell_id"], "exp": cc["exp"], "check": cc["check"], "pre": pre, "delta": cc["delta"]}
         if cc["map_carrying"]:
             cell["map_art"] = map_for_cell(cc)                        # bound + validated by the caller's mode
@@ -522,7 +652,9 @@ def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_
               "map_identities": map_ids,
               "map_set_identity": canonical_hash([map_ids[k] for k in sorted(map_ids)]),
               "registry_identity": CANONICAL_REGISTRY_HASH,
-              "estimator_protocol_identity": ESTIMATOR_PROTOCOL_IDENTITY,   # RC5 follow-through: engine/estimator code identity
+              # Pi rev-11 Correction 2: bind BOTH the semantic estimator identity AND the executable code identity.
+              "estimator_protocol_semantic_identity": ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY,
+              "estimator_code_identity": ESTIMATOR_CODE_IDENTITY,
               "namespace": (nss[0] if nss else None),
               "seed_law": "caller-supplied dev seed; assignments = numpy default_rng(seed) per-stratum permutation"}
     res["dev_config"] = {**stable, "seed": seed}
@@ -682,6 +814,74 @@ def selftest():
         if not ((a is None and b is None) or (a is not None and b is not None and abs(a - b) < 1e-12)):
             errs.append(f"RC1 {chk}: floor-insensitive estimator differs across floors: {a} vs {b}")
 
+    # PRECOMPUTE + RAW-RECORD SCHEMA (Pi rev-8 #5 / rev-10 #3): every REAL precompute validates; each malformed
+    # class refuses BEFORE any statistic; corrupt raw records refuse at the boundary (not deep inside a precompute).
+    npool = len(pool)
+    for chk in ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S4_abs", "class_tv", "occupancy_abs",
+                "S3_loggap", "S5_abs", "S6_tv", "S7_abs"):
+        try:
+            _validate_precompute(ESTIMATORS[chk]["precompute"](pool), chk, npool)
+        except RefusalError as ex:
+            errs.append(f"precompute schema rejected a VALID {chk}: {ex}")
+
+    def _corrupt(a, fn):
+        if isinstance(a, np.ndarray):
+            b = a.copy()
+        elif isinstance(a, dict):
+            b = {k: ([x.copy() if isinstance(x, np.ndarray) else x for x in v] if isinstance(v, list)
+                     else (v.copy() if isinstance(v, np.ndarray) else v)) for k, v in a.items()}
+        else:
+            b = a
+        fn(b); return b
+
+    def _srefused(check, pre):
+        try:
+            _validate_precompute(pre, check, npool); return False
+        except RefusalError:
+            return True
+    occ = _occ_pre(pool); ctv = _classtv_pre(pool); dt0 = _dt0_pre(pool)
+    gp = _gap_pre(pool); lgp = _loggap_pre(pool); s4p = _s4_pre(pool); s6p = _s6_pre(pool); s7p = _s7_pre(pool)
+    ar = np.arange                                                   # index-0 selector helper
+    schema_cases = {
+        "wrong_pooled_length": ("occupancy_abs", occ[:-1]),
+        "inf_in_finite_field": ("occupancy_abs", _corrupt(occ, lambda b: b.__setitem__(0, np.inf))),
+        "illegal_nan_finite_field": ("occupancy_abs", _corrupt(occ, lambda b: b.__setitem__(0, np.nan))),
+        "wrong_class_width": ("class_tv", ctv[:, :C - 1]),
+        "negative_count": ("class_tv", _corrupt(ctv, lambda b: b.__setitem__((0, 0), -1.0))),
+        "dt0_wrong_cols": ("delta_t_zero_abs", dt0[:, :1]),
+        "gap_missing_key": ("positive_gap_ks", {"owner": gp["owner"], "inv": gp["inv"]}),
+        "gap_owner_inv_mismatch": ("positive_gap_ks", {**gp, "inv": gp["inv"][:-1]}),
+        "gap_owner_out_of_range": ("positive_gap_ks", {**gp, "owner": np.where(ar(len(gp["owner"])) == 0, npool, gp["owner"])}),
+        "gap_inv_out_of_range": ("positive_gap_ks", {**gp, "inv": np.where(ar(len(gp["inv"])) == 0, gp["nu"], gp["inv"])}),
+        "loggap_wrong_nb": ("S3_loggap", {"sm": lgp["sm"][:-1], "sp": lgp["sp"]}),
+        "loggap_sp_has_nan": ("S3_loggap", _corrupt(lgp, lambda b: b["sp"][0].__setitem__(0, np.nan))),
+        "loggap_sm_has_inf": ("S3_loggap", _corrupt(lgp, lambda b: b["sm"][0].__setitem__(0, np.inf))),
+        "s4_pair_negative": ("S4_abs", _corrupt(s4p, lambda b: b.__setitem__((0, 1), -1.0))),
+        "s6_extra_key": ("S6_tv", {**s6p, "sneaky": 1}),
+        "s6_vec_wrong_width": ("S6_tv", {"vec": [v[:, :C - 1] for v in s6p["vec"]]}),
+        "s7_cc_has_inf": ("S7_abs", _corrupt(s7p, lambda b: b["cc"][0].__setitem__(0, np.inf))),
+    }
+    for label, (chk, bad) in schema_cases.items():
+        if not _srefused(chk, bad):
+            errs.append(f"precompute schema did NOT refuse {label}")
+
+    # raw-record schema: the valid pool passes; hand-corrupted records refuse at the boundary
+    import dataclasses as _dc
+    if _validate_raw_records(pool) is not pool:
+        errs.append("raw-record schema rejected a valid pool")
+    g0 = pool[0]
+    raw_bad = {
+        "nonfinite_timestamp": _dc.replace(g0, timestamps=np.where(ar(g0.L_total) == 0, np.inf, g0.timestamps).astype(float)),
+        "class_id_out_of_range": _dc.replace(g0, class_ids=np.where(ar(g0.L_total) == 0, C, g0.class_ids).astype(int)),
+        "cluster_id_out_of_range": _dc.replace(g0, cluster_ids=np.where(ar(g0.L_total) == 0, g0.K, g0.cluster_ids).astype(int)),
+        "length_mismatch": _dc.replace(g0, class_ids=g0.class_ids[:-1]),
+    }
+    for label, rec in raw_bad.items():
+        try:
+            _validate_raw_records([rec]); errs.append(f"raw-record schema did NOT refuse {label}")
+        except RefusalError:
+            pass
+
     # ADVERSARIAL: Pi rev-7 #4 fail-open cases now REFUSE / NE (were PASS p_g=1.0)
     # (a) all-NaN precompute -> observed discrepancy non-finite -> group NOT_EVALUABLE, NOT a zero-filled PASS
     nan_cells = [{"cell_id": "SD|e0|occupancy_abs", "exp": "e0", "check": "occupancy_abs",
@@ -708,7 +908,8 @@ def selftest():
                                                       map_artifacts={}, dev_config_hash="WRONG"),
         "dev_extra_map": lambda: gate_group_dev("G_full_burst_timing", {}, seed=1, B=99, floor=60,   # RC5: no extras
                                                 map_artifacts={"BOGUS_CELL": {}}, dev_config_hash=_dch_burst),
-        "inf_precompute": lambda: _validate_precompute(np.array([1.0, np.inf, 2.0]), "x"),
+        "inf_precompute": lambda: _validate_precompute(np.array([1.0, np.inf, 2.0]), "occupancy_abs", 3),
+        "unknown_check_schema": lambda: _validate_precompute(np.zeros(3), "NOT_A_CHECK", 3),
     }
     for name, fn in ref.items():
         if not _refused(fn):
