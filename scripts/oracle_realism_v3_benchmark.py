@@ -207,19 +207,20 @@ def main():
 
     # --- WIRED-ENGINE measurement (Pi rev-6 #6): the ACTUAL engine's MEASURED generation (precompute) + per-perm
     #     recompute + serialization for the burst-timing group, with a CONSERVATIVE cap margin (not merely <8h) ---
-    from scripts.oracle_realism_v3_engine import ESTIMATORS as _EST
+    from scripts.oracle_realism_v3_engine import ESTIMATORS as _EST, ESTIMATOR_PROTOCOL_IDENTITY
     from scripts.oracle_realism_v3_map import build_frozen_map as _bfm
     poolw = A + Bs; nAw = len(A); Mw = len(poolw); BW = 500
     wired = {}
     for chk in ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S3_loggap"):
         est = _EST[chk]
         t = time.perf_counter(); pre = est["precompute"](poolw); gen = time.perf_counter() - t     # MEASURED generation
-        groups = (_bfm(Bs, chk, profile="mimic_scale_control", regime="full", N=N)["groups"]
+        groups = (_bfm(Bs, chk, profile="mimic_scale_control", regime="full", seed=1, N=N)["groups"]
                   if est["map_carrying"] else None)
         t = time.perf_counter()
         for _ in range(BW):
             idx = rng.permutation(Mw); m = np.zeros(Mw, bool); m[idx[:nAw]] = True
-            est["recompute"](pre, m, groups)
+            # Pi rev-10 required repair: keyword-only estimator protocol; registered benchmark floor semantics.
+            est["recompute"](pre, m, groups=groups, floor=500)
         wired[chk] = {"generation_secs": round(gen, 3), "per_perm_ms": round((time.perf_counter() - t) / BW * 1000, 4)}
     BT_CELLS, BT_EXP, MARGIN = 36, 9, 1.5
     B_bt = int(np.ceil(BT_CELLS / (0.04 / 6) / 100.0)) * 100                                       # 5400
@@ -244,7 +245,9 @@ def main():
     config_identity = canonical_hash({
         "formula": "sum_experiment sum_cell cost(route, profile_volume) * B_main + serialize + MM_proxy; NO audit",
         "route_of": ROUTE_OF, "ks_volume": KS_VOLUME, "ks_mult": KS_MULT,
-        "profile_volumes": prof_vol, "cell_routing": routing, "B_main": B_MAIN})
+        "profile_volumes": prof_vol, "cell_routing": routing, "B_main": B_MAIN,
+        # Pi rev-10: bind the engine/estimator protocol identity so the wired benchmark's compute basis is not stale.
+        "estimator_protocol_identity": ESTIMATOR_PROTOCOL_IDENTITY})
 
     timing_artifact = {
         "environment": {"python": sys.version.split()[0], "numpy": np.__version__,

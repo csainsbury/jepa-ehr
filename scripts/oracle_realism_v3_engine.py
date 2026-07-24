@@ -258,6 +258,13 @@ ESTIMATORS = {
                "map_carrying": True, "identity": "v2.cond_maxbin.mean(distinct_class_frac)@CLUSTER_BINS[ref_coarsen]"},
 }
 
+# ESTIMATOR/protocol CODE identity (Pi rev-10 RC5 follow-through + benchmark re-mint): a hash of the calling
+# convention + every registered estimator identity. Any change to the recompute protocol or an estimator's estimand
+# changes this hash — so a stale positional caller or a silently altered estimator is caught by identity drift.
+ESTIMATOR_PROTOCOL_IDENTITY = canonical_hash({
+    "protocol": "recompute(pre, mask, *, groups, floor) keyword-only",
+    "estimators": {k: v["identity"] for k, v in ESTIMATORS.items()}})
+
 
 # --- executable per-experiment RNG identity (a hash of the seed-derivation, not a string; Pi #4/#7) ------
 def rng_identity(source_profile, replicate_seed, coupled_component):
@@ -515,6 +522,7 @@ def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_
               "map_identities": map_ids,
               "map_set_identity": canonical_hash([map_ids[k] for k in sorted(map_ids)]),
               "registry_identity": CANONICAL_REGISTRY_HASH,
+              "estimator_protocol_identity": ESTIMATOR_PROTOCOL_IDENTITY,   # RC5 follow-through: engine/estimator code identity
               "namespace": (nss[0] if nss else None),
               "seed_law": "caller-supplied dev seed; assignments = numpy default_rng(seed) per-stratum permutation"}
     res["dev_config"] = {**stable, "seed": seed}
