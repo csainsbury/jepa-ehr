@@ -154,11 +154,29 @@ BOUNDARY_EXEMPT_DEGENERATE = set(_BOUNDARY_EXPECTED_NE)          # v2 predeclare
 BOUNDARY_EXEMPT_UNCALIBRATABLE = {"S3_tau", "S3_loggap"}         # PROVISIONAL (pending Δ-aligned confirmation)
 
 
+# Boundary-short bounded-length control allocation (Pi rev-22 ruling 1: `width_proportional` SELECTED).
+# The canonical boundary profile declares L ~ U{1..7}; exchangeability strata are a sampling/permutation device
+# and must not silently change that target law. The canonical bands ((1,2),(3,4),(5,7)) have widths 2/2/3, so the
+# allocation is width-proportional — NOT the equal-ish structural-zero allocation, which stays unchanged.
+# `oracle_realism_v3_constructors` recomputes this from the band widths and self-tests equality with this value
+# (the registry is the authority; the constructor module must agree with it, not the other way round).
+BOUNDARY_ALLOC = (2286, 2286, 3428)
+assert sum(BOUNDARY_ALLOC) == REGISTERED_N, (BOUNDARY_ALLOC, REGISTERED_N)
+
+
 def _strata(condition):
-    """Exact exchangeability strata (ids + per-stratum candidate/reference quotas), NOT prose."""
-    if condition in ("structural_zero", "boundary"):
+    """Exact exchangeability strata (ids + per-stratum candidate/reference quotas), NOT prose.
+
+    Structural-zero and boundary-short are BOTH length-stratified but do NOT share an allocation (Pi rev-22 #1):
+    structural-zero keeps the equal-ish control allocation (2667,2667,2666) over its three multiscale length
+    strata; boundary-short uses the width-proportional allocation (2286,2286,3428) over its three bounded bands,
+    which preserves the declared uniform length marginal."""
+    if condition == "structural_zero":
         return [{"stratum_id": f"len_{i}", "n_candidate": a, "n_reference": a}
                 for i, a in enumerate(CONTROL_ALLOC)]           # permute WITHIN each length stratum
+    if condition == "boundary":
+        return [{"stratum_id": f"len_{i}", "n_candidate": a, "n_reference": a}
+                for i, a in enumerate(BOUNDARY_ALLOC)]
     return [{"stratum_id": "pooled_source", "n_candidate": REGISTERED_N, "n_reference": REGISTERED_N}]
 
 

@@ -21,19 +21,28 @@ are disjoint length bands partitioning the canonical support `L in [1,7]`, drawn
 family and varying the per-stratum bounds — exactly the shape of `_multiscale`, which keeps the length family
 and varies the per-stratum location.
 
-**The band partition forces a design choice that is NOT ours to make**, so BOTH coherent variants are
-implemented, tested and reported, and the caller must name one (there is no default):
+**Pi rev-22 ruling 1 SELECTED `width_proportional`** and it is now BOUND as the registered design, not a
+caller-selected runtime option (`REGISTERED_BOUNDED_VARIANT`; canonical entry point
+`registered_bounded_arms`). The registry's boundary quotas are re-minted to `(2286, 2286, 3428)`;
+structural-zero keeps `(2667, 2667, 2666)` unchanged.
 
-  * `registered_alloc` — keeps the registered `CONTROL_ALLOC (2667, 2667, 2666)`. Because the bands have widths
-    2 / 2 / 3, equal-ish allocation over unequal widths CHANGES the pooled marginal length law from uniform on
-    {1..7} to a band mixture (P(L=1) = 0.1667 vs 0.1429 uniform).
-  * `width_proportional` — allocates in proportion to band width, which restores the uniform {1..7} marginal up
-    to integer-allocation rounding (EXACT iff `n_total` is a multiple of 7; at the registered N=8000 the residual
-    is 2.4e-05, i.e. 1300× smaller than `registered_alloc`'s), but changes the registered stratum allocation to
-    (2286, 2286, 3428).
+  * `width_proportional` (**REGISTERED**) — allocates in proportion to band width, restoring the declared uniform
+    `L ~ U{1..7}` marginal up to integer-allocation rounding (EXACT iff `n_total` is a multiple of 7; residual
+    2.4e-05 at N=8000). Exchangeability strata are a sampling/permutation device and must not silently change the
+    target law.
+  * `equal_control_alloc` (**DEV COMPARISON ONLY**) — the structural-zero-style equal-ish
+    `CONTROL_ALLOC (2667, 2667, 2666)`. Retained solely so the marginal-distortion evidence stays reproducible:
+    over widths 2/2/3 it distorts the pooled law by 0.031774 and under-represents `L ∈ {5,6,7}` by ~22 %.
+    *(It was named `registered_alloc` at rev-22; after the ruling that name asserted the opposite of the truth,
+    so it is renamed.)*
 
-Either way the STRUCTURAL bound `L <= 7` is preserved, so the boundary-short guarantee that no 8-item block can
-form (S9 seam checks NE by construction) still holds — that is asserted, not assumed.
+**Fail-closed band validation (Pi rev-22 #1).** The rev-22 validator derived its "structural bound" from the
+CALLER's own bands, so shifted bands such as `((2,3),(4,5),(6,8))` validated and admitted `L=8` — 26 such
+sequences in the reproduction — while the route identity still asserted the S9-NE guarantee. `validate_bands`
+now enforces, for ANY bands, that they are integer/non-bool, ordered, contiguous, disjoint, start at 1, end at
+7, and stay strictly below the 8-item block size; the canonical construction additionally requires EXACTLY
+`BOUNDED_BANDS`. The `L <= 7` check is made against the CANONICAL support, never the caller's maximum, and a
+route identity is refused outright for any payload permitting `L >= 8`.
 
 DEVELOPMENT ONLY. This implements and identity-binds the constructor route; it does NOT perform the registered
 bounded-control draw, which stays RESERVED along with the map-set and RNG manifest. No calibration/evaluation
@@ -67,7 +76,18 @@ BOUNDED_SKELETON = "MIMIC"             # must agree with ENG._PROFILE_SKELETON
 BOUNDED_BANDS = ((1, 2), (3, 4), (5, 7))
 BOUNDED_STRATUM_IDS = ("len_0", "len_1", "len_2")
 
-ALLOC_VARIANTS = ("registered_alloc", "width_proportional")
+ALLOC_VARIANTS = ("equal_control_alloc", "width_proportional")
+
+# Pi rev-22 ruling 1: `width_proportional` is SELECTED and BOUND as the registered design — it is NOT a
+# caller-selected runtime option. `equal_control_alloc` survives only as a clearly development-labelled comparison
+# route, so the marginal-distortion evidence stays reproducible.
+REGISTERED_BOUNDED_VARIANT = "width_proportional"
+DEV_COMPARISON_VARIANTS = tuple(v for v in ALLOC_VARIANTS if v != REGISTERED_BOUNDED_VARIANT)
+
+# The canonical bounded support, stated independently of any caller-supplied bands. The S9 guarantee is a
+# statement about THIS support: L <= 7 => no 8-item block can form.
+CANONICAL_SUPPORT_MIN, CANONICAL_SUPPORT_MAX = 1, 7
+S9_BLOCK_SIZE = 8
 
 # Canonical constructor route ids — MUST agree with the RNG manifest's `_constructor_route` (self-tested).
 CANONICAL_ROUTE = {
@@ -90,7 +110,49 @@ def dseed(*parts):
 # ---------------------------------------------------------------------------------------------------
 # allocation
 # ---------------------------------------------------------------------------------------------------
+def validate_bands(bands, *, canonical):
+    """FAIL-CLOSED band validation (Pi rev-22 #1).
+
+    The rev-22 constructor derived its "structural bound" from the caller's own bands (`max(band)`), so shifted
+    bands such as `((2,3),(4,5),(6,8))` validated and admitted `L=8` while the route identity still asserted the
+    S9-NE guarantee. A route identity must NEVER state that guarantee for a payload permitting an 8-item block.
+
+    Structural requirements enforced for ANY bands: integer, non-bool, ordered, contiguous, disjoint, non-empty,
+    starting at the canonical support minimum, ending at the canonical support maximum, and strictly below the
+    S9 block size. `canonical=True` additionally requires EXACTLY `BOUNDED_BANDS` — the registered construction
+    does not accept a caller-chosen partition at all."""
+    if not isinstance(bands, (tuple, list)) or not bands:
+        raise RefusalError(f"bands {bands!r} must be a non-empty sequence")
+    if canonical and tuple(tuple(b) for b in bands) != BOUNDED_BANDS:
+        raise RefusalError(f"canonical construction requires exactly {BOUNDED_BANDS}, got {tuple(bands)!r}")
+    prev_hi = None
+    for b in bands:
+        if not isinstance(b, (tuple, list)) or len(b) != 2:
+            raise RefusalError(f"band {b!r} must be a (lo, hi) pair")
+        lo, hi = b
+        for v in (lo, hi):
+            if isinstance(v, bool) or not isinstance(v, (int, np.integer)):
+                raise RefusalError(f"band bound {v!r} must be a non-bool integer")
+        lo, hi = int(lo), int(hi)
+        if lo > hi:
+            raise RefusalError(f"band ({lo},{hi}) is empty/inverted")
+        if prev_hi is None:
+            if lo != CANONICAL_SUPPORT_MIN:
+                raise RefusalError(f"bands must start at the canonical support minimum "
+                                   f"{CANONICAL_SUPPORT_MIN}, got {lo}")
+        elif lo != prev_hi + 1:
+            raise RefusalError(f"bands are not contiguous/disjoint at ({lo},{hi}) after {prev_hi}")
+        prev_hi = hi
+    if prev_hi != CANONICAL_SUPPORT_MAX:
+        raise RefusalError(f"bands must end at the canonical support maximum {CANONICAL_SUPPORT_MAX}, "
+                           f"got {prev_hi}")
+    if prev_hi >= S9_BLOCK_SIZE:
+        raise RefusalError(f"bands admit L>={S9_BLOCK_SIZE}, which breaks the S9 seam-NE guarantee")
+    return True
+
+
 def band_widths(bands=BOUNDED_BANDS):
+    validate_bands(bands, canonical=False)
     return tuple(hi - lo + 1 for lo, hi in bands)
 
 
@@ -98,9 +160,10 @@ def bounded_allocation(variant, n_total=REGISTERED_N, bands=BOUNDED_BANDS):
     """Per-stratum counts summing EXACTLY to n_total. Fail-closed on an unknown variant — there is no default."""
     if variant not in ALLOC_VARIANTS:
         raise RefusalError(f"unknown bounded allocation variant {variant!r}; expected one of {ALLOC_VARIANTS}")
+    validate_bands(bands, canonical=False)
     if isinstance(n_total, bool) or not isinstance(n_total, int) or n_total <= 0:
         raise RefusalError(f"n_total {n_total!r} must be a positive non-bool int")
-    if variant == "registered_alloc":
+    if variant == "equal_control_alloc":
         if n_total == REGISTERED_N:
             alloc = tuple(int(a) for a in CONTROL_ALLOC)
         else:                                            # dev-scaled, same equal-ish shape, exact sum
@@ -147,12 +210,14 @@ def _band_profile(lo, hi):
     return {**base, "length": {**base["length"], "min": int(lo), "max": int(hi)}}
 
 
-def build_bounded_length_control_strata(variant, tag, seed, *, n_total=REGISTERED_N, bands=BOUNDED_BANDS):
+def build_bounded_length_control_strata(variant, tag, seed, *, n_total=REGISTERED_N, bands=BOUNDED_BANDS,
+                                        canonical=False):
     """The CANONICAL `bounded_length_control` route: one `uniform_int` draw per disjoint length band.
 
     Returns {stratum_id: [records]}. The per-stratum seed derivation mirrors `_multiscale`'s
     (`_derive_seed(tag, seed, i)`), so the strata are independent and the whole draw is reproducible from
     (tag, seed)."""
+    validate_bands(bands, canonical=canonical)
     alloc = bounded_allocation(variant, n_total, bands)
     if len(bands) != len(BOUNDED_STRATUM_IDS):
         raise RefusalError(f"{len(bands)} bands but {len(BOUNDED_STRATUM_IDS)} canonical stratum ids")
@@ -163,31 +228,41 @@ def build_bounded_length_control_strata(variant, tag, seed, *, n_total=REGISTERE
     return out
 
 
-def bounded_control_arms(variant, exp_id, trial, *, n_per_arm=REGISTERED_N, bands=BOUNDED_BANDS):
+def registered_bounded_arms(exp_id, trial, *, n_per_arm=REGISTERED_N):
+    """THE canonical registered bounded-control assembly (Pi rev-22 ruling 1).
+
+    Pins the SELECTED variant and the canonical bands and validates them with `canonical=True`, so the registered
+    construction cannot be re-parameterised by a caller. The registered DRAW itself remains reserved; this builds
+    development fixtures through the canonical route."""
+    return bounded_control_arms(REGISTERED_BOUNDED_VARIANT, exp_id, trial,
+                                n_per_arm=n_per_arm, bands=BOUNDED_BANDS, canonical=True)
+
+
+def bounded_control_arms(variant, exp_id, trial, *, n_per_arm=REGISTERED_N, bands=BOUNDED_BANDS,
+                         canonical=False):
     """{stratum_id: {candidate, reference}} for the boundary-short experiment, conformant with the canonical
     group's stratum ids and order. `exp_id` enters every seed (Pi rev-6 #1b: no cross-experiment reuse)."""
     cand = build_bounded_length_control_strata(
-        variant, f"bsc|{exp_id}", int(dseed("bs_cand", variant, exp_id, trial)), n_total=n_per_arm, bands=bands)
+        variant, f"bsc|{exp_id}", int(dseed("bs_cand", variant, exp_id, trial)), n_total=n_per_arm, bands=bands,
+        canonical=canonical)
     ref = build_bounded_length_control_strata(
-        variant, f"bsr|{exp_id}", int(dseed("bs_ref", variant, exp_id, trial)), n_total=n_per_arm, bands=bands)
+        variant, f"bsr|{exp_id}", int(dseed("bs_ref", variant, exp_id, trial)), n_total=n_per_arm, bands=bands,
+        canonical=canonical)
     return {sid: {"candidate": list(cand[sid]), "reference": list(ref[sid])} for sid in BOUNDED_STRATUM_IDS}
 
 
 # ---------------------------------------------------------------------------------------------------
 # validation (fail-closed; the constructor's guarantees are asserted, never assumed)
 # ---------------------------------------------------------------------------------------------------
-def validate_bounded_strata(strata, variant, *, n_total=REGISTERED_N, bands=BOUNDED_BANDS):
+def validate_bounded_strata(strata, variant, *, n_total=REGISTERED_N, bands=BOUNDED_BANDS,
+                            canonical=False):
     """REFUSE unless: canonical stratum ids in order; exact per-stratum counts; every record's length inside ITS
     OWN band; the global structural bound L <= max(band) preserved; bands disjoint, ordered and covering."""
     if list(strata) != list(BOUNDED_STRATUM_IDS):
         raise RefusalError(f"stratum ids/order {list(strata)} != canonical {list(BOUNDED_STRATUM_IDS)}")
-    prev_hi = None
-    for lo, hi in bands:
-        if lo > hi or (prev_hi is not None and lo != prev_hi + 1):
-            raise RefusalError(f"bands {bands} are not ordered, disjoint and contiguous")
-        prev_hi = hi
+    validate_bands(bands, canonical=canonical)
     alloc = bounded_allocation(variant, n_total, bands)
-    hard_max = bands[-1][1]
+    hard_max = CANONICAL_SUPPORT_MAX      # the CANONICAL bound, never the caller's own max (Pi rev-22 #1)
     for i, sid in enumerate(BOUNDED_STRATUM_IDS):
         recs = strata[sid]; lo, hi = bands[i]
         if len(recs) != alloc[i]:
@@ -202,9 +277,10 @@ def validate_bounded_strata(strata, variant, *, n_total=REGISTERED_N, bands=BOUN
     return True
 
 
-def constructor_route_identity(variant, *, n_total=REGISTERED_N, bands=BOUNDED_BANDS):
+def constructor_route_identity(variant, *, n_total=REGISTERED_N, bands=BOUNDED_BANDS, canonical=False):
     """Deterministic identity for the bounded route: route id + bands + allocation + the exact per-band profile
     payloads + the fixture implementation identity. Seed-independent (it identifies the ROUTE, not a draw)."""
+    validate_bands(bands, canonical=canonical)     # never assert the S9 guarantee for a payload permitting L>=8
     return canonical_hash({
         "route": CANONICAL_ROUTE[BOUNDED_PROFILE],
         "profile": BOUNDED_PROFILE, "skeleton": BOUNDED_SKELETON,
@@ -214,7 +290,9 @@ def constructor_route_identity(variant, *, n_total=REGISTERED_N, bands=BOUNDED_B
         "band_profiles": [_band_profile(lo, hi) for lo, hi in bands],
         "seed_law": "per-stratum _derive_seed(tag, seed, band_index); tag carries the experiment id",
         "fixture_impl": FIXTURE_IMPL,
-        "structural_bound": f"L<={bands[-1][1]} preserved => no 8-item block => S9 seam checks NE by construction",
+        "structural_bound": (f"L<={CANONICAL_SUPPORT_MAX} enforced against the CANONICAL support (not the "
+                            f"caller bands) => no {S9_BLOCK_SIZE}-item block => S9 seam checks NE by construction"),
+        "registered_variant": REGISTERED_BOUNDED_VARIANT, "is_registered_variant": variant == REGISTERED_BOUNDED_VARIANT,
     })
 
 
@@ -241,7 +319,7 @@ def selftest():
         errs.append(f"skeleton disagreement: engine {ENG._PROFILE_SKELETON[BOUNDED_PROFILE]!r} != {BOUNDED_SKELETON!r}")
 
     # 1. allocations partition exactly; the registered variant reproduces CONTROL_ALLOC at the registered N
-    if bounded_allocation("registered_alloc", REGISTERED_N) != tuple(int(a) for a in CONTROL_ALLOC):
+    if bounded_allocation("equal_control_alloc", REGISTERED_N) != tuple(int(a) for a in CONTROL_ALLOC):
         errs.append("registered_alloc does not reproduce CONTROL_ALLOC at the registered N")
     for v in ALLOC_VARIANTS:
         for n in (REGISTERED_N, n_dev, 601):
@@ -253,7 +331,7 @@ def selftest():
     ref = uniform_reference_pmf()
     support = len(ref)
     wp = pooled_length_pmf("width_proportional", REGISTERED_N)
-    ra = pooled_length_pmf("registered_alloc", REGISTERED_N)
+    ra = pooled_length_pmf("equal_control_alloc", REGISTERED_N)
     wp_dev = max(abs(wp[l] - ref[l]) for l in ref)
     ra_dev = max(abs(ra[l] - ref[l]) for l in ref)
     if wp_dev > 1.0 / REGISTERED_N:                        # rounding bound: at most one record per band
@@ -317,33 +395,92 @@ def selftest():
         errs.append(f"adversarial case ACCEPTED but must refuse: {label}")
 
     refused(lambda: bounded_allocation("no_such_variant", n_dev), "unknown allocation variant")
-    refused(lambda: bounded_allocation("registered_alloc", 0), "non-positive n_total")
-    refused(lambda: bounded_allocation("registered_alloc", True), "bool n_total")
-    good = bounded_control_arms("registered_alloc", "boundary_short", 2, n_per_arm=n_dev)
+    refused(lambda: bounded_allocation("equal_control_alloc", 0), "non-positive n_total")
+    refused(lambda: bounded_allocation("equal_control_alloc", True), "bool n_total")
+    good = bounded_control_arms("equal_control_alloc", "boundary_short", 2, n_per_arm=n_dev)
     good_strata = {sid: good[sid]["candidate"] for sid in BOUNDED_STRATUM_IDS}
     refused(lambda: validate_bounded_strata({k: v for k, v in list(good_strata.items())[:2]},
-                                            "registered_alloc", n_total=n_dev), "missing stratum")
+                                            "equal_control_alloc", n_total=n_dev), "missing stratum")
     refused(lambda: validate_bounded_strata({**good_strata, "len_0": good_strata["len_0"][:-1]},
-                                            "registered_alloc", n_total=n_dev), "short stratum count")
+                                            "equal_control_alloc", n_total=n_dev), "short stratum count")
     swapped = {**good_strata, "len_0": good_strata["len_2"], "len_2": good_strata["len_0"]}
-    refused(lambda: validate_bounded_strata(swapped, "registered_alloc", n_total=n_dev),
+    refused(lambda: validate_bounded_strata(swapped, "equal_control_alloc", n_total=n_dev),
             "records outside their own band (swapped strata)")
-    refused(lambda: validate_bounded_strata(good_strata, "registered_alloc", n_total=n_dev,
+    refused(lambda: validate_bounded_strata(good_strata, "equal_control_alloc", n_total=n_dev,
                                             bands=((1, 2), (4, 5), (6, 7))), "non-contiguous bands")
 
+    # 6b. BAND adversarial battery (Pi rev-22 #1) — the exact defect Pi reproduced, plus its neighbours.
+    #     Each must refuse at BUILD time, not merely fail validation after the records already exist.
+    bad_bands = {
+        "shifted_admits_L8": ((2, 3), (4, 5), (6, 8)),          # Pi's reproduction: validated, gave max L=8
+        "expanded_admits_L8": ((1, 2), (3, 4), (5, 8)),
+        "starts_above_support_min": ((2, 3), (4, 5), (6, 7)),
+        "ends_below_support_max": ((1, 2), (3, 4), (5, 6)),
+        "gap_between_bands": ((1, 2), (4, 5), (6, 7)),
+        "overlapping_bands": ((1, 3), (3, 4), (5, 7)),
+        "inverted_band": ((1, 2), (4, 3), (5, 7)),
+        "non_integer_bound": ((1, 2), (3, 4.5), (5, 7)),
+        "bool_bound": ((True, 2), (3, 4), (5, 7)),
+        "empty_bands": (),
+        "malformed_band_shape": ((1, 2, 3), (4, 5), (6, 7)),
+    }
+    for label, bb in bad_bands.items():
+        refused(lambda bb=bb: validate_bands(bb, canonical=False), f"bands {label}")
+        refused(lambda bb=bb: build_bounded_length_control_strata("width_proportional", "t", 1,
+                                                                  n_total=n_dev, bands=bb), f"BUILD with {label}")
+        refused(lambda bb=bb: constructor_route_identity("width_proportional", n_total=n_dev, bands=bb),
+                f"route identity for {label}")
+    # a structurally legal but NON-canonical partition must still be refused by the CANONICAL construction
+    refused(lambda: validate_bands(((1, 3), (4, 5), (6, 7)), canonical=True), "non-canonical bands under canonical")
+    refused(lambda: build_bounded_length_control_strata("width_proportional", "t", 1, n_total=n_dev,
+                                                        bands=((1, 3), (4, 5), (6, 7)), canonical=True),
+            "canonical BUILD with a non-canonical partition")
+    # no drawn record may ever reach the S9 block size, under any accepted bands
+    for v in ALLOC_VARIANTS:
+        st = build_bounded_length_control_strata(v, "s9probe", 5, n_total=n_dev)
+        mx = max(int(r.L_total) for recs in st.values() for r in recs)
+        if mx >= S9_BLOCK_SIZE:
+            errs.append(f"{v}: drew L={mx} >= S9 block size {S9_BLOCK_SIZE}")
+
     # 7. reproducibility: same (variant, exp, trial) => identical draw; different exp => different draw
-    a1 = bounded_control_arms("registered_alloc", "boundary_short", 3, n_per_arm=200)
-    a2 = bounded_control_arms("registered_alloc", "boundary_short", 3, n_per_arm=200)
+    a1 = bounded_control_arms("equal_control_alloc", "boundary_short", 3, n_per_arm=200)
+    a2 = bounded_control_arms("equal_control_alloc", "boundary_short", 3, n_per_arm=200)
     def h(arms):
         return canonical_hash({sid: {ro: [[int(r.L_total), r.class_ids.tolist(),
                                            np.asarray(r.timestamps).tolist()] for r in arms[sid][ro]]
                                      for ro in ("candidate", "reference")} for sid in BOUNDED_STRATUM_IDS})
     if h(a1) != h(a2):
         errs.append("constructor is not reproducible for the same (variant, exp, trial)")
-    if h(a1) == h(bounded_control_arms("registered_alloc", "other_exp", 3, n_per_arm=200)):
+    if h(a1) == h(bounded_control_arms("equal_control_alloc", "other_exp", 3, n_per_arm=200)):
         errs.append("exp_id does not enter the seed derivation (cross-experiment reuse)")
     if h(a1) == h(bounded_control_arms("width_proportional", "boundary_short", 3, n_per_arm=200)):
         errs.append("allocation variant does not change the draw")
+
+    # 8. Pi rev-22 ruling 1: the SELECTED variant is bound as the registered design and agrees with the registry.
+    import scripts.oracle_realism_v3_registry as _REG
+    if REGISTERED_BOUNDED_VARIANT != "width_proportional":
+        errs.append(f"registered bounded variant is {REGISTERED_BOUNDED_VARIANT!r}, ruling selected width_proportional")
+    if bounded_allocation(REGISTERED_BOUNDED_VARIANT, REGISTERED_N) != tuple(int(a) for a in _REG.BOUNDARY_ALLOC):
+        errs.append(f"constructor allocation {bounded_allocation(REGISTERED_BOUNDED_VARIANT, REGISTERED_N)} "
+                    f"!= registry BOUNDARY_ALLOC {tuple(_REG.BOUNDARY_ALLOC)}")
+    # structural-zero quotas must be UNCHANGED by this ruling
+    sz = [c for c in _REG.build_sd_cells(False) if c["scope"] == "in" and c["source"] == "structural_zero_control"]
+    if sz and [s["n_candidate"] for s in sz[0]["exchangeability_strata"]] != list(CONTROL_ALLOC):
+        errs.append("structural-zero quotas changed; the ruling required them unchanged")
+    # the registered entry point pins variant AND bands, and cannot be re-parameterised
+    reg_arms = registered_bounded_arms("boundary_short", 4, n_per_arm=n_dev)
+    if list(reg_arms) != list(BOUNDED_STRATUM_IDS):
+        errs.append(f"registered_bounded_arms stratum order {list(reg_arms)} != canonical")
+    for role in ("candidate", "reference"):
+        try:
+            validate_bounded_strata({sid: reg_arms[sid][role] for sid in BOUNDED_STRATUM_IDS},
+                                    REGISTERED_BOUNDED_VARIANT, n_total=n_dev, canonical=True)
+        except RefusalError as ex:
+            errs.append(f"registered_bounded_arms/{role} failed canonical validation: {ex}")
+    # the registered route identity must record that it IS the registered variant, and differ from the dev route
+    if constructor_route_identity(REGISTERED_BOUNDED_VARIANT, canonical=True) == \
+            constructor_route_identity(DEV_COMPARISON_VARIANTS[0]):
+        errs.append("registered and dev-comparison route identities collide")
 
     return errs
 
@@ -373,9 +510,24 @@ def main():
                 "preserves_registered_allocation": list(bounded_allocation(v, REGISTERED_N)) == list(CONTROL_ALLOC),
             } for v in ALLOC_VARIANTS
         },
-        "decision_required": (
-            "band widths are 2/2/3, so a three-stratum bounded control CANNOT simultaneously keep the registered "
-            "allocation (2667,2667,2666) and the uniform L~U{1..7} pooled marginal. `registered_alloc` keeps the "
+        "decision_taken_by_reviewer": (
+            "Pi rev-22 ruling 1 SELECTED `width_proportional` (2286,2286,3428): exchangeability strata are a "
+            "sampling/permutation device and must not silently change the declared L~U{1..7} target law; the tiny "
+            "integer-rounding residual is preferable to a 0.031774 marginal distortion. It is BOUND as the "
+            "registered design via REGISTERED_BOUNDED_VARIANT + registered_bounded_arms(), not offered as a "
+            "runtime option. `equal_control_alloc` is retained ONLY as a development-labelled comparison route. "
+            "Structural-zero keeps (2667,2667,2666) unchanged."),
+        "registered_variant": REGISTERED_BOUNDED_VARIANT,
+        "dev_comparison_variants": list(DEV_COMPARISON_VARIANTS),
+        "band_validation": (
+            "fail-closed: any bands must be integer/non-bool, ordered, contiguous, disjoint, start at "
+            f"{CANONICAL_SUPPORT_MIN}, end at {CANONICAL_SUPPORT_MAX} and stay below the S9 block size "
+            f"{S9_BLOCK_SIZE}; the canonical construction requires EXACTLY the canonical bands. The L bound is "
+            "checked against the CANONICAL support, never the caller's own maximum, and a route identity is "
+            "refused for any payload permitting L>=8 (the rev-22 shifted-band defect Pi reproduced)."),
+        "superseded_decision_note": (
+            "band widths are 2/2/3, so a three-stratum bounded control CANNOT simultaneously keep the equal-ish "
+            "allocation (2667,2667,2666) and the uniform L~U{1..7} pooled marginal. `equal_control_alloc` keeps the "
             "allocation and PERTURBS the marginal: P(L)=0.16669 on the short/mid bands and 0.11108 on the long "
             "band vs uniform 0.142857 — max deviation 0.031774, i.e. the long lengths L in {5,6,7} are "
             "under-represented by 22%. `width_proportional` restores uniformity to within integer-allocation "

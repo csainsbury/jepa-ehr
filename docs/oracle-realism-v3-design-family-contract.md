@@ -1,12 +1,23 @@
-# Oracle Realism Verifier — Design Family v3 (rev-22, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-23, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-21 (which folded Pi rev-19/20 GO-WITH-CHANGES). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Status:** DRAFT for Pi review. Supersedes rev-22 (Pi rev-22 = GO-WITH-CHANGES for dev work, NOT PASS for schema/compute freeze; ruling 1 + the band correction are folded here, rulings 2-4 and the benchmark rebuild are still open). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
 build, reserved map-design draw, audit/evaluation seed, policy population, or run. There is **no production/trusted
 readiness claim.** Registered mode is a **BLOCKED STUB**: its invariants are DECLARED and its structured assembly +
 identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED — it never runs a statistic, never
 consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
 can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
+
+**Rev-23 — Pi rev-22 ruling 1 + the band correction folded (rulings 2–4 and the benchmark rebuild remain OPEN).**
+Pi rev-22 = **GO-WITH-CHANGES for dev implementation; NOT PASS for schema/compute freeze or registered
+qualification** (reviewed `e06d346`; reproduced all self-tests, the 400/400 rank differential battery and all
+three schema IDs; stop line unchanged). Folded here: **ruling 1** — `width_proportional` selected and bound as
+the registered design, boundary quotas re-minted to (2286,2286,3428), structural-zero unchanged (§8.1/§8.2) —
+and the **fail-closed band correction**, a real defect in the rev-22 constructor that let shifted bands admit
+`L=8` while still asserting the S9-NE guarantee. Still open: ruling 2 (assignment RNG law with an issued root
+seed), ruling 3 (whole-block splits 7+7+6 / 10+10 with an exact `1..B` partition proof), ruling 4 (streamed masks
++ sorted ranks in the trusted modules), the canonical-constructor benchmark rebuild, and the remaining manifest
+items. See "Still open".
 
 **Rev-22 — the last three authorized dev-only items (Pi rev-19/20 "authorized next scope" 2, 3 and 4):**
 
@@ -67,7 +78,7 @@ untouched; `gate_group_registered` stays BLOCKED.
    fields (Pi reproduced unknown-field acceptance — now closed). FROZEN is a SEPARATE schema version, not a status
    toggle (versions bumped to `-draft-2`).
 4. **Identities + reproducible hash (#5)** — both manifests bind the **full-registry variant identities**
-   (`9a0ae6a8`/`e978ecd0`), the **manifest source identity**, and a **schema-definition identity**. A DETERMINISTIC
+   (`4d99e8aa`/`26693ca5`), the **manifest source identity**, and a **schema-definition identity**. A DETERMINISTIC
    `deterministic_schema_identity` (`56147c0f…`) is reported (field defs + versions + registry variants + the four
    SOURCE identity layers + manifest source — **excluding** the env-dependent dependency layer), so it reproduces
    across environments — fixing the rev-18 non-reproducible printed hash (which had folded the dependency layer).
@@ -520,14 +531,41 @@ support, `BOUNDED_BANDS = ((1,2),(3,4),(5,7))` — same family, per-stratum boun
 assumed**, so the boundary-short guarantee that no 8-item block can form (S9 seam checks NE by construction)
 provably survives.
 
-**An open design decision, deliberately not taken.** Band widths are 2/2/3, so a three-stratum bounded control
-**cannot simultaneously** keep the registered allocation and the uniform `L ~ U{1..7}` pooled marginal. Both
-variants are implemented, identity-bound and reported; the caller **must name one** (there is no default):
+**The design decision — RULED BY PI (rev-22 #1): `width_proportional` SELECTED.** Band widths are 2/2/3, so a
+three-stratum bounded control **cannot simultaneously** keep the equal-ish allocation and the uniform
+`L ~ U{1..7}` pooled marginal. Pi's reasoning: exchangeability strata are a sampling/permutation device and must
+not silently change the declared target law, so the tiny integer-rounding residual is preferable to a 0.031774
+marginal distortion. Consequences folded at rev-23:
+
+- boundary-short registry quotas re-mint to **(2286, 2286, 3428)**; **structural-zero keeps (2667, 2667, 2666)
+  unchanged** — the two stratified sources no longer share an allocation;
+- the selected variant is **BOUND as the registered design** (`REGISTERED_BOUNDED_VARIANT`, canonical entry point
+  `registered_bounded_arms`), not offered as a caller-selected runtime option;
+- `equal_control_alloc` survives **only as a development-labelled comparison route** so the marginal-distortion
+  evidence stays reproducible. *(It was named `registered_alloc` at rev-22; after the ruling that name asserted
+  the opposite of the truth, so it is renamed.)*
+- registry identities re-mint to **`4d99e8aa…` / `26693ca5…`**, canonical-registry `8338a2cf…`, boundary
+  `profile_config_identity` `039d4dd9…`, and the manifest schema identities to `cff03811…` / `ff0beb08…` /
+  `23972811…`.
+
+**Fail-closed band validation (Pi rev-22 #1 — a real defect in the rev-22 constructor).** The rev-22 validator
+derived its "structural bound" from the CALLER's bands (`max(band)`), so shifted bands `((2,3),(4,5),(6,8))`
+validated and admitted `L=8` — 26 such sequences in the reproduction — while the route identity still asserted
+the S9-NE guarantee. The rev-22 claim that `L ≤ 7` was "asserted, not assumed" was therefore **weaker than
+stated**: it asserted `L ≤ max(bands)`. `validate_bands` now enforces, for ANY bands, integer/non-bool, ordered,
+contiguous, disjoint, starting at 1, ending at 7 and strictly below the 8-item block size; the canonical
+construction additionally requires **exactly** `BOUNDED_BANDS`. The bound is checked against the CANONICAL
+support, never the caller's maximum, and a route identity is **refused outright** for any payload permitting
+`L ≥ 8`. Eleven adversarial band cases (shifted, expanded, starts-high, ends-low, gap, overlap, inverted,
+non-integer, bool, empty, malformed shape) are each refused at validation, at BUILD time, and at
+route-identity time.
+
+The two variants as they now stand:
 
 | variant | allocation @ N=8000 | pooled marginal | route identity |
 |---|---|---|---|
-| `registered_alloc` | **(2667, 2667, 2666)** — registered | perturbed: max deviation **0.031774**; long lengths `L∈{5,6,7}` under-represented ~22 % | `af2d41fd…` |
-| `width_proportional` | (2286, 2286, 3428) — **re-mints registry quotas + manifest allocation** | uniform to integer-allocation rounding (**2.4e-05** at N=8000; exact iff `n_total` is a multiple of 7) | `4bb56463…` |
+| `width_proportional` **(SELECTED — REGISTERED)** | **(2286, 2286, 3428)** | uniform to integer-allocation rounding (**2.4e-05** at N=8000; exact iff `n_total` is a multiple of 7) | `95b417b8…` |
+| `equal_control_alloc` *(dev comparison only)* | (2667, 2667, 2666) | perturbed: max deviation **0.031774**; long lengths `L∈{5,6,7}` under-represented ~22 % | `5b934389…` |
 
 Self-tests cover: route/skeleton agreement with the manifest and engine; exact allocation partitioning; the
 marginal-law claim (including that `width_proportional` is exact only at multiples of 7 — an earlier
@@ -635,6 +673,14 @@ The surrogate erred in BOTH directions because its per-item KS route mis-modelle
 **support cardinality**, not with the sequence or cluster count. This is exactly the rebuild Pi rev-5 #6 required
 (`Σ_experiment Σ_cell measured_cost`), and it is why a surrogate forecast must not gate a job plan.
 
+**PROVISIONAL (Pi rev-22 blocking correction).** The benchmark drew every arm through the GENERIC
+`draw_arm(profile)` rather than the canonical `_multiscale` (structural-zero) and bounded-length (boundary)
+structured constructors, so it has not yet delivered the per-**stratum-constructor** measurement that was asked
+for. Event volume and support cardinality drive the expensive estimators, so the exact hours and job counts below
+must be remeasured on canonically assembled arms before any compute freeze. The QUALITATIVE findings stand
+(surrogate routing is invalid; streaming and rank hygiene are needed); the precise 13.82 h / 5.50 h and the 3/2
+job counts are **provisional**.
+
 **Two groups bust the cap.** At the 8 h cap with the required 1.5× margin
 (`G_full_phase_seam` 20.73 h, `G_full_length_density` 8.26 h), so a single per-group job is NOT sufficient and the
 rev-6 "per-group jobs each fit" claim is **WITHDRAWN**. Cost is overwhelmingly permutation recompute (phase_seam:
@@ -662,8 +708,11 @@ precompute payloads.
 **Three registered-scale stages the surrogate never costed** (all invisible at the dev `B ≤ 5400`):
 
 1. **Assignment materialisation — RAM.** `_gate_group` builds `[canonical] + [perm]×B` masks for every experiment
-   before any statistic: `(B+1)·M` = 320 MB per experiment, **5.4–8.2 GB per full-support group**, held across the
-   whole recompute phase. Streaming masks per replicate instead is `O(M)` and brings peak RAM to 0.03–2.81 GB
+   before any statistic. Stated precisely (Pi rev-22): `(B+1)·M` = **320,016,000 mask bytes per `M=16000`
+   experiment**, hence a **≈2.88 GB assignment-mask payload for nine experiments** — the larger **5.4–8.2 GB**
+   figures are TOTAL process forecasts including pools, precomputes and other arrays, not masks alone. The masks
+   are held across the whole recompute phase. Streaming per replicate is `O(M)` and brings total peak RAM to
+   0.03–2.81 GB
    (`G_full_length_density` remains 2.81 GB because its `length_ks`/`count_ks` precompute indicator matrices are
    266 MB and 176 MB per SCID experiment — that part is irreducible without changing the estimator).
 2. **Min-p ranking — RAM, not time.** `cell_upper_p` forms an `A × A` boolean matrix (`A = B+1`): at `A = 20001`
@@ -712,7 +761,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   self-tests pass. Makes the declared `bounded_length_control` route executable (three disjoint length bands over
   `L∈[1,7]`), proves the `L≤7` structural bound and the S9 NE guarantee, makes `G_bounded_support` assemblable for
   the first time, keeps the old generic path refused, and identity-binds BOTH allocation variants
-  (**`af2d41fd…`** / **`4bb56463…`**) without adopting either. Registered draw RESERVED.
+  (registered `95b417b8…` / dev-comparison `5b934389…`). Registered draw RESERVED.
 - **Manifest allocation/constructor follow-through (rev-22, §8.2)** — `scripts/oracle_realism_v3_manifest.py`:
   `profile_config_identity` now DERIVES each source's stratum allocation from the registry instead of binding one
   hardcoded `(2667,2667,2666)` to every profile, and binds the real boundary constructor identities for both
@@ -723,7 +772,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
   audit prose removed; `B≥K/α` reframed as a conservative design rule. Both variants **M0 = 192 / 194**
-  (hashes **`9a0ae6a8…` / `e978ecd0…`**); `G=6`, `K_max=54`.
+  (hashes **`4d99e8aa…` / `26693ca5…`** — re-minted at rev-23 by the boundary allocation ruling); `G=6`, `K_max=54`.
 - **Issuance-complete map builder + HARDENED validator (Pi #3/#6; RC3)** — `scripts/oracle_realism_v3_map.py`
   (**development self-test** map-set hash **`5106ad09…`** — NOT the reserved registered map-set identity, which is
   not drawn): original bins + reference-owned `coarsen_reference` grouping + per-sequence means/equal-weight/floors
@@ -830,11 +879,44 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   missing/extra/duplicate failing closed (Pi rev-7 #6). The final Δ-aligned exemption then needs a separately-
   authorized calibration/power battery using the frozen map (Pi rev-7 #7). *(This single bullet consolidates the
   previously duplicated RNG-manifest and map-set bullets — Pi rev-9 contract change.)*
-- **Bounded-control ALLOCATION VARIANT decision** — §8.1 implements and identity-binds both
-  (`registered_alloc` keeps the registered quotas and perturbs the pooled length marginal; `width_proportional`
-  keeps the marginal and re-mints the registry quotas + manifest allocation). Neither is adopted; the registered
-  bounded-control draw stays RESERVED. *(The rev-8 #8 "route boundary-short through its canonical control
-  constructor" item is otherwise DONE — see §8.1.)*
+- **Pi rev-22 rulings 2–4 + the benchmark rebuild (NOT yet folded — the next dev increment):**
+  1. **Ruling 2 — assignment RNG law.** Counter-addressable per-replicate derivation is adopted in principle, but
+     the proposed `sha256(namespace|group|experiment|replicate_index)` **omits the issued assignment root seed**,
+     so issuance would not select the stream. Needs a structured, domain-separated canonical payload
+     (`law_version`, issued root seed / its manifest-bound identity, registry variant identity, `group_id`,
+     `experiment_id`, `replicate_index ∈ 1..B`), full digest or a frozen truncation width, `j=0` as the
+     deterministic observed split consuming no draw, one mask per `(experiment, j)` reused by every cell of that
+     experiment, IID-with-replacement retained. Requires a **separate assignment-law/root-seed section or a
+     distinct assignment RNG manifest** — fixture/coupling provenance is not assignment provenance. Tests:
+     monolithic == arbitrary block order == split == resume bit-for-bit; exact index coverage; root/group/
+     experiment/index domain separation; quota preservation; deterministic replay; duplicates accepted;
+     malformed/out-of-range indices refused.
+  2. **Ruling 3 — whole-block splits.** Split by whole checkpoint blocks (20 at `B=20000`), provisionally
+     phase/seam `7+7+6` and length/density `10+10`; re-price the worst shard as `ceil(n_blocks/jobs)/n_blocks`
+     (the reported equal-third 6.92 h is not the executable 7/20 maximum). Every plan/self-test must prove an
+     EXACT partition of `1..B` — the current check only proves `jobs × ceil(B/jobs) ≥ B`, which permits an extra
+     replicate. A split shard is an **integrity-gated block stage, not a scientific gate**: stop-on-failure within
+     a split means execution/identity/checkpoint failure; scientific stop-on-failure resumes only after the
+     complete group verdict. Final assembly must bind/verify cell order, block range, assignment-law/root
+     identity, registry variant, map set, RNG fixture manifest, floor, `B`, `α`, group, code identities and
+     per-block content/assignment digests, refusing missing/overlapping/duplicated/foreign blocks; checkpoint `E`
+     is ephemeral and must never be synced as a result artifact.
+  3. **Ruling 4 — streaming + sorted ranks (wanted).** Iterate by MC index, one mask per experiment, fill the
+     whole `E[:,j]` column across cells, release; do not regenerate masks per cell. Move the differential proof
+     into the trusted randomization module, refuse NaN/malformed/non-1D input, retain finite/`+inf`/tie/constant/
+     all-NE semantics. Both re-mint engine/randomization source identities.
+  4. **Benchmark rebuild (blocks compute freeze).** Rebuild inputs through the exact canonical constructors and
+     `_assemble_arms` order, remeasure, reissue the environment-dependent forecast, and bind the exact
+     constructor/profile payloads and benchmark source identity into the deterministic configuration.
+- **Remaining manifest items before freeze review** — `profile_config_identity` must additionally bind the
+  structural-zero **multiscale means / executable constructor + source identity / exact seed derivation** (it
+  currently binds the base `PROFILES`, a route label and quotas); `_CONTENT_HASH_ALGO` and the union-set hash must
+  become **exact executable canonical payload/serialization definitions** rather than English descriptions; plus
+  frozen-vs-draft schemas, issuer path/symlink checks, and builder/validator source identities.
+- **[RESOLVED at rev-23] Bounded-control ALLOCATION VARIANT decision** — Pi rev-22 #1 selected
+  `width_proportional` (2286,2286,3428), now bound as the registered design; `equal_control_alloc` is retained
+  only as a development comparison route. See §8.1. The rev-8 #8 "route boundary-short through its canonical
+  control constructor" item is DONE. The registered bounded-control **draw** stays RESERVED.
 - **Job-kind minting for the split SD jobs** — §9.1 delivers the measured per-group forecast, the cap verdict, the
   split rule and the checkpoint/persistence plan, but the split job kinds / run IDs are NOT minted (that belongs
   with the launch-manifest work, which is blocked).

@@ -530,9 +530,15 @@ def selftest():
             errs.append(f"{src} should bind one pooled 8000 stratum, got {a}")
         if a["n_candidate"] == _STRATIFIED_CONTROL_ALLOC:
             errs.append(f"{src} still binds the stratified control allocation (the rev-21 defect)")
-    for src in ("structural_zero_control", "boundary_short"):
-        if _stratum_alloc_for(src)["n_candidate"] != _STRATIFIED_CONTROL_ALLOC:
-            errs.append(f"{src} should bind the stratified control allocation")
+    # Pi rev-22 ruling 1: the two stratified sources no longer SHARE an allocation — structural-zero keeps the
+    # equal-ish control allocation, boundary-short uses the selected width-proportional one.
+    if _stratum_alloc_for("structural_zero_control")["n_candidate"] != _STRATIFIED_CONTROL_ALLOC:
+        errs.append("structural_zero_control should bind the equal-ish stratified control allocation")
+    if _stratum_alloc_for("boundary_short")["n_candidate"] != list(REG.BOUNDARY_ALLOC):
+        errs.append(f"boundary_short should bind the selected width-proportional allocation "
+                    f"{list(REG.BOUNDARY_ALLOC)}, got {_stratum_alloc_for('boundary_short')['n_candidate']}")
+    if _stratum_alloc_for("boundary_short")["n_candidate"] == _STRATIFIED_CONTROL_ALLOC:
+        errs.append("boundary_short still binds the equal-ish allocation the ruling replaced")
     # the fix must BITE: a pooled source and a stratified source must not share a configuration identity, and
     # recomputing with the old hardcoded allocation must give a DIFFERENT identity for the pooled sources.
     if _profile_config_identity("scid_scale_control", "full") == _profile_config_identity("structural_zero_control",
