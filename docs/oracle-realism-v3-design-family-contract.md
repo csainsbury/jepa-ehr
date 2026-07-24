@@ -1,12 +1,23 @@
-# Oracle Realism Verifier — Design Family v3 (rev-13, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-14, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-12 (Pi REVISEd its schemas). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Status:** DRAFT for Pi review. Supersedes rev-13. The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
 build, reserved map-design draw, audit/evaluation seed, policy population, or run. There is **no production/trusted
 readiness claim.** Registered mode is a **BLOCKED STUB**: its invariants are DECLARED and its structured assembly +
 identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED — it never runs a statistic, never
 consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
 can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
+
+**Rev-14 changes (Pi rev-12 authorized estimator wiring — FIRST group: run_size):**
+1. **`S2_ks` estimator wired.** `_s2_pre`/`_s2_re` implement the v2 run-size KS (MEAN over sequences of the
+   per-sequence run-size ECDF, max-abs over the pool support) as a permutation-friendly precompute/recompute split on
+   the SAME keyword-only protocol and the SAME schema pipeline (dtype/shape/[0,1]-range M, nonneg-integer `nruns`,
+   sequence + cluster floors both arms). The v2-consistency self-test reproduces `s2()` to `< 1e-9`.
+2. **`G_full_run_size` group wired.** Added to `CANONICAL_GROUPS` (9 cells), so the engine can now gate the run-size
+   group; the canonical-groups drift assertion and the registry hash update accordingly.
+3. Wiring is incremental and verified — `length_density` and `phase_seam` remain (Still-open). The
+   `ESTIMATOR_IMPL_SOURCE_IDENTITY` and benchmark `config_identity` re-mint (`f3a75308…` → `b3c1b00a…`) to reflect the
+   new estimator source.
 
 **Rev-13 changes folded (Pi rev-12 REVISE — schema/identity corrections):**
 1. **Derive-not-trust raw canonicalization (Pi rev-12 #1/#4).** The `SequenceRecord` contract trusts only
@@ -405,7 +416,7 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-13, Pi rev-9/rev-10/rev-12 authorized dev-only scope — all tested)
+## Delivered (rev-14, Pi rev-9/rev-10/rev-12 authorized dev-only scope — all tested)
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
@@ -438,8 +449,9 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   registered statistic path is unimplemented — activation is a later reviewed change after manifest generation. The
   structured registered structural-zero `(2667,2667,2666)` **assembly self-test uses DUMMY sequences and checks
   quotas/order only** (no divisibility refusal), NOT registered statistic execution. Each per-permutation recompute
-  reproduces the EXACT v2 estimand to `<1e-9`. The low-level kernel is `_gate_group` (private/test-only). 10
-  estimators wired (burst-timing + class-mark); the other three groups are the next wiring step.
+  reproduces the EXACT v2 estimand to `<1e-9`. The low-level kernel is `_gate_group` (private/test-only). 11
+  estimators wired across THREE groups (burst-timing + class-mark + run_size/`S2_ks`); length_density + phase_seam are
+  the remaining wiring step.
 - **Fail-closed input schemas — DERIVE-NOT-TRUST + exact (Pi rev-8 #5 / rev-10 #3 / rev-12 #1–#4; rev-13)** —
   `_canonicalize_pool` runs ONCE per experiment in `_gate_core` and REBUILDS each record via the repository's
   `derive_record(source, class_ids, timestamps)` boundary (discarding caller-supplied `cluster_ids`/`L_total`/`K`/
@@ -459,9 +471,10 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   without each. **structural-zero uses the CANONICAL multiscale constructor** (means 18/60/250), and the map
   artifact records the EXACT seed/namespace. Both PROVISIONAL; finalisation needs a separately-authorized power
   battery (Pi #7).
-- **SPARSE + PAIRED dev-boundary demo (Pi rev-7 #1, rev-8 #7; RC1/RC4/RC5 + rev-11/rev-12/rev-13 follow-through)** —
-  `scripts/oracle_realism_v3_group_power.py` (hash **`abe5c6f6…`** — successively `cfdd4d67`→`2ffec14a`→`abe5c6f6` as
-  the dev stable identity was rebound to the semantic + implementation-source identities; the schemas AND the
+- **SPARSE + PAIRED dev-boundary demo (Pi rev-7 #1, rev-8 #7; RC1/RC4/RC5 + rev-11–rev-14 follow-through)** —
+  `scripts/oracle_realism_v3_group_power.py` (hash **`1d33f94c…`** — successively
+  `cfdd4d67`→`2ffec14a`→`abe5c6f6`→`1d33f94c` as the dev stable identity was rebound to the semantic +
+  implementation-source identities and then the registry grew by the wired run_size group; the schemas AND the
   derive-not-trust canonicalization are a NO-OP on valid pipeline data — the component p-values/verdicts/evald/argmin
   are unchanged, confirming `sample_fixture`/`apply_coupling` already emit canonical records), via `gate_group_dev`
   with STRUCTURED arms:
@@ -487,7 +500,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   7 refusals; strict `p_g > α_group` (Pi #7).
 - **Per-profile + wired-engine benchmark (Pi #6; rev-11 repair, rev-12/rev-13 provenance/identity)** —
   `scripts/oracle_realism_v3_benchmark.py`: per-profile `Σ_experiment Σ_cell cost(route, profile volume)·B_main`,
-  DETERMINISTIC `config_identity` **`f3a75308…`** (re-minted `ef7a9280 → 34d1a50a → 25846fa2 → f3a75308`; it now
+  DETERMINISTIC `config_identity` **`b3c1b00a…`** (re-minted `ef7a9280 → 34d1a50a → 25846fa2 → f3a75308 → b3c1b00a`; it now
   binds SOURCE identities ONLY — `ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY` + `ESTIMATOR_IMPL_SOURCE_IDENTITY` — and is no
   longer version-bearing; the env-dependent `ESTIMATOR_DEPENDENCY_IDENTITY` moved to the timing artifact, Pi rev-12
   #3). The wired timing map records the EXACT `Bs` fixture seed (`236460273103544`) and is labelled TIMING-ONLY
@@ -496,7 +509,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   cap margin** (not merely <8h). Honest: SD-main ≈ 10.3 h does NOT fit one 8 h job → separately-gated per-group SD
   jobs. (Full per-group wired benchmark + re-mint follows as each remaining group's estimators are wired.)
 
-## Still open (Pi-authorized next scope; NOT yet done in rev-13)
+## Still open (Pi-authorized next scope; NOT yet done in rev-14)
 - **Reserved map-set + RNG-manifest generation** (generate, do NOT execute) — `gate_group_registered` binds to
   `RESERVED_MAP_SET_NOT_DRAWN` / `RESERVED_RNG_MANIFEST_NOT_BOUND`, so a real registered run is BLOCKED. The RNG
   manifest must bind exact per-role/stratum seeds + generator/coupling CODE identities + profile identity +
@@ -506,11 +519,13 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   authorized calibration/power battery using the frozen map (Pi rev-7 #7). *(This single bullet consolidates the
   previously duplicated RNG-manifest and map-set bullets — Pi rev-9 contract change.)*
 - **Boundary-short canonical map** (Pi rev-8 #8) — route boundary-short through its canonical control constructor.
-- **Wire the length_density / run_size / phase_seam estimators** into the engine (burst-timing + class-mark are
-  wired); then a full per-group **wired benchmark at the registered `B=20000`** per exact profile/stratum, with the
-  1.5× margin applied to EVERY group + checkpoint/resume + real evidence persistence, then mint job kinds. (The
-  current benchmark's wired measurement uses a mechanical `B=5400` and covers only the burst-timing group; the
-  route surrogate already forecasts phase/seam ≈ 8.46 h, so that route needs a predeclared split — Pi rev-7 #8.)
+- **Wire the length_density + phase_seam estimators** into the engine (burst-timing + class-mark + run_size/`S2_ks`
+  are wired; length_density needs `S1_density`/`S1_tau`/`count_ks`/`length_ks`, phase_seam needs
+  `S8_class`/`S8_density`/`S9_class`/`S9_gap`/`S9_zero`); then a full per-group **wired benchmark at the registered
+  `B=20000`** per exact profile/stratum, with the 1.5× margin applied to EVERY group + checkpoint/resume + real
+  evidence persistence, then mint job kinds. (The current benchmark's wired measurement uses a mechanical `B=5400`
+  and covers only the burst-timing group; the route surrogate already forecasts phase/seam ≈ 8.46 h, so that route
+  needs a predeclared split — Pi rev-7 #8.)
 - **Reference-owned frozen-map CALIBRATION draw + calibration-build preflight** — the corrected + issuance-complete
   builder is written and tested on dev fixtures; the one-time reserved-namespace DRAW is **NOT authorized** until
   Pi separately authorizes.

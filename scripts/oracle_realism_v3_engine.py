@@ -90,6 +90,29 @@ def _gap_re(pre, mask, *, groups=None, floor=FLOOR):
     return float(np.max(np.abs(np.cumsum(ca) / nA - np.cumsum(cb) / nB)))
 
 
+# --- run-size KS (S2_ks): MEAN-over-sequences of the per-sequence run-size ECDF, max-abs KS on the pool support.
+# Reproduces v2 s2 EXACTLY: support = pool run-size union (permutation-invariant); M[i,j] = (# runs of seq i <=
+# support[j]) / n_runs_i; F = mean of M over the arm. Sequence floor AND cluster floor (both arms). (rev-14 wiring) ----
+def _s2_pre(pool):
+    runs = [np.sort(np.bincount(r.cluster_ids).astype(int)) for r in pool]
+    support = np.unique(np.concatenate(runs)) if runs else np.array([1], int)
+    M = np.empty((len(pool), support.shape[0])); nruns = np.empty(len(pool), int)
+    for i, sr in enumerate(runs):
+        nruns[i] = sr.shape[0]
+        M[i] = np.searchsorted(sr, support, side="right") / sr.shape[0]
+    return {"M": M, "nruns": nruns}
+
+
+def _s2_re(pre, mask, *, groups=None, floor=FLOOR):
+    A = mask; nAs = int(A.sum()); nBs = int((~A).sum())
+    if nAs < floor or nBs < floor:                                # sequence floor, both arms
+        return None
+    cA = int(pre["nruns"][A].sum()); cB = int(pre["nruns"][~A].sum())
+    if cA < floor or cB < floor:                                 # cluster floor, both arms
+        return None
+    return float(np.max(np.abs(pre["M"][A].mean(0) - pre["M"][~A].mean(0))))
+
+
 def _loggap_pre(pool):
     nb = len(CLUSTER_BINS); n = len(pool)
     sm = [np.full(n, np.nan) for _ in range(nb)]; sp = [np.zeros(n) for _ in range(nb)]
@@ -241,6 +264,8 @@ ESTIMATORS = {
                          "identity": "v2.abs(P(delta_t=0))"},
     "positive_gap_ks": {"precompute": _gap_pre, "recompute": _gap_re, "map_carrying": False,
                         "identity": "v2.ks(positive_gap_ecdf@unique_support_8dp)"},
+    "S2_ks": {"precompute": _s2_pre, "recompute": _s2_re, "map_carrying": False,
+              "identity": "v2.ks(mean_per_sequence_run_size_ecdf@pool_support)"},
     "S3_loggap": {"precompute": _loggap_pre, "recompute": _loggap_re, "map_carrying": True,
                   "identity": "v2.cond_maxbin.maxabs(mean_log_positive_gap)@CLUSTER_BINS[ref_coarsen]"},
     "S4_abs": {"precompute": _s4_pre, "recompute": _s4_re, "map_carrying": False,
@@ -395,7 +420,7 @@ def _build_canonical_groups():
     by_id = {c["cell_id"]: c for c in sd}
     groups = REG.build_groups(sd)
     out = {}
-    for gid in ("G_full_burst_timing", "G_full_class_mark"):        # engine-wired full-support groups
+    for gid in ("G_full_burst_timing", "G_full_class_mark", "G_full_run_size"):   # engine-wired full-support groups
         cells, exps = [], {}
         for cid in list(groups[gid]["cells"]):
             c = by_id[cid]; chk = c["statistic"]
@@ -578,6 +603,13 @@ def _validate_precompute(pre, check, n):
                 raise RefusalError("positive_gap_ks inv index out of [0,nu)")
             if len(np.unique(inv)) != nu:                         # np.unique(...return_inverse) covers 0..nu-1 exactly
                 raise RefusalError("positive_gap_ks inv must cover every support index 0..nu-1")
+    elif check == "S2_ks":
+        keys(pre, ("M", "nruns"))
+        M = _pc_arr(pre["M"], "M", check)
+        if M.ndim != 2 or M.shape[0] != n or M.shape[1] < 1:
+            raise RefusalError(f"S2_ks precompute M shape {M.shape} invalid (want (n,>=1))")
+        _pc_all_finite(M, "M", check); _pc_range(M, "M", check, 0.0, 1.0)   # per-seq ECDF fractions in [0,1]
+        nr = row1d(pre["nruns"], "nruns", nan_ok=False); _pc_nonneg(nr, "nruns", check); _pc_int_valued(nr, "nruns", check)
     elif check == "S3_loggap":
         keys(pre, ("sm", "sp"))
         scalar_binlist(pre["sm"], "sm", nbC)                      # mean log gap: unrestricted finite-or-NaN
@@ -842,11 +874,12 @@ def selftest():
     # EXACT-ESTIMAND consistency: each engine per-perm recompute on the OBSERVED split reproduces the exact v2
     # value (so observed + permuted use the identical statistic — permutation-test validity). S3_tau is the v3
     # pooled-tau (validated vs scipy in the pilot), excluded from v2 equality.
-    from clinical_jepa.eval.oracle_realism_v2_verifier import s3, s4, s5, s6, s7, marginal_route_checks
+    from clinical_jepa.eval.oracle_realism_v2_verifier import s2, s3, s4, s5, s6, s7, marginal_route_checks
     cc, rr = draw("consC", 6000), draw("consR", 6000); poolc = list(cc) + list(rr)
     obs = np.array([True] * len(cc) + [False] * len(rr))
-    v2 = {**s3(cc, rr), **s4(cc, rr), **s5(cc, rr), **s6(cc, rr), **s7(cc, rr), **marginal_route_checks(cc, rr)}
-    for chk in ("delta_t_zero_abs", "positive_gap_ks", "S4_abs", "class_tv", "occupancy_abs",
+    v2 = {**s2(cc, rr), **s3(cc, rr), **s4(cc, rr), **s5(cc, rr), **s6(cc, rr), **s7(cc, rr),
+          **marginal_route_checks(cc, rr)}
+    for chk in ("delta_t_zero_abs", "positive_gap_ks", "S2_ks", "S4_abs", "class_tv", "occupancy_abs",
                 "S3_loggap", "S5_abs", "S6_tv", "S7_abs"):
         est = ESTIMATORS[chk]; pre = est["precompute"](poolc)
         g = build_frozen_map(rr, chk, profile=prof, regime="full", seed=13, N=6000)["groups"] if est["map_carrying"] else None
@@ -866,6 +899,7 @@ def selftest():
     oh0 = np.zeros(C); oh0[0] = 1.0; oh1 = np.zeros(C); oh1[1] = 1.0
     s6_100 = np.concatenate([np.tile(oh0, (100, 1)), np.tile(oh1, (100, 1))])
     floor_pre = {"occupancy_abs": (occ100, None), "S4_abs": (s4_100, None),
+                 "S2_ks": ({"M": np.ones((200, 1)), "nruns": np.ones(200, int)}, None),
                  "S3_loggap": ({"sm": [sm100], "sp": [np.ones(200)]}, [[0]]),
                  "S5_abs": ({"sm": [sm100]}, [[0]]),
                  "S6_tv": ({"vec": [s6_100]}, [[0]]),
@@ -887,7 +921,7 @@ def selftest():
     # PRECOMPUTE + RAW-RECORD SCHEMA (Pi rev-8 #5 / rev-10 #3): every REAL precompute validates; each malformed
     # class refuses BEFORE any statistic; corrupt raw records refuse at the boundary (not deep inside a precompute).
     npool = len(pool)
-    for chk in ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S4_abs", "class_tv", "occupancy_abs",
+    for chk in ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S2_ks", "S4_abs", "class_tv", "occupancy_abs",
                 "S3_loggap", "S5_abs", "S6_tv", "S7_abs"):
         try:
             _validate_precompute(ESTIMATORS[chk]["precompute"](pool), chk, npool)
@@ -965,7 +999,7 @@ def selftest():
         return derive_record(source, np.asarray(cls, int), np.asarray(ts, float))
     allL1 = [_mk("MIMIC", [k % C], [float(k)]) for k in range(120)]                # every sequence length 1
     onecl = [_mk("MIMIC", list(range(min(6, C))), [5.0] * min(6, C)) for _ in range(120)]  # all dt==0 -> one cluster
-    ALL_CHK = ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S4_abs", "class_tv", "occupancy_abs",
+    ALL_CHK = ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S2_ks", "S4_abs", "class_tv", "occupancy_abs",
                "S3_loggap", "S5_abs", "S6_tv", "S7_abs")
     for label, dpool in (("all_L1", allL1), ("one_cluster", onecl)):
         for chk in ALL_CHK:
@@ -1073,7 +1107,7 @@ def selftest():
             errs.append(f"registered refusal NOT raised: {name}")
     if REGISTERED["alpha_group"] != 0.04 / 6:
         errs.append("alpha_group not the exact 0.04/6 float")
-    if set(CANONICAL_GROUPS) != {"G_full_burst_timing", "G_full_class_mark"}:
+    if set(CANONICAL_GROUPS) != {"G_full_burst_timing", "G_full_class_mark", "G_full_run_size"}:
         errs.append("canonical groups drift")
     return errs
 
