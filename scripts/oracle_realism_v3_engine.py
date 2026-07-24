@@ -31,7 +31,7 @@ from scipy.stats import kendalltau, ks_2samp
 
 from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_realism_v2_verifier import (
-    _positive_gaps_and_prev_size, _bin_index, CLUSTER_BINS, LENGTH_BINS, _s4_contrast, C,
+    _positive_gaps_and_prev_size, _bin_index, CLUSTER_BINS, LENGTH_BINS, _s4_contrast, _seam_mask, C,
 )
 from clinical_jepa.eval.oracle_realism_v2_fixture import derive_record, MalformedRecord, REQUIRED_SOURCES
 from scripts.oracle_realism_v3_randomization import cell_upper_p, RefusalError
@@ -267,6 +267,132 @@ def _scalar_ks_re(pre, mask, *, groups=None, floor=FLOOR):
     return float(np.max(np.abs(pre["M"][mask].mean(0) - pre["M"][~mask].mean(0))))   # == ks_2samp statistic
 
 
+# --- phase_seam group estimators (rev-17 wiring). S8 = within-sequence CENTERED quartile-phase nonstationarity (each
+# sequence's per-quartile cluster-start density / class vector MINUS its own whole-sequence value; then max-over-4-
+# quartiles two-sample mean diff, with per-quartile seq+item floors both arms). S9 = block-SEAM structure (adjacency i
+# is a seam iff (i+1)%8==0): per-sequence seam-minus-nonseam Δt==0 fraction (S9_zero) / same-class fraction (S9_class),
+# and seam-vs-nonseam positive-gap KS (S9_gap = max within-arm + cross-arm ks_2samp). Reproduce v2 s8/s9. -----------
+def _s8density_pre(pool):
+    n = len(pool); dens = [np.full(n, np.nan) for _ in range(4)]; items = [np.zeros(n) for _ in range(4)]
+    for i, r in enumerate(pool):
+        q = np.minimum(3, (r.positions * 4).astype(int))
+        starts = np.concatenate([[True], np.diff(r.cluster_ids) == 1]) if r.L_total > 1 else np.array([True])
+        base = r.K / r.L_total
+        for qi in range(4):
+            m = q == qi; nq = int(m.sum())
+            if nq > 0:
+                dens[qi][i] = float(starts[m].sum()) / nq - base; items[qi][i] = nq
+    return {"dens": dens, "items": items}
+
+
+def _s8class_pre(pool):
+    n = len(pool); vec = [np.full((n, C), np.nan) for _ in range(4)]; items = [np.zeros(n) for _ in range(4)]
+    for i, r in enumerate(pool):
+        q = np.minimum(3, (r.positions * 4).astype(int))
+        p_i = np.bincount(r.class_ids, minlength=C)[:C] / r.L_total
+        for qi in range(4):
+            m = q == qi; nq = int(m.sum())
+            if nq > 0:
+                vec[qi][i] = np.bincount(r.class_ids[m], minlength=C)[:C] / nq - p_i; items[qi][i] = nq
+    return {"vec": vec, "items": items}
+
+
+def _s8density_re(pre, mask, *, groups=None, floor=FLOOR):
+    diffs = []
+    for qi in range(4):
+        pres = ~np.isnan(pre["dens"][qi]); Ap = pres & mask; Bp = pres & ~mask
+        if int(Ap.sum()) < floor or int(Bp.sum()) < floor:
+            return None
+        if pre["items"][qi][Ap].sum() < floor or pre["items"][qi][Bp].sum() < floor:
+            return None
+        diffs.append(abs(float(pre["dens"][qi][Ap].mean()) - float(pre["dens"][qi][Bp].mean())))
+    return float(max(diffs))
+
+
+def _s8class_re(pre, mask, *, groups=None, floor=FLOOR):
+    diffs = []
+    for qi in range(4):
+        v = pre["vec"][qi]; pres = ~np.isnan(v[:, 0]); Ap = pres & mask; Bp = pres & ~mask
+        if int(Ap.sum()) < floor or int(Bp.sum()) < floor:
+            return None
+        if pre["items"][qi][Ap].sum() < floor or pre["items"][qi][Bp].sum() < floor:
+            return None
+        diffs.append(0.5 * float(np.abs(v[Ap].mean(0) - v[Bp].mean(0)).sum()))
+    return float(max(diffs))
+
+
+def _s9_scalar_pre(pool, which):
+    n = len(pool); val = np.full(n, np.nan)
+    sa = np.zeros(n); na = np.zeros(n); nsg = np.zeros(n); nng = np.zeros(n)
+    for i, r in enumerate(pool):
+        if r.L_total < 2:
+            continue
+        dt = np.diff(r.timestamps); seam = _seam_mask(r.L_total); non = ~seam
+        if seam.sum() == 0 or non.sum() == 0:
+            continue
+        sa[i] = int(seam.sum()); na[i] = int(non.sum())
+        nsg[i] = int((dt[seam] > 0).sum()); nng[i] = int((dt[non] > 0).sum())
+        if which == "zero":
+            val[i] = float((dt[seam] == 0).mean()) - float((dt[non] == 0).mean())
+        else:
+            same = (r.class_ids[:-1] == r.class_ids[1:])
+            val[i] = float(same[seam].mean()) - float(same[non].mean())
+    return {"val": val, "sa": sa, "na": na, "nsg": nsg, "nng": nng}
+
+
+def _s9zero_pre(pool):
+    return _s9_scalar_pre(pool, "zero")
+
+
+def _s9classseam_pre(pool):
+    return _s9_scalar_pre(pool, "class")
+
+
+def _s9_scalar_re(pre, mask, *, groups=None, floor=FLOOR):
+    pres = ~np.isnan(pre["val"]); Ap = pres & mask; Bp = pres & ~mask
+    if int(Ap.sum()) < floor or int(Bp.sum()) < floor:                # contributing-sequence floor, both arms
+        return None
+    for k in ("sa", "na", "nsg", "nng"):                              # adjacency + positive-gap count floors
+        if pre[k][Ap].sum() < floor or pre[k][Bp].sum() < floor:
+            return None
+    return abs(float(pre["val"][Ap].mean()) - float(pre["val"][Bp].mean()))
+
+
+def _s9gap_pre(pool):
+    n = len(pool); sa = np.zeros(n); na = np.zeros(n); contrib = np.zeros(n, bool)
+    sg, sgo, ng, ngo = [], [], [], []
+    for i, r in enumerate(pool):
+        if r.L_total < 2:
+            continue
+        dt = np.diff(r.timestamps); seam = _seam_mask(r.L_total); non = ~seam
+        if seam.sum() == 0 or non.sum() == 0:
+            continue
+        contrib[i] = True; sa[i] = int(seam.sum()); na[i] = int(non.sum())
+        for v in dt[seam]:
+            if v > 0:
+                sg.append(float(v)); sgo.append(i)
+        for v in dt[non]:
+            if v > 0:
+                ng.append(float(v)); ngo.append(i)
+    return {"sg": np.asarray(sg, float), "sg_owner": np.asarray(sgo, int), "ng": np.asarray(ng, float),
+            "ng_owner": np.asarray(ngo, int), "sa": sa, "na": na, "contrib": contrib}
+
+
+def _s9gap_re(pre, mask, *, groups=None, floor=FLOOR):
+    Ap = pre["contrib"] & mask; Bp = pre["contrib"] & ~mask
+    if int(Ap.sum()) < floor or int(Bp.sum()) < floor:
+        return None
+    for k in ("sa", "na"):
+        if pre[k][Ap].sum() < floor or pre[k][Bp].sum() < floor:
+            return None
+    insA = mask[pre["sg_owner"]]; innA = mask[pre["ng_owner"]]
+    sgA, sgB = pre["sg"][insA], pre["sg"][~insA]; ngA, ngB = pre["ng"][innA], pre["ng"][~innA]
+    if min(sgA.shape[0], sgB.shape[0], ngA.shape[0], ngB.shape[0]) < floor:   # positive-gap count floor, both arms
+        return None
+    return float(max(ks_2samp(sgA, ngA).statistic, ks_2samp(sgB, ngB).statistic,
+                     ks_2samp(sgA, sgB).statistic, ks_2samp(ngA, ngB).statistic))
+
+
 def _map_re_scalar(pre, mask, *, groups=None, extra_key=None, floor=FLOOR):
     if groups is None:
         return None
@@ -320,6 +446,16 @@ ESTIMATORS = {
                  "identity": "v2.ks_2samp(cluster_count_K)"},
     "length_ks": {"precompute": _lengthks_pre, "recompute": _scalar_ks_re, "map_carrying": False,
                   "identity": "v2.ks_2samp(length_L)"},
+    "S8_density": {"precompute": _s8density_pre, "recompute": _s8density_re, "map_carrying": False,
+                   "identity": "v2.maxquartile.abs(mean(centered_phase_cluster_density))"},
+    "S8_class": {"precompute": _s8class_pre, "recompute": _s8class_re, "map_carrying": False,
+                 "identity": "v2.maxquartile.tv(mean(centered_phase_class_vector))"},
+    "S9_zero": {"precompute": _s9zero_pre, "recompute": _s9_scalar_re, "map_carrying": False,
+                "identity": "v2.abs(mean(seam_minus_nonseam(dt==0_fraction)))"},
+    "S9_class": {"precompute": _s9classseam_pre, "recompute": _s9_scalar_re, "map_carrying": False,
+                 "identity": "v2.abs(mean(seam_minus_nonseam(same_class_fraction)))"},
+    "S9_gap": {"precompute": _s9gap_pre, "recompute": _s9gap_re, "map_carrying": False,
+               "identity": "v2.max_ks_2samp(seam/nonseam positive gaps within+cross arm)"},
     "S3_loggap": {"precompute": _loggap_pre, "recompute": _loggap_re, "map_carrying": True,
                   "identity": "v2.cond_maxbin.maxabs(mean_log_positive_gap)@CLUSTER_BINS[ref_coarsen]"},
     "S4_abs": {"precompute": _s4_pre, "recompute": _s4_re, "map_carrying": False,
@@ -487,7 +623,7 @@ def _build_canonical_groups():
     groups = REG.build_groups(sd)
     out = {}
     for gid in ("G_full_burst_timing", "G_full_class_mark", "G_full_run_size",     # engine-wired full-support groups
-                "G_full_length_density"):
+                "G_full_length_density", "G_full_phase_seam"):
         cells, exps = [], {}
         for cid in list(groups[gid]["cells"]):
             c = by_id[cid]; chk = c["statistic"]
@@ -722,6 +858,44 @@ def _validate_precompute(pre, check, n):
             raise RefusalError("S1_tau: L and K must be >= 1")
         if bool((a[:, 1] > a[:, 0] + 1e-9).any()):
             raise RefusalError("S1_tau: K must be <= L")
+    elif check == "S8_density":                                    # 4 per-quartile centered densities (NaN=absent) + item counts
+        keys(pre, ("dens", "items"))
+        scalar_binlist(pre["dens"], "dens", 4)                     # centered -> any sign; NaN=absent
+        scalar_binlist(pre["items"], "items", 4, count=True)
+        _pc_finite_iff_positive(pre["dens"], pre["items"], "dens/items", check)
+    elif check == "S8_class":                                      # 4 per-quartile centered class vectors + item counts
+        keys(pre, ("vec", "items"))
+        if not isinstance(pre["vec"], list) or len(pre["vec"]) != 4:
+            raise RefusalError("S8_class vec must be a list of 4 per-quartile arrays")
+        for qi, arr in enumerate(pre["vec"]):
+            v = _pc_arr(arr, f"vec[{qi}]", check)
+            if v.ndim != 2 or v.shape[0] != n or v.shape[1] != C:
+                raise RefusalError(f"S8_class vec[{qi}] shape {v.shape} != ({n},{C})")
+            _pc_rows_all_or_nothing(v, f"vec[{qi}]", check)        # absent(all-NaN) or complete-finite (centered; any sign)
+        scalar_binlist(pre["items"], "items", 4, count=True)
+        _pc_finite_iff_positive([v[:, 0] for v in pre["vec"]], pre["items"], "vec/items", check)
+    elif check in ("S9_zero", "S9_class"):                         # per-seq centered scalar (NaN=noncontrib) + count channels
+        keys(pre, ("val", "sa", "na", "nsg", "nng"))
+        row1d(pre["val"], "val", nan_ok=True)                      # centered -> any sign; NaN=non-contributing
+        for k in ("sa", "na", "nsg", "nng"):
+            kk = row1d(pre[k], k, nan_ok=False); _pc_nonneg(kk, k, check); _pc_int_valued(kk, k, check)
+        _pc_finite_iff_positive([pre["val"]], [pre["sa"]], "val/sa", check)   # contributes IFF has seam adjacencies
+    elif check == "S9_gap":                                        # seam/nonseam positive gaps w/ owners + count channels
+        keys(pre, ("sg", "sg_owner", "ng", "ng_owner", "sa", "na", "contrib"))
+        for vk, ok in (("sg", "sg_owner"), ("ng", "ng_owner")):
+            v = _pc_arr(pre[vk], vk, check); ow = pre[ok]
+            if v.ndim != 1 or not np.issubdtype(np.asarray(ow).dtype, np.integer) or np.asarray(ow).shape != v.shape:
+                raise RefusalError(f"S9_gap {vk}/{ok} must be equal-length 1-D (values / int owners)")
+            _pc_all_finite(v, vk, check)
+            if v.size and bool((v <= 0).any()):
+                raise RefusalError(f"S9_gap {vk} must be strictly positive gaps")
+            if v.size and (int(np.asarray(ow).min()) < 0 or int(np.asarray(ow).max()) >= n):
+                raise RefusalError(f"S9_gap {ok} out of [0,n)")
+        for k in ("sa", "na"):
+            kk = row1d(pre[k], k, nan_ok=False); _pc_nonneg(kk, k, check); _pc_int_valued(kk, k, check)
+        cb = np.asarray(pre["contrib"])
+        if cb.dtype != np.bool_ or cb.ndim != 1 or cb.shape[0] != n:
+            raise RefusalError(f"S9_gap contrib must be a ({n},) bool array")
     elif check == "S3_loggap":
         keys(pre, ("sm", "sp"))
         scalar_binlist(pre["sm"], "sm", nbC)                      # mean log gap: unrestricted finite-or-NaN
@@ -992,12 +1166,14 @@ def selftest():
     # EXACT-ESTIMAND consistency: each engine per-perm recompute on the OBSERVED split reproduces the exact v2
     # value (so observed + permuted use the identical statistic — permutation-test validity). S3_tau is the v3
     # pooled-tau (validated vs scipy in the pilot), excluded from v2 equality.
-    from clinical_jepa.eval.oracle_realism_v2_verifier import s1, s2, s3, s4, s5, s6, s7, marginal_route_checks
+    from clinical_jepa.eval.oracle_realism_v2_verifier import (s1, s2, s3, s4, s5, s6, s7, s8, s9,
+                                                               marginal_route_checks)
     cc, rr = draw("consC", 6000), draw("consR", 6000); poolc = list(cc) + list(rr)
     obs = np.array([True] * len(cc) + [False] * len(rr))
     v2 = {**s1(cc, rr), **s2(cc, rr), **s3(cc, rr), **s4(cc, rr), **s5(cc, rr), **s6(cc, rr), **s7(cc, rr),
-          **marginal_route_checks(cc, rr)}
+          **s8(cc, rr), **s9(cc, rr), **marginal_route_checks(cc, rr)}
     for chk in ("delta_t_zero_abs", "positive_gap_ks", "S2_ks", "S1_density", "S1_tau", "count_ks", "length_ks",
+                "S8_density", "S8_class", "S9_zero", "S9_class", "S9_gap",
                 "S4_abs", "class_tv", "occupancy_abs", "S3_loggap", "S5_abs", "S6_tv", "S7_abs"):
         est = ESTIMATORS[chk]; pre = est["precompute"](poolc)
         g = build_frozen_map(rr, chk, profile=prof, regime="full", seed=13, N=6000)["groups"] if est["map_carrying"] else None
@@ -1043,6 +1219,7 @@ def selftest():
     # class refuses BEFORE any statistic; corrupt raw records refuse at the boundary (not deep inside a precompute).
     npool = len(pool)
     for chk in ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S2_ks", "S1_density", "S1_tau", "count_ks", "length_ks",
+                "S8_density", "S8_class", "S9_zero", "S9_class", "S9_gap",
                 "S4_abs", "class_tv", "occupancy_abs", "S3_loggap", "S5_abs", "S6_tv", "S7_abs"):
         try:
             _validate_precompute(ESTIMATORS[chk]["precompute"](pool), chk, npool)
@@ -1135,6 +1312,7 @@ def selftest():
     allL1 = [_mk("MIMIC", [k % C], [float(k)]) for k in range(120)]                # every sequence length 1
     onecl = [_mk("MIMIC", list(range(min(6, C))), [5.0] * min(6, C)) for _ in range(120)]  # all dt==0 -> one cluster
     ALL_CHK = ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S2_ks", "S1_density", "S1_tau", "count_ks", "length_ks",
+               "S8_density", "S8_class", "S9_zero", "S9_class", "S9_gap",
                "S4_abs", "class_tv", "occupancy_abs", "S3_loggap", "S5_abs", "S6_tv", "S7_abs")
     for label, dpool in (("all_L1", allL1), ("one_cluster", onecl)):
         for chk in ALL_CHK:
@@ -1243,7 +1421,7 @@ def selftest():
     if REGISTERED["alpha_group"] != 0.04 / 6:
         errs.append("alpha_group not the exact 0.04/6 float")
     if set(CANONICAL_GROUPS) != {"G_full_burst_timing", "G_full_class_mark", "G_full_run_size",
-                                 "G_full_length_density"}:
+                                 "G_full_length_density", "G_full_phase_seam"}:
         errs.append("canonical groups drift")
     return errs
 
