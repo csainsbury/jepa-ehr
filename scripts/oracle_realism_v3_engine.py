@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import platform
 
 import numpy as np
 
@@ -31,6 +32,7 @@ from clinical_jepa.eval.oracle_contracts import canonical_hash
 from clinical_jepa.eval.oracle_realism_v2_verifier import (
     _positive_gaps_and_prev_size, _bin_index, CLUSTER_BINS, LENGTH_BINS, _s4_contrast, C,
 )
+from clinical_jepa.eval.oracle_realism_v2_fixture import derive_record, MalformedRecord, REQUIRED_SOURCES
 from scripts.oracle_realism_v3_randomization import cell_upper_p, RefusalError
 from scripts.oracle_realism_v3_phase0_pilot import _seq_components
 from scripts.oracle_realism_v3_map import validate_map_artifact, map_identity, FLOOR
@@ -266,15 +268,28 @@ ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY = canonical_hash({
     "protocol": "recompute(pre, mask, *, groups, floor) keyword-only",
     "estimators": {k: v["identity"] for k, v in ESTIMATORS.items()}})
 
-# CODE = a deterministic hash of the actual estimator IMPLEMENTATION source (precompute/recompute helpers + map
-# reducers) plus the numpy version. A change to any estimator's code changes this hash even if every identity string
-# is unchanged — this is what actually catches an altered implementation. Both identities are bound together.
-_ESTIMATOR_IMPL_FNS = (_tau_pre, _tau_re, _dt0_pre, _dt0_re, _gap_pre, _gap_re, _loggap_pre, _loggap_re,
-                       _s4_pre, _s4_re, _classtv_pre, _classtv_re, _occ_pre, _occ_re,
-                       _lenbin_scalar_pre, _s5_pre, _s6_pre, _s7_pre, _map_re_scalar, _map_re_vector)
-ESTIMATOR_CODE_IDENTITY = canonical_hash({
-    "impl_src": {fn.__name__: inspect.getsource(fn) for fn in _ESTIMATOR_IMPL_FNS},
-    "numpy": np.__version__})
+# IMPLEMENTATION SOURCE identity — DETERMINISTIC (source only; NO versions). Covers what actually executes: the
+# dispatch table + wrapper lambdas (each recompute callable's source, so a check->function swap or wrapper change
+# shows up), every precompute, the local map reducers, the imported executable estimator dependencies
+# (_seq_components, _positive_gaps_and_prev_size, _s4_contrast, _bin_index), and the frozen bin definitions
+# (Pi rev-12 #3). The map-BUILDER lives in a separate module and is bound per-artifact via `map_identity`.
+_IMPL_SRC_FNS = (_tau_pre, _dt0_pre, _gap_pre, _loggap_pre, _s4_pre, _classtv_pre, _occ_pre,
+                 _lenbin_scalar_pre, _s5_pre, _s6_pre, _s7_pre, _map_re_scalar, _map_re_vector,
+                 _tau_re, _dt0_re, _gap_re, _loggap_re, _s4_re, _classtv_re, _occ_re,
+                 _seq_components, _positive_gaps_and_prev_size, _s4_contrast, _bin_index)
+ESTIMATOR_IMPL_SOURCE_IDENTITY = canonical_hash({
+    "recompute_src": {k: inspect.getsource(v["recompute"]) for k, v in ESTIMATORS.items()},   # dispatch + wrappers
+    "precompute_src": {k: inspect.getsource(v["precompute"]) for k, v in ESTIMATORS.items()},
+    "helper_src": {fn.__name__: inspect.getsource(fn) for fn in _IMPL_SRC_FNS},
+    "map_carrying": {k: v["map_carrying"] for k, v in ESTIMATORS.items()},
+    "bins": {"LENGTH_BINS": np.asarray(LENGTH_BINS).tolist(), "CLUSTER_BINS": np.asarray(CLUSTER_BINS).tolist()}})
+
+# DEPENDENCY / ENVIRONMENT identity — NOT deterministic across environments (interpreter + library versions +
+# estimand constants). Kept SEPARATE so a deterministic config/identity stays version-independent (Pi rev-12 #3):
+# only source identities go into deterministic hashes; this one belongs in environment-dependent artifacts.
+ESTIMATOR_DEPENDENCY_IDENTITY = canonical_hash({
+    "python": platform.python_version(), "numpy": np.__version__,
+    "constants": {"C": int(C), "FLOOR": int(FLOOR)}})
 
 
 # --- executable per-experiment RNG identity (a hash of the seed-derivation, not a string; Pi #4/#7) ------
@@ -417,41 +432,41 @@ def _is_int_arr(a):
     return isinstance(a, np.ndarray) and np.issubdtype(a.dtype, np.integer) and a.dtype != np.bool_
 
 
-def _validate_raw_records(pool):
-    """Refuse a malformed RAW pool BEFORE precompute (Pi rev-8 #5): each record must satisfy the SequenceRecord
-    invariants the estimators rely on (finite nondecreasing timestamps, class_ids in [0,C), cluster_ids in [0,K),
-    consistent lengths). A hand-built / corrupt record thus refuses at the boundary instead of crashing (or silently
-    mis-binning) inside a precompute. The engine derives nothing from a record it has not validated."""
+def _canonicalize_pool(pool, exp_source, exp_id):
+    """DERIVE-NOT-TRUST canonicalization (Pi rev-12 #1/#4). The SequenceRecord contract trusts ONLY
+    (source, class_ids, timestamps); cluster_ids/L_total/K/positions are DERIVED under exact dt==0 run semantics.
+    So the engine REBUILDS each record via the repository's `derive_record` boundary from its trusted fields —
+    discarding any caller-supplied derived fields (a record with real positive gaps but K=1/cluster_ids=0 is
+    canonicalized, not silently trusted) — and binds the experiment's expected skeleton source. Run ONCE per
+    experiment (not once per cell). Malformed TRUSTED fields (bad source, class id out of [0,C), non-finite or
+    non-monotone timestamps) refuse via derive_record."""
+    expect = "SCID" if "scid" in exp_source else "MIMIC"           # profile -> skeleton (REQUIRED_SOURCES)
+    if expect not in REQUIRED_SOURCES:
+        raise RefusalError(f"{exp_id}: expected source {expect!r} not in {REQUIRED_SOURCES}")
+    out = []
     for i, r in enumerate(pool):
-        for attr in ("L_total", "K", "class_ids", "timestamps", "cluster_ids"):
+        for attr in ("source", "class_ids", "timestamps"):
             if not hasattr(r, attr):
-                raise RefusalError(f"raw record {i} missing attribute {attr}")
-        L, K = r.L_total, r.K
-        if isinstance(L, bool) or not isinstance(L, (int, np.integer)) or int(L) < 1:
-            raise RefusalError(f"raw record {i} L_total {L!r} must be a positive non-bool int")
-        if isinstance(K, bool) or not isinstance(K, (int, np.integer)) or not (1 <= int(K) <= int(L)):
-            raise RefusalError(f"raw record {i} K {K!r} must be an int in [1, L_total]")
-        L = int(L); K = int(K)
-        ci, ts, cl = np.asarray(r.class_ids), np.asarray(r.timestamps), np.asarray(r.cluster_ids)
-        if not (ci.ndim == ts.ndim == cl.ndim == 1 and ci.shape[0] == ts.shape[0] == cl.shape[0] == L):
-            raise RefusalError(f"raw record {i} class_ids/timestamps/cluster_ids must be 1-D of length L_total")
-        if not _is_int_arr(ci) or int(ci.min()) < 0 or int(ci.max()) >= C:
-            raise RefusalError(f"raw record {i} class_ids must be non-bool ints in [0,{C})")
-        if (ts.dtype == np.bool_ or not np.issubdtype(ts.dtype, np.floating) or not np.isfinite(ts).all()):
-            raise RefusalError(f"raw record {i} timestamps must be finite floats")
-        if L > 1 and bool(np.any(np.diff(ts) < 0)):
-            raise RefusalError(f"raw record {i} timestamps must be nondecreasing")
-        if not _is_int_arr(cl) or int(cl.min()) < 0 or int(cl.max()) >= K:
-            raise RefusalError(f"raw record {i} cluster_ids must be non-bool ints in [0,K)")
-    return pool
+                raise RefusalError(f"{exp_id} record {i} missing trusted field {attr}")
+        if r.source != expect:
+            raise RefusalError(f"{exp_id} record {i} source {r.source!r} != experiment-expected {expect!r}")
+        try:
+            out.append(derive_record(r.source, r.class_ids, r.timestamps))   # rebuild; discard caller derived fields
+        except (MalformedRecord, ValueError) as ex:
+            raise RefusalError(f"{exp_id} record {i} malformed trusted fields: {ex}")
+    return out
 
 
-# --- per-estimator precompute SCHEMA (Pi rev-8 #5 / rev-10 #3): validate keys/shapes/dtypes/index-ranges and legal
-#     NaN locations BEFORE any statistic. NaN is legal ONLY as the per-sequence 'absent-in-bin' sentinel (map/S4);
-#     Inf is never legal; count/pair channels (sp, cc, class_tv, dt0, S4 pair-cols) must be finite + nonnegative. ---
+# --- per-estimator precompute SCHEMA (Pi rev-8 #5 / rev-10 #3, exactness rev-12 #2): validate keys / shapes /
+#     explicit numeric dtypes / index ranges / legal-value ranges / integer count channels / all-or-nothing absent
+#     rows BEFORE any statistic. NaN is legal ONLY as the per-sequence absent sentinel (map scalars, per S4/S6 ROW).
+#     Support-ABSENCE (e.g. no positive gaps -> nu=0) is a VALID state that yields NOT_EVALUABLE in the statistic;
+#     malformed STRUCTURE is REFUSED. The two must NOT be conflated. Inf is never legal. ---
 def _pc_arr(a, name, check):
     if not isinstance(a, np.ndarray):
         raise RefusalError(f"{check} precompute {name} must be an ndarray, got {type(a).__name__}")
+    if a.dtype == np.bool_ or not np.issubdtype(a.dtype, np.number):    # explicit numeric non-bool dtype (rev-12 #2)
+        raise RefusalError(f"{check} precompute {name} dtype {a.dtype} is not a numeric non-bool type")
     return a
 
 
@@ -471,6 +486,29 @@ def _pc_nonneg(a, name, check):
     aa = np.asarray(a, float); fin = np.isfinite(aa)
     if bool(fin.any()) and bool((aa[fin] < 0).any()):
         raise RefusalError(f"{check} precompute {name} must be nonnegative")
+
+
+def _pc_range(a, name, check, lo, hi):
+    aa = np.asarray(a, float); fin = np.isfinite(aa)
+    if bool(fin.any()) and (bool((aa[fin] < lo - 1e-9).any()) or bool((aa[fin] > hi + 1e-9).any())):
+        raise RefusalError(f"{check} precompute {name} has finite value(s) outside [{lo},{hi}]")
+
+
+def _pc_int_valued(a, name, check):
+    aa = np.asarray(a, float); fin = np.isfinite(aa)
+    if bool(fin.any()) and bool((np.abs(aa[fin] - np.round(aa[fin])) > 1e-9).any()):
+        raise RefusalError(f"{check} precompute {name} must be integer-valued")
+
+
+def _pc_rows_all_or_nothing(a, name, check):
+    """Each ROW is EITHER the absent sentinel (all-NaN) OR complete-finite (no partial-NaN rows; no Inf anywhere)."""
+    aa = np.asarray(a, float)
+    if aa.size:
+        if bool(np.isinf(aa).any()):
+            raise RefusalError(f"{check} precompute {name} contains Inf (never legal)")
+        nan = np.isnan(aa)
+        if not bool((nan.all(axis=1) | (~nan).all(axis=1)).all()):
+            raise RefusalError(f"{check} precompute {name} has a partially-absent row (must be all-NaN or all-finite)")
 
 
 def _validate_precompute(pre, check, n):
@@ -500,21 +538,25 @@ def _validate_precompute(pre, check, n):
         if set(d) != set(want):
             raise RefusalError(f"{check} precompute keys {sorted(d)} != {sorted(want)}")
 
-    def binlist(x, name, nb, cols, *, nonneg=False):
+    def scalar_binlist(x, name, nb, *, count=False, rng=None):     # nb per-bin (n,) scalar arrays; NaN=absent legal
         if not isinstance(x, list) or len(x) != nb:
-            raise RefusalError(f"{check} precompute {name} must be a list of {nb} per-bin arrays (got {len(x) if isinstance(x, list) else type(x).__name__})")
+            raise RefusalError(f"{check} precompute {name} must be a list of {nb} per-bin (n,) arrays")
         for b, arr in enumerate(x):
-            a = row1d(arr, f"{name}[{b}]", nan_ok=True) if cols is None else col2d(arr, f"{name}[{b}]", cols, nan_ok=True)
-            if nonneg:                                          # count channels are finite + nonneg (no NaN)
-                _pc_all_finite(a, f"{name}[{b}]", check); _pc_nonneg(a, f"{name}[{b}]", check)
+            a = row1d(arr, f"{name}[{b}]", nan_ok=not count)       # count channels forbid NaN
+            if count:
+                _pc_nonneg(a, f"{name}[{b}]", check); _pc_int_valued(a, f"{name}[{b}]", check)
+            if rng is not None:
+                _pc_range(a, f"{name}[{b}]", check, rng[0], rng[1])
 
-    if check == "S3_tau":
-        a = _pc_arr(pre, "components", check)
-        if a.ndim != 2 or a.shape[0] != n or a.shape[1] < 4:
-            raise RefusalError(f"S3_tau precompute shape {a.shape} invalid (want (n,>=4))")
-        _pc_all_finite(a, "components", check)
-    elif check == "delta_t_zero_abs":
-        _pc_nonneg(col2d(pre, "dt0", 2, nan_ok=False), "dt0", check)
+    if check == "S3_tau":                                          # EXACT (n,4): [C-D, n0(total), n1(ties_x), n2(ties_y)]
+        a = col2d(pre, "components", 4, nan_ok=False)
+        _pc_nonneg(a[:, 1:], "components[n0,n1,n2]", check)        # pair counts nonnegative
+        if bool((a[:, 1] < a[:, 2] - 1e-9).any()) or bool((a[:, 1] < a[:, 3] - 1e-9).any()):
+            raise RefusalError("S3_tau: total pairs n0 must be >= ties n1, n2")
+    elif check == "delta_t_zero_abs":                             # [nz=L-K, na=L-1]; nonneg ints, nz <= na
+        a = col2d(pre, "dt0", 2, nan_ok=False); _pc_nonneg(a, "dt0", check); _pc_int_valued(a, "dt0", check)
+        if bool((a[:, 0] > a[:, 1] + 1e-9).any()):
+            raise RefusalError("delta_t_zero_abs: channel 0 (L-K) must be <= channel 1 (L-1)")
     elif check == "positive_gap_ks":
         keys(pre, ("owner", "inv", "nu"))
         owner, inv, nu = pre["owner"], pre["inv"], pre["nu"]
@@ -523,27 +565,52 @@ def _validate_precompute(pre, check, n):
         owner, inv = np.asarray(owner), np.asarray(inv)
         if owner.ndim != 1 or inv.ndim != 1 or owner.shape[0] != inv.shape[0]:
             raise RefusalError("positive_gap_ks owner/inv must be equal-length 1-D arrays")
-        if isinstance(nu, bool) or not isinstance(nu, (int, np.integer)) or int(nu) <= 0:
-            raise RefusalError("positive_gap_ks nu must be a positive non-bool int")
-        if owner.size and (int(owner.min()) < 0 or int(owner.max()) >= n):
-            raise RefusalError("positive_gap_ks owner index out of [0,n)")
-        if inv.size and (int(inv.min()) < 0 or int(inv.max()) >= int(nu)):
-            raise RefusalError("positive_gap_ks inv index out of [0,nu)")
+        if isinstance(nu, bool) or not isinstance(nu, (int, np.integer)) or int(nu) < 0:
+            raise RefusalError("positive_gap_ks nu must be a non-bool int >= 0")
+        nu = int(nu)
+        if nu == 0:                                               # VALID support-empty -> statistic NE (not a refusal)
+            if owner.size or inv.size:
+                raise RefusalError("positive_gap_ks nu=0 requires empty owner/inv")
+        else:
+            if owner.size == 0 or int(owner.min()) < 0 or int(owner.max()) >= n:
+                raise RefusalError("positive_gap_ks owner index out of [0,n) (empty only if nu=0)")
+            if int(inv.min()) < 0 or int(inv.max()) >= nu:
+                raise RefusalError("positive_gap_ks inv index out of [0,nu)")
+            if len(np.unique(inv)) != nu:                         # np.unique(...return_inverse) covers 0..nu-1 exactly
+                raise RefusalError("positive_gap_ks inv must cover every support index 0..nu-1")
     elif check == "S3_loggap":
-        keys(pre, ("sm", "sp")); binlist(pre["sm"], "sm", nbC, None); binlist(pre["sp"], "sp", nbC, None, nonneg=True)
-    elif check == "S4_abs":
-        a = col2d(pre, "s4", 3, nan_ok=True)                    # [contrast, same_pairs, adj_pairs]; NaN row = absent
-        _pc_nonneg(a[:, 1:], "s4[pair-counts]", check)
-    elif check == "class_tv":
-        _pc_nonneg(col2d(pre, "class_tv", C, nan_ok=False), "class_tv", check)
+        keys(pre, ("sm", "sp"))
+        scalar_binlist(pre["sm"], "sm", nbC)                      # mean log gap: unrestricted finite-or-NaN
+        scalar_binlist(pre["sp"], "sp", nbC, count=True)          # pair counts: finite nonneg integer
+    elif check == "S4_abs":                                        # per row: absent(all-NaN) OR [contrast in[-1,1], >=0 ints]
+        a = _pc_arr(pre, "s4", check)
+        if a.ndim != 2 or a.shape[0] != n or a.shape[1] != 3:
+            raise RefusalError(f"S4_abs precompute shape {a.shape} != ({n},3)")
+        _pc_rows_all_or_nothing(a, "s4", check)
+        _pc_range(a[:, 0], "s4[contrast]", check, -1.0, 1.0)
+        _pc_nonneg(a[:, 1:], "s4[pair-counts]", check); _pc_int_valued(a[:, 1:], "s4[pair-counts]", check)
+    elif check == "class_tv":                                      # per-class counts: nonneg integer
+        a = col2d(pre, "class_tv", C, nan_ok=False); _pc_nonneg(a, "class_tv", check); _pc_int_valued(a, "class_tv", check)
     elif check == "occupancy_abs":
-        row1d(pre, "occ", nan_ok=False)
-    elif check == "S5_abs":
-        keys(pre, ("sm",)); binlist(pre["sm"], "sm", nbL, None)
-    elif check == "S6_tv":
-        keys(pre, ("vec",)); binlist(pre["vec"], "vec", nbL, C)
-    elif check == "S7_abs":
-        keys(pre, ("sm", "cc")); binlist(pre["sm"], "sm", nbC, None); binlist(pre["cc"], "cc", nbC, None, nonneg=True)
+        _pc_range(row1d(pre, "occ", nan_ok=False), "occ", check, 0.0, 1.0)
+    elif check == "S5_abs":                                        # per-bin occupancy in [0,1]; NaN=absent
+        keys(pre, ("sm",)); scalar_binlist(pre["sm"], "sm", nbL, rng=(0.0, 1.0))
+    elif check == "S6_tv":                                         # per-bin class-fraction rows: absent OR sum-to-1 nonneg
+        keys(pre, ("vec",))
+        if not isinstance(pre["vec"], list) or len(pre["vec"]) != nbL:
+            raise RefusalError(f"S6_tv precompute vec must be a list of {nbL} per-bin arrays")
+        for b, arr in enumerate(pre["vec"]):
+            a = _pc_arr(arr, f"vec[{b}]", check)
+            if a.ndim != 2 or a.shape[0] != n or a.shape[1] != C:
+                raise RefusalError(f"S6_tv precompute vec[{b}] shape {a.shape} != ({n},{C})")
+            _pc_rows_all_or_nothing(a, f"vec[{b}]", check); _pc_nonneg(a, f"vec[{b}]", check)
+            rs = np.asarray(a, float).sum(axis=1); fin = np.isfinite(rs)
+            if bool(fin.any()) and bool((np.abs(rs[fin] - 1.0) > 1e-6).any()):
+                raise RefusalError(f"S6_tv vec[{b}] present rows must be class fractions summing to 1")
+    elif check == "S7_abs":                                        # per-bin distinct-class-frac in [0,1]; cc = counts
+        keys(pre, ("sm", "cc"))
+        scalar_binlist(pre["sm"], "sm", nbC, rng=(0.0, 1.0))
+        scalar_binlist(pre["cc"], "cc", nbC, count=True)
     return pre
 
 
@@ -581,9 +648,11 @@ def _gate_core(group_id, experiments, *, floor, B, seed, alpha_group, map_for_ce
     """Common core: build cells from the canonical registry ONLY, compute precompute INTERNALLY, run the gate at
     the given `floor` (a parameter — no module-global mutation)."""
     canon = CANONICAL_GROUPS[group_id]; cells = []
+    # Pi rev-12 #1/#4: canonicalize each experiment's pool ONCE (derive-not-trust), then reuse for every cell.
+    for e, ex in experiments.items():
+        ex["pool"] = _canonicalize_pool(ex["pool"], canon["experiments"][e]["source"], e)
     for cc in canon["cells"]:
         est = ESTIMATORS[cc["check"]]; pool = experiments[cc["exp"]]["pool"]
-        _validate_raw_records(pool)                               # raw-record schema BEFORE precompute (Pi rev-8 #5)
         pre = _validate_precompute(est["precompute"](pool), cc["check"], len(pool))
         cell = {"cell_id": cc["cell_id"], "exp": cc["exp"], "check": cc["check"], "pre": pre, "delta": cc["delta"]}
         if cc["map_carrying"]:
@@ -652,13 +721,14 @@ def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_
               "map_identities": map_ids,
               "map_set_identity": canonical_hash([map_ids[k] for k in sorted(map_ids)]),
               "registry_identity": CANONICAL_REGISTRY_HASH,
-              # Pi rev-11 Correction 2: bind BOTH the semantic estimator identity AND the executable code identity.
+              # Pi rev-12 #3: the DETERMINISTIC stable identity carries source identities only (semantic + impl-source);
+              # the environment-dependent dependency identity is recorded in the full dev_config, not the stable hash.
               "estimator_protocol_semantic_identity": ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY,
-              "estimator_code_identity": ESTIMATOR_CODE_IDENTITY,
+              "estimator_impl_source_identity": ESTIMATOR_IMPL_SOURCE_IDENTITY,
               "namespace": (nss[0] if nss else None),
               "seed_law": "caller-supplied dev seed; assignments = numpy default_rng(seed) per-stratum permutation"}
-    res["dev_config"] = {**stable, "seed": seed}
-    res["dev_config_stable_identity"] = canonical_hash(stable)
+    res["dev_config"] = {**stable, "seed": seed, "estimator_dependency_identity": ESTIMATOR_DEPENDENCY_IDENTITY}
+    res["dev_config_stable_identity"] = canonical_hash(stable)     # deterministic (env-independent)
     res["dev_config_identity"] = canonical_hash(res["dev_config"])
     return res
 
@@ -865,22 +935,75 @@ def selftest():
         if not _srefused(chk, bad):
             errs.append(f"precompute schema did NOT refuse {label}")
 
-    # raw-record schema: the valid pool passes; hand-corrupted records refuse at the boundary
+    # rev-12 #2 exactness — cases Pi reproduced as WRONGLY ACCEPTED must now refuse:
+    tau5 = np.hstack([_tau_pre(pool), np.zeros((npool, 1))])                       # (n,5), not exact (n,4)
+    occ_obj = np.asarray(occ, dtype=object)                                        # object dtype (not numeric schema)
+    occ_hi = _corrupt(occ, lambda b: b.__setitem__(0, 1.5))                        # occupancy outside [0,1]
+    s4_partial = np.full((npool, 3), np.nan); s4_partial[0] = [0.5, np.nan, np.nan]   # partially-absent row
+    s4_hi = np.full((npool, 3), np.nan); s4_hi[0] = [2.0, 1.0, 1.0]                # contrast outside [-1,1]
+    s6_partial = {"vec": [np.full((npool, C), np.nan) for _ in range(len(LENGTH_BINS))]}
+    s6_partial["vec"][0][0, 0] = 1.0                                              # row 0: one finite + rest NaN
+    exact_cases = {
+        "s3_tau_extra_col": ("S3_tau", tau5),
+        "occupancy_object_dtype": ("occupancy_abs", occ_obj),
+        "occupancy_out_of_range": ("occupancy_abs", occ_hi),
+        "s4_partial_nan_row": ("S4_abs", s4_partial),
+        "s4_contrast_out_of_range": ("S4_abs", s4_hi),
+        "s6_partial_nan_row": ("S6_tv", s6_partial),
+    }
+    for label, (chk, bad) in exact_cases.items():
+        if not _srefused(chk, bad):
+            errs.append(f"precompute schema did NOT refuse {label} (rev-12 #2)")
+    # POSITIVE — valid support-empty positive_gap_ks (no positive gaps) is a NE state, NOT a schema refusal:
+    try:
+        _validate_precompute({"owner": np.array([], int), "inv": np.array([], int), "nu": 0}, "positive_gap_ks", npool)
+    except RefusalError as ex:
+        errs.append(f"positive_gap_ks nu=0 support-empty wrongly REFUSED (should be NE): {ex}")
+
+    # VALID DEGENERATE POOLS (Pi rev-12 #2): support-absence must VALIDATE (recompute may be NE) — never a refusal.
+    def _mk(source, cls, ts):
+        return derive_record(source, np.asarray(cls, int), np.asarray(ts, float))
+    allL1 = [_mk("MIMIC", [k % C], [float(k)]) for k in range(120)]                # every sequence length 1
+    onecl = [_mk("MIMIC", list(range(min(6, C))), [5.0] * min(6, C)) for _ in range(120)]  # all dt==0 -> one cluster
+    ALL_CHK = ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "S4_abs", "class_tv", "occupancy_abs",
+               "S3_loggap", "S5_abs", "S6_tv", "S7_abs")
+    for label, dpool in (("all_L1", allL1), ("one_cluster", onecl)):
+        for chk in ALL_CHK:
+            try:
+                _validate_precompute(ESTIMATORS[chk]["precompute"](dpool), chk, len(dpool))
+            except RefusalError as ex:
+                errs.append(f"degenerate {label}: schema wrongly REFUSED valid {chk}: {ex}")
+
+    # DERIVE-NOT-TRUST canonicalization (Pi rev-12 #1/#4): a valid pool canonicalizes; corrupt TRUSTED fields refuse;
+    # corrupt DERIVED fields are REBUILT to canonical (not silently trusted). exp "mimic_scale_control" -> "MIMIC".
     import dataclasses as _dc
-    if _validate_raw_records(pool) is not pool:
-        errs.append("raw-record schema rejected a valid pool")
-    g0 = pool[0]
+    canon_pool = _canonicalize_pool(pool, "mimic_scale_control", "test")
+    if len(canon_pool) != len(pool):
+        errs.append("canonicalization changed pool length")
+    g0 = next((r for r in pool if r.K > 1 and r.L_total > 1), pool[0])
+    truth = derive_record(g0.source, g0.class_ids, g0.timestamps)      # canonical rebuild of the trusted fields
+    if truth.K <= 1:
+        errs.append("derive-not-trust test needs a multi-cluster record; none found")
+    # (a) corrupt DERIVED fields (Pi's repro: positive gaps but K=1/cluster_ids=0) -> REBUILT to canonical, not trusted
+    corrupt_derived = _dc.replace(g0, K=1, cluster_ids=np.zeros(g0.L_total, int))
+    rebuilt = _canonicalize_pool([corrupt_derived], "mimic_scale_control", "test")[0]
+    if rebuilt.K != truth.K or not np.array_equal(rebuilt.cluster_ids, truth.cluster_ids):
+        errs.append("derive-not-trust did NOT rebuild corrupt cluster_ids/K to canonical")
+    # (b) corrupt TRUSTED fields (and source mismatch) REFUSE
     raw_bad = {
         "nonfinite_timestamp": _dc.replace(g0, timestamps=np.where(ar(g0.L_total) == 0, np.inf, g0.timestamps).astype(float)),
         "class_id_out_of_range": _dc.replace(g0, class_ids=np.where(ar(g0.L_total) == 0, C, g0.class_ids).astype(int)),
-        "cluster_id_out_of_range": _dc.replace(g0, cluster_ids=np.where(ar(g0.L_total) == 0, g0.K, g0.cluster_ids).astype(int)),
-        "length_mismatch": _dc.replace(g0, class_ids=g0.class_ids[:-1]),
+        "nonmonotone_timestamps": _dc.replace(g0, timestamps=np.arange(g0.L_total, 0, -1, dtype=float)),
     }
     for label, rec in raw_bad.items():
         try:
-            _validate_raw_records([rec]); errs.append(f"raw-record schema did NOT refuse {label}")
+            _canonicalize_pool([rec], "mimic_scale_control", "test"); errs.append(f"canonicalization did NOT refuse {label}")
         except RefusalError:
             pass
+    try:                                                              # experiment-source binding
+        _canonicalize_pool([g0], "scid_scale_control", "test"); errs.append("source mismatch NOT refused")
+    except RefusalError:
+        pass
 
     # ADVERSARIAL: Pi rev-7 #4 fail-open cases now REFUSE / NE (were PASS p_g=1.0)
     # (a) all-NaN precompute -> observed discrepancy non-finite -> group NOT_EVALUABLE, NOT a zero-filled PASS

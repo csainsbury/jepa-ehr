@@ -208,7 +208,7 @@ def main():
     # --- WIRED-ENGINE measurement (Pi rev-6 #6): the ACTUAL engine's MEASURED generation (precompute) + per-perm
     #     recompute + serialization for the burst-timing group, with a CONSERVATIVE cap margin (not merely <8h) ---
     from scripts.oracle_realism_v3_engine import (ESTIMATORS as _EST, ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY,
-                                                   ESTIMATOR_CODE_IDENTITY)
+                                                   ESTIMATOR_IMPL_SOURCE_IDENTITY, ESTIMATOR_DEPENDENCY_IDENTITY)
     from scripts.oracle_realism_v3_map import build_frozen_map as _bfm
     poolw = A + Bs; nAw = len(A); Mw = len(poolw); BW = 500
     # Pi rev-11 Correction 1: the benchmark timing map is built from Bs, so its provenance seed MUST be the EXACT
@@ -258,14 +258,16 @@ def main():
         "formula": "sum_experiment sum_cell cost(route, profile_volume) * B_main + serialize + MM_proxy; NO audit",
         "route_of": ROUTE_OF, "ks_volume": KS_VOLUME, "ks_mult": KS_MULT,
         "profile_volumes": prof_vol, "cell_routing": routing, "B_main": B_MAIN,
-        # Pi rev-11 Correction 2: bind BOTH the semantic estimator identity AND the executable code identity so the
-        # wired benchmark's compute basis is neither stale nor blind to an implementation change.
+        # Pi rev-12 #3: the DETERMINISTIC config_identity binds SOURCE identities only (semantic + impl-source) — never
+        # a version-bearing hash. The environment-dependent dependency identity goes in the timing artifact below.
         "estimator_protocol_semantic_identity": ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY,
-        "estimator_code_identity": ESTIMATOR_CODE_IDENTITY})
+        "estimator_impl_source_identity": ESTIMATOR_IMPL_SOURCE_IDENTITY})
 
     timing_artifact = {
         "environment": {"python": sys.version.split()[0], "numpy": np.__version__,
                         "platform": platform.platform(), "machine": platform.machine()},
+        # Pi rev-12 #3: dependency/environment identity lives HERE (env-dependent), NOT in the deterministic config.
+        "estimator_dependency_identity": ESTIMATOR_DEPENDENCY_IDENTITY,
         "route_costs_ms": {"tau_pooled": round(costs["tau_pooled"] * 1e3, 4),
                            "ks_per_item_us": round(costs["ks_per_item"] * 1e6, 6),
                            "marginal": round(costs["marginal"] * 1e3, 4),
