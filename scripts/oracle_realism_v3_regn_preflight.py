@@ -28,6 +28,7 @@ from clinical_jepa.eval.oracle_realism_v2_fixture import sample_fixture
 from clinical_jepa.eval.oracle_realism_v2_verifier_design import PROFILES
 from clinical_jepa.eval.oracle_realism_v2_coupling import apply_coupling
 from clinical_jepa.eval.oracle_realism_v2_verifier import _TAU, _LOGGAP
+from clinical_jepa.eval.oracle_realism_v2_battery import _multiscale, _ZERO_PROF, CONTROL_ALLOC
 from scripts.oracle_realism_v3_map import build_frozen_map, apply_frozen_map, map_identity
 from scripts.oracle_realism_v3_phase0_pilot import T_pool
 
@@ -45,6 +46,10 @@ def dseed(*p):
 
 
 def draw(profile, tag):
+    """Registered-N draw. structural-zero uses the CANONICAL multiscale control constructor (means 18/60/250,
+    allocation 2667/2667/2666), NOT a single-profile draw (Pi rev-7 #2/#3)."""
+    if profile == "structural_zero_control":
+        return _multiscale(_ZERO_PROF, "MIMIC", f"sz|{tag}", int(dseed(profile, tag)), CONTROL_ALLOC)
     sk = "SCID" if "scid" in profile else "MIMIC"
     return sample_fixture(sk, PROFILES[profile], N, seed=dseed(profile, tag))
 
@@ -55,10 +60,10 @@ def _tau_d(A, B):
 
 
 def regime_preflight(name, profile, regime):
-    # S3_loggap map issuance at registered N
+    # S3_loggap map issuance at registered N — the artifact records the EXACT map-design seed + namespace (Pi #6)
+    map_seed = int(dseed(profile, "mapref"))
     map_ref = draw(profile, "mapref")
-    fm = build_frozen_map(map_ref, "S3_loggap", profile=profile, regime=regime,
-                          seed=int(dseed("mapref", name)), N=N)
+    fm = build_frozen_map(map_ref, "S3_loggap", profile=profile, regime=regime, namespace=NS, seed=map_seed, N=N)
     loggap_issues = fm["status"] == "OK"
 
     lg_pow, lg_null, lg_ne = [], [], 0

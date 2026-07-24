@@ -33,6 +33,9 @@ from clinical_jepa.eval.oracle_realism_v2_verifier import (
 from scripts.oracle_realism_v3_randomization import cell_upper_p, RefusalError
 from scripts.oracle_realism_v3_phase0_pilot import _seq_components
 from scripts.oracle_realism_v3_map import validate_map_artifact, map_identity, FLOOR
+import scripts.oracle_realism_v3_registry as REG
+
+MAP_CHECKS = {"S3_loggap", "S5_abs", "S6_tv", "S7_abs", "S1_density"}   # map-carrying checks (engine-wired subset)
 
 PASS, FAIL, NOT_EVALUABLE = "PASS", "FAIL", "NOT_EVALUABLE"
 _MAXSZ = 4096
@@ -321,8 +324,9 @@ def gate_group(spec):
         est = ESTIMATORS[c["check"]]
         groups = c["map_art"]["groups"] if est["map_carrying"] else None
         return est["recompute"](c["pre"], m, groups)
-    for c in spec["cells"]:                                          # observed NE -> group NE
-        if d_of(c, masks[c["exp"]][0]) is None:
+    for c in spec["cells"]:                                          # observed NE (or non-finite) -> group NE
+        d0 = d_of(c, masks[c["exp"]][0])
+        if d0 is None or not np.isfinite(d0):
             return {"verdict": NOT_EVALUABLE, "p_g": None, "reason": f"observed NE at {c['cell_id']}"}
     E = []
     for c in spec["cells"]:
@@ -330,12 +334,113 @@ def gate_group(spec):
         ej = np.empty(B + 1)
         for j, m in enumerate(masks[c["exp"]]):
             d = est["recompute"](c["pre"], m, groups)
-            ej[j] = np.inf if d is None else max(0.0, d - c["delta"])
+            # NaN/Inf discrepancy is a support/precompute failure -> maximally extreme NE, NEVER zero-fill (Pi #4)
+            ej[j] = np.inf if (d is None or not np.isfinite(d)) else max(0.0, d - c["delta"])
         E.append(ej)
     P = np.stack([cell_upper_p(e) for e in E], 0); S = P.min(0)
     p_g = float((S <= S[0]).sum() / len(S))
     return {"verdict": PASS if p_g > reg["alpha_group"] else FAIL, "p_g": p_g,
             "argmin_cell": spec["cells"][int(np.argmin(P[:, 0]))]["cell_id"]}
+
+
+# ======================================================================================================
+# TRUSTED boundary (Pi rev-7 #4): caller passes ONLY a group id + raw experiment pools + trusted seed/B
+# (+ dev map artifacts). The engine loads cell order / check / Delta / strata / map-carrying from the
+# canonical registry, computes precompute ITSELF from the raw pools, and refuses / NEs any non-finite
+# precompute or discrepancy. No caller-supplied check / Delta / registered / precompute is trusted.
+# ======================================================================================================
+def _build_canonical_groups():
+    sd = REG.build_sd_cells(apply_uncalibratable_exemption=True)
+    by_id = {c["cell_id"]: c for c in sd}
+    groups = REG.build_groups(sd)
+    out = {}
+    for gid in ("G_full_burst_timing", "G_full_class_mark"):        # engine-wired full-support groups
+        cells, exps = [], {}
+        for cid in list(groups[gid]["cells"]):
+            c = by_id[cid]; chk = c["statistic"]
+            if chk not in ESTIMATORS:
+                raise RefusalError(f"canonical group {gid} has unwired check {chk}")
+            cells.append({"cell_id": cid, "exp": c["experiment_id"], "check": chk, "delta": float(c["delta"]),
+                          "map_carrying": ESTIMATORS[chk]["map_carrying"]})
+            exps.setdefault(c["experiment_id"], {
+                "source": c["source"], "condition": c["condition"], "coupled_component": c["coupled_component"],
+                "n_strata": len(c["exchangeability_strata"]),
+                "registered_quota": [(s["n_candidate"], s["n_reference"]) for s in c["exchangeability_strata"]]})
+        out[gid] = {"group_id": gid, "cells": cells, "experiments": exps,
+                    "alpha_group": round(0.04 / len(groups), 10), "floor_policy": "registered_500"}
+    return out
+
+
+CANONICAL_GROUPS = _build_canonical_groups()
+CANONICAL_REGISTRY_HASH = canonical_hash(CANONICAL_GROUPS)
+
+
+def _validate_precompute(pre, check):
+    """Refuse an Inf / malformed precompute BEFORE any statistic (Pi #4). NaN is permitted ONLY as the explicit
+    per-sequence 'absent-in-bin' sentinel in map/S4 precomputes; Inf is always malformed."""
+    def bad(a):
+        a = np.asarray(a, float)
+        return a.size and np.isinf(a).any()
+    if isinstance(pre, dict):
+        for k, v in pre.items():
+            for arr in (v if isinstance(v, list) else [v]):
+                if isinstance(arr, np.ndarray) and bad(arr):
+                    raise RefusalError(f"infinite precompute in {check}:{k}")
+    elif isinstance(pre, np.ndarray) and bad(pre):
+        raise RefusalError(f"infinite precompute in {check}")
+    return pre
+
+
+def _derive_strata(pool, n_strata):
+    """Balanced within-stratum quotas from the RAW pool; n_strata from the canonical registry. Pool order is
+    stratum-interleaved [candA,refA,candB,refB,...]; each stratum balanced (nA==nB)."""
+    M = len(pool)
+    if n_strata <= 0 or M % (2 * n_strata) != 0:
+        raise RefusalError(f"pool length {M} not divisible into {n_strata} balanced strata")
+    per = M // n_strata
+    return [(per // 2, per // 2) for _ in range(n_strata)]
+
+
+def gate_group_trusted(group_id, pools_by_exp, *, seed, B, map_artifacts=None):
+    """TRUSTED entry point. Caller passes only group_id + raw experiment pools + seed + B (+ dev map artifacts)."""
+    if group_id not in CANONICAL_GROUPS:
+        raise RefusalError(f"unknown/unwired canonical group {group_id}")
+    canon = CANONICAL_GROUPS[group_id]
+    if isinstance(B, bool) or not isinstance(B, int) or B <= 0:
+        raise RefusalError(f"B {B!r} not a positive integer")
+    if seed is None:
+        raise RefusalError("missing seed")
+    if set(pools_by_exp) != set(canon["experiments"]):
+        raise RefusalError(f"experiments {sorted(pools_by_exp)} != canonical {sorted(canon['experiments'])}")
+    map_artifacts = map_artifacts or {}
+    experiments, cells = {}, []
+    for e, meta in canon["experiments"].items():
+        pool = pools_by_exp[e]
+        if not isinstance(pool, list) or len(pool) == 0:
+            raise RefusalError(f"experiment {e} pool must be a non-empty list of sequences")
+        experiments[e] = {"strata": _derive_strata(pool, meta["n_strata"]), "source": meta["source"],
+                          "replicate_seed": 0, "coupled_component": meta["coupled_component"]}
+    for cc in canon["cells"]:                                        # cells built from canonical registry ONLY
+        est = ESTIMATORS[cc["check"]]; pool = pools_by_exp[cc["exp"]]
+        pre = _validate_precompute(est["precompute"](pool), cc["check"])   # computed HERE + finiteness-checked
+        cell = {"cell_id": cc["cell_id"], "exp": cc["exp"], "check": cc["check"], "pre": pre, "delta": cc["delta"]}
+        if cc["map_carrying"]:
+            art = map_artifacts.get(cc["cell_id"])
+            if art is None:
+                raise RefusalError(f"map-carrying cell {cc['cell_id']} missing mandatory map artifact")
+            validate_map_artifact(art)
+            if art["check"] != cc["check"]:
+                raise RefusalError(f"map artifact check {art['check']} != canonical {cc['check']}")
+            cell["map_art"] = art
+        cells.append(cell)
+    spec = {"cells": cells, "experiments": experiments, "B": B, "seed": seed,
+            "registered": {"cell_ids": [c["cell_id"] for c in cells], "alpha_group": canon["alpha_group"],
+                           "floor_policy": canon["floor_policy"],
+                           "map_hashes": {c["cell_id"]: (map_identity(c["map_art"]) if c.get("map_art") else None)
+                                          for c in cells},
+                           "rng_identities": {e: rng_identity(m["source"], m["replicate_seed"], m["coupled_component"])
+                                              for e, m in experiments.items()}}}
+    return gate_group(spec)
 
 
 # --- self-tests ---------------------------------------------------------------------------------------
@@ -433,6 +538,32 @@ def selftest():
         ok = (got is None and want is None) or (got is not None and want is not None and abs(got - want) < 1e-9)
         if not ok:
             errs.append(f"engine estimand != v2 for {chk}: {got} vs {want}")
+
+    # ADVERSARIAL: Pi rev-7 #4 fail-open cases now REFUSE / NE (were PASS p_g=1.0)
+    # (a) all-NaN precompute -> observed discrepancy non-finite -> group NOT_EVALUABLE, NOT a zero-filled PASS
+    nan_cells = [{"cell_id": "SD|e0|occupancy_abs", "exp": "e0", "check": "occupancy_abs",
+                  "pre": np.full(len(cand) + len(ref), np.nan), "delta": 0.03}]
+    if gate_group(_mk_spec(nan_cells, exps))["verdict"] != NOT_EVALUABLE:
+        errs.append("all-NaN precompute did not NE (fail-open persists)")
+    # (b) the TRUSTED entry structurally closes caller check/Delta/precompute injection + validates inputs
+    def _trust_refused(fn):
+        try:
+            fn(); return False
+        except RefusalError:
+            return True
+    trust = {
+        "unknown_group": lambda: gate_group_trusted("NOT_A_GROUP", {}, seed=1, B=99),
+        "wrong_experiments": lambda: gate_group_trusted("G_full_burst_timing", {"eX": [1]}, seed=1, B=99),
+        "bad_B": lambda: gate_group_trusted("G_full_burst_timing", {}, seed=1, B=0),
+        "missing_seed": lambda: gate_group_trusted("G_full_burst_timing", {}, seed=None, B=99),
+        "inf_precompute": lambda: _validate_precompute(np.array([1.0, np.inf, 2.0]), "x"),
+    }
+    for name, fn in trust.items():
+        if not _trust_refused(fn):
+            errs.append(f"trusted-entry refusal NOT raised: {name}")
+    # canonical registry is hash-bound + only wired groups present
+    if set(CANONICAL_GROUPS) != {"G_full_burst_timing", "G_full_class_mark"}:
+        errs.append("canonical groups drift")
     return errs
 
 

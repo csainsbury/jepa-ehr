@@ -43,9 +43,11 @@ ESTIMATOR_ID = {
     "S3_loggap": "v2.cond_maxbin.maxabs(mean_log_positive_gap)@CLUSTER_BINS[ref_coarsen]",
     "S7_abs": "v2.cond_maxbin.mean(per_bin_distinct_class_frac)@CLUSTER_BINS[ref_coarsen]",
 }
-DENOM_POLICY = {c: ("seq_floor=%d + adjacent_pair_floor=%d per coarsened group, both arms" % (FLOOR, FLOOR)
-                    if c == "S3_loggap" else "seq_floor=%d per coarsened group, both arms" % FLOOR)
-                for c in MAP_CARRYING}
+def _denom_policy(check, floor):
+    """Floor-CONSISTENT denominator identity (Pi rev-7 #6: a dev-floor map must NOT record the registered floor)."""
+    if check == "S3_loggap":
+        return f"seq_floor={floor} + adjacent_pair_floor={floor} per coarsened group, both arms"
+    return f"seq_floor={floor} per coarsened group, both arms"
 
 
 # --- per-bin per-sequence summaries, mirroring the registered v2 checks EXACTLY --------------------
@@ -140,12 +142,13 @@ def build_frozen_map(reference_sample, check, *, profile, regime, namespace="v3-
            "profile": profile, "regime": regime, "namespace": namespace,
            "seed": (int(seed) if seed is not None else None), "N": (int(N) if N is not None else None),
            "estimator_identity": ESTIMATOR_ID[check], "original_bin_identity": ORIGINAL_BINS[check],
-           "denominator_policy": DENOM_POLICY[check]}
+           "denominator_policy": _denom_policy(check, int(floor))}
     return art
 
 
 def validate_map_artifact(art):
-    """Refuse a malformed / incomplete map artifact BEFORE any application (fail-closed)."""
+    """Refuse a malformed / incomplete / internally-inconsistent map artifact BEFORE any application
+    (fail-closed; Pi rev-7 #6)."""
     if not isinstance(art, dict):
         raise RefusalError("map artifact is not a dict")
     keys, req = set(art), set(MAP_SCHEMA)
@@ -160,8 +163,35 @@ def validate_map_artifact(art):
         raise RefusalError(f"map status {art['status']!r} invalid")
     if art["check"] not in MAP_CARRYING:
         raise RefusalError(f"map check {art['check']!r} not map-carrying")
-    if art["bins_id"] != ORIGINAL_BINS[art["check"]]:
-        raise RefusalError(f"map bins_id {art['bins_id']} != registered {ORIGINAL_BINS[art['check']]}")
+    chk = art["check"]
+    # exact registered estimator / bin / n_original_bins / denominator identities
+    if art["bins_id"] != ORIGINAL_BINS[chk]:
+        raise RefusalError(f"map bins_id {art['bins_id']} != registered {ORIGINAL_BINS[chk]}")
+    nbins = len(_BINS[ORIGINAL_BINS[chk]])
+    if art["n_original_bins"] != nbins:
+        raise RefusalError(f"map n_original_bins {art['n_original_bins']} != {nbins}")
+    if art["estimator_identity"] != ESTIMATOR_ID[chk]:
+        raise RefusalError(f"map estimator_identity mismatch for {chk}")
+    if art["original_bin_identity"] != ORIGINAL_BINS[chk]:
+        raise RefusalError(f"map original_bin_identity mismatch for {chk}")
+    if art["denominator_policy"] != _denom_policy(chk, art["floor"]):   # floor-consistent (no floor-500 on dev-60)
+        raise RefusalError(f"map denominator_policy inconsistent with floor {art['floor']} for {chk}")
+    # positive, non-bool N / seed / floor
+    for f in ("N", "seed", "floor"):
+        v = art[f]
+        if f == "floor" and (isinstance(v, bool) or not isinstance(v, int) or v <= 0):
+            raise RefusalError(f"map floor {v!r} not a positive int")
+        if f in ("N", "seed") and v is not None and (isinstance(v, bool) or not isinstance(v, int) or v <= 0):
+            raise RefusalError(f"map {f} {v!r} not a positive int")
+    # status <-> groups consistency + complete disjoint partition of 0..n_original_bins-1
+    if art["status"] == "OK":
+        if not isinstance(art["groups"], list) or not art["groups"]:
+            raise RefusalError("map status OK but groups empty/None")
+        flat = [i for g in art["groups"] for i in g]
+        if sorted(flat) != list(range(nbins)):
+            raise RefusalError(f"map groups are not a complete disjoint partition of 0..{nbins - 1}")
+    elif art["groups"] is not None:
+        raise RefusalError("map status REFUSED but groups non-null")
 
 
 def map_identity(art):

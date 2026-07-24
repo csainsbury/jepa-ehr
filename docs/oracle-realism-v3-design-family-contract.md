@@ -1,8 +1,29 @@
-# Oracle Realism Verifier — Design Family v3 (rev-7, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-8, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-6. Folds Pi rev-2..rev-5 rulings AND the Pi rev-6 implementation
-gate (7 items). All work below is development-only, synthetic-only; no calibration build, reference-map draw,
-audit/evaluation seed, policy population, or run — Pi authorized the dev work here but NOT any of those.
+**Status:** DRAFT for Pi review. Supersedes rev-7. The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Changelog** (near the end) records how each Pi ruling (rev-2..rev-7) was folded. All work is development-only,
+synthetic-only; no calibration build, reserved map-design draw, audit/evaluation seed, policy population, or run.
+
+**Rev-8 changes folded (Pi rev-7 #1–#9):**
+1. **Trusted engine boundary (#4)** — `scripts/oracle_realism_v3_engine.py::gate_group_trusted` loads the canonical
+   group registry INTERNALLY, computes precompute ITSELF from raw pools, and treats any non-finite discrepancy as
+   NE (never zero-fill). Reproduced fail-open exploits (all-NaN precompute → PASS; wrong check/Δ → PASS) now
+   NE/refuse (adversarial self-tests). No caller-supplied check/Δ/registered/precompute is trusted.
+2. **Sparse perturbation (#1)** — the demo perturbs EXACTLY one experiment and asserts (executable, hashed) that
+   every other experiment pool is content-identical to its null construction; argmin reported + attributes to the
+   perturbed experiment's registered primary cell. The dense-9-experiment claim is withdrawn.
+3. **Canonical structural-zero (#2/#3)** — demo + preflight use the registered multiscale control constructor
+   (means 18/60/250), not three same-profile draws.
+4. **Map provenance + validator (#6)** — artifacts record the EXACT map-design seed/namespace actually used; the
+   validator enforces registered estimator/bin/denominator identities, floor-consistent denom policy, positive
+   non-bool N/seed/floor, status↔groups consistency, and a complete disjoint bin partition.
+5. **Registered B (#3)** — the dev demo B is LABELLED a mechanical development test, distinct from the registered
+   `B_main=20000` evaluator.
+6. **Contract (#9)** — one normative section + this changelog; the stale §7 pilot detections and the §3 "exact
+   resolution rule" wording are corrected.
+7. **Still open (Pi-authorized, not yet done):** wire the length_density/run_size/phase_seam estimators (#2 wiring);
+   generate—not execute—the reserved map-set manifest (#5); benchmark all wired groups at `B=20000` per exact
+   profile/stratum with margin/checkpoint/persistence (#6/#8); executable RNG-provenance manifest (#5).
 
 **Rev-7 changes folded (Pi rev-6 #1–#7):**
 1. **Corrected exact-group demo (#1)** — `scripts/oracle_realism_v3_group_power.py` now runs through the engine
@@ -24,43 +45,15 @@ audit/evaluation seed, policy population, or run — Pi authorized the dev work 
    conservative sparse-effect DESIGN RULE, not a theorem — actual group power remains a required falsifier (§3).
 7. Wired-engine benchmark with measured generation/serialization + conservative cap margin (#6) — §9.
 
-**Rev-6 changes folded (Pi rev-5 #1–#7):**
-1. **Corrected frozen-map builder (#1)** — `scripts/oracle_realism_v3_map.py` keeps the ORIGINAL registered bins,
-   GROUPS them via the frozen v2 merge (`coarsen_reference`), preserves per-sequence summaries + equal-weight +
-   floors, and fixes S6 to LENGTH_BINS. Reproduces the v2 estimand exactly; the Δ-aligned full-support S3_loggap
-   null-exceedance drops **0.526 → 0.0** (§7, §9).
-2. **p-value prose corrected to the symmetric code form (#2)** — `p_c^(j) = #{k∈0..B : e^(k) ≥ e^(j)}/(B+1)` (§3).
-3. **NOT_EVALUABLE policy (#3)** — no zero-fill: observed cell NE → group NOT_EVALUABLE; permutation NE →
-   maximally extreme; wired into the fail-closed gate (§7).
-4. **Exact-group power demo (#4)** — the 36-cell burst-timing registry group, product strata, `B ≥ K_g/α_group`,
-   Wilson CIs, both variants, tied-KS on unique support; the old 3-cell run is relabelled a mechanical smoke (§ Delivered).
-5. **Coarse audit REMOVED (#5)** — level-valid but could not resolve a single-cell effect; main SD level suffices,
-   mechanical/exhaustive tests retained (§4).
-6. **Per-profile benchmark (#6)** — `Σ_experiment Σ_cell cost(route, profile volume)`; SCID heavier than MIMIC;
-   deterministic config identity separate from timing; measured serialization; per-group job plan (§9).
-7. **Fail-closed gate wiring (#7)** — `scripts/oracle_realism_v3_gate.py` validates BEFORE any statistic and
-   refuses all enumerated malformed inputs; registry binds the coupled-role RNG law per experiment (§7, §8).
-
-**Rev-5 changes folded (Pi rev-4 gate defects #1–#8):**
-1. **Benchmark now executes + is route-weighted (#1/#2).** The prior forecast did not run (`NameError`) and
-   averaged three surrogate routes; it now runs and is a route-weighted `Σ_route(cells × measured cost/perm)` +
-   generation/serialization + a labelled MM upper-bound proxy. The distribution-comparison (KS) routes dominate
-   (~92% of a permutation's cost); the honest whole-job cost is far above the earlier "~6h" (§9).
-2. **Audit B declared honestly (#3).** The min-p resolution requirement is `B ≥ K_max/α_group` (= **8100** for the
-   deepest group); main `B=20,000` meets it, audit `B=2,000` does NOT — so the audit is predeclared as a DISTINCT
-   coarser screen (valid level at any B, less power), with an exact false-park proof; the job is split into
-   separately-gated stop-on-failure jobs rather than weakening B to fit the cap (§3, §4, §9).
-3. **Exact schema-validated registry (#4/#5).** Every cell binds estimator/required-property/direct-group_id/
-   map+floor/RNG-law/exact-stratum-quota/expected-status/malformed-input/Δ-provenance and is schema-validated
-   (missing/extra/mistyped REFUSE, proven). `Δ` is bound to the LIVE verifier constants with an exact-equality
-   test (`S3_loggap` rounding corrected to `log(1.10)`); the Δ-table is hashed (§8, Δ table).
-4. **Both boundary-exemption variants emitted (#6).** M0 = 192 with / 194 without the provisional `S3` exemption;
-   the Δ-aligned boundary recompute uses the MM-aligned `P[d>Δ @0.5]` via the frozen map (§7).
-5. **Real product/stratified finite-B randomization + refusals (#7).** The actual evaluator path (within-stratum
-   + product permutation, nested ranks, deadbands/ties, deterministic replay) plus the seven malformed-input
-   refusals are implemented and tested against the exhaustive universe (§3, §8).
-6. **Frozen-map builder SPECIFIED, not executed (#8).** The reference-owned map schema/derivation/seed-namespace/
-   floor/artifact-format/support-failure behaviour is frozen in §9; the one-time draw remains blocked.
+**Changelog — earlier rulings folded (condensed; the normative design is §0–§9):**
+- **Rev-6 (Pi rev-5):** corrected reference-owned frozen-map builder (original bins + `coarsen_reference` grouping,
+  S6→LENGTH_BINS; full-support S3_loggap null-exceedance 0.526→0.0); symmetric p-value prose; NOT_EVALUABLE policy;
+  exact-group demo; coarse audit REMOVED; per-profile benchmark; coupled-role RNG law bound per experiment.
+- **Rev-5 (Pi rev-4):** benchmark executes + route-weighted (KS ~92% of a permutation; whole-job ≫ "~6h"); exact
+  schema-validated registry with Δ bound to live constants (`S3_loggap=log(1.10)`) + Δ-hash; both boundary-exemption
+  variants (M0 192/194); product/stratified finite-B randomization + 7 refusals vs the exhaustive universe.
+- **Rev-2..rev-4 (Pi):** SD fresh-draw conditional randomization + MM direct-effect split; honest multiplicity
+  (min-p over `K_g`); phase-spanning pooled-tau estimator; α split; exact registry/Δ before implementation.
 
 ## 0. Retained from v2 (works): N=8000, exact control allocation (2667,2667,2666), the three D components
 {burst_timing, mark_burst_tie, cluster_size_mark_diversity}, fail-closed runner/exec, manifest deep-equality trust
@@ -113,7 +106,7 @@ code exactly):
 - **Synchronized permutations:** one permutation index drives all cells in a group in a replicate (preserves
   cross-cell dependence). For groups spanning independent experiments, independent per-experiment permutations are
   drawn under one synchronized MC index.
-- **`B` sizing (exact resolution rule):** the min-p over `K_g` cells shares its floor `1/(B+1)` across ~`K_g`
+- **`B` sizing (conservative sparse-effect DESIGN RULE, not an exact theorem — Pi rev-6 #7):** the min-p over `K_g` cells shares its floor `1/(B+1)` across ~`K_g`
   permutations (each cell's own extreme), so a single-cell effect resolves below `α_group` only when
   **`B ≥ K_max/α_group`**. With the deepest in-scope group `K_max = 54` and `α_group = 0.04/6`, this is
   **`B ≥ 8100`**. Main **`B = 20,000`** meets it. (The rev-5 coarse `B = 2,000` audit could NOT resolve a
@@ -177,19 +170,17 @@ rank statistics adopt the same pool-within/synchronized-permute pattern (enumera
   the pilot). A property-specific support cell failing it is EXEMPT; a **core/full-support cell failing it PARKS**.
   The criterion therefore **cannot finalize an exemption until the numeric `Δ` table exists** (the earlier
   `P[d > matched-null p96]` proxy is not equivalent).
-- **Per-statistic exemption status (Δ-aligned, Pi rev-4 #6 — each decided on `P[d>Δ @0.5]` via the frozen map):**
-  the pilot now computes the MM-aligned criterion `P_dev[d_c > Δ_c | @0.5]` for BOTH S3 subchecks, using the
-  frozen reference-owned coarsening for `S3_loggap` (NOT the earlier `P[d>null p96]` proxy, NOT the v2 adaptive
-  PASS/FAIL). Dev evidence: on **bounded** support `S3_tau` detects at **0.15** and `S3_loggap` at **0.10** (both
-  ≪ the 0.5 retain criterion → **both provisional-EXEMPT**); on **full** support both detect at **1.00** (checks
-  work where supported; full-support burst-timing is RETAINED, non-exemptible). These remain **PROVISIONAL** — the
-  final exemption is only confirmed after the reference-owned frozen-map CALIBRATION draw (still blocked). Both M0
-  variants (with/without the provisional exemption: 192 / 194) are carried in the registry so the exemption cannot
-  manufacture favourable group size or power.
-  - *Caveat surfaced honestly:* the `P[d>Δ]` here is the DIRECT two-independent-draw discrepancy used ONLY for the
-    boundary exemption decision — NOT the SD gate's type-I control (that is the permutation test). The elevated
-    full-support `S3_loggap` null-exceedance under the direct rule is a dev-scale (N=3000, floor=200, max-over-bins)
-    artifact and a flag for MM-specificity calibration at the registered N, not a boundary or SD-gate defect.
+- **Per-statistic exemption status (decided at REGISTERED N=8000, Pi rev-6 #2 + rev-7 #2/#7):** the boundary
+  exemption is decided by the registered-N preflight (`scripts/oracle_realism_v3_regn_preflight.py`), NOT the
+  dev-scale (N=3000) pilot. At N=8000 the **bounded `S3_loggap` map ISSUES (evaluable)** — the earlier "structurally
+  un-calibratable" rationale is **WITHDRAWN**. Both S3 subchecks are instead exempt on the **DETECTION criterion**:
+  registered-N bounded detection `P[d>Δ @0.5] = 0.0 < 0.5` for both, while full/SCID/MIMIC/structural-zero detect at
+  `1.0` (checks work where supported; full-support burst-timing RETAINED, non-exemptible). Both exemptions remain
+  **PROVISIONAL** and are reported **with AND without each independently**; both M0 variants (192 / 194) are carried
+  so the exemption cannot manufacture favourable group size/power. **Finalisation requires a separately-authorized,
+  freshly-namespaced calibration/power battery using the frozen map (Pi rev-7 #7)** — the preflight is development
+  evidence only and does not meet a final power rule. The dev pilot is retained as supporting dev evidence and
+  explicitly DEFERS the decision to the preflight.
 - The full `Δ` table + required-property matrix is the "Δ / required-property" deliverable (below); values are
   sourced from prior/first-principles before calibration and hashed, and preserve existing v2 practical-effect
   semantics unless a separately-justified change is identified.
@@ -267,7 +258,11 @@ than MIMIC (the rev-5 "one MIMIC cost × M0" understated SCID). The **distributi
 pairs, strata, cells, B, statistic recomputation route, wall time, peak RAM, checkpoint size`; aggregate-only
 (per-cell/group permutation summaries + hashes; no sequence arrays).
 
-## Deliverables status (rev-6 — all DONE + tested; see "Delivered" below for hashes)
+## Deliverables status (SUPERSEDED by the "Delivered" + "Still open" sections below; see those for exact scope)
+<!-- NOTE: this older list over-labels some items "DONE"; the authoritative current scope is the Delivered /
+Still-open sections. Group-power qualification is a MECHANICAL dev demo (not a registered-scale run); the
+whole-battery wired benchmark and three group estimators are explicitly NOT yet wired. -->
+### (historical — Pi rev-3 deliverables)
 1. Rev-6 contract — **this document**.
 2. Exact schema-validated SD/MM registry (M0/G/groups/strata/proofs, both exemption variants) — **DONE**.
 3. Δ / required-property / exemption table — **DONE** (Δ bound to live constants, exact-equality test, Δ-hash;
@@ -293,33 +288,46 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-7, Pi rev-6 authorized dev-only scope — all tested)
+## Delivered (rev-8, Pi rev-7 authorized dev-only scope — all tested)
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
   audit prose removed; `B≥K/α` reframed as a conservative design rule. Both variants **M0 = 192 / 194**
   (hashes **`9a0ae6a8…` / `e978ecd0…`**); `G=6`, `K_max=54`.
-- **Issuance-complete map builder (Pi #3)** — `scripts/oracle_realism_v3_map.py` (map-set hash **`5106ad09…`**):
-  original bins + reference-owned `coarsen_reference` grouping + per-sequence means/equal-weight/floors (S6 on
-  LENGTH_BINS); a FULL issuance trust root (profile/regime/namespace/seed/N/estimator+bin identity/denominator
-  policy) + validator that REFUSES cross-identity application; adequate-support tests prove EXACT v2-value
-  reproduction (not `None==None`) + malformed/floor/cross-identity refusals.
-- **Registry-owned heterogeneous engine (Pi #4)** — `scripts/oracle_realism_v3_engine.py`: 10 estimators keyed by
-  registered `check` (callers pass DATA, never a statfn); the hardened gate validates BEFORE any statistic
-  (exact cell ids+order / mandatory per-map identity + floor-policy / alpha_group∈(0,1) / positive-int B / present
-  seed / executable per-experiment RNG identity), constructs assignments through one trusted path (IID-with-
-  replacement; duplicates valid+bound), and applies the NE policy. Each per-permutation recompute reproduces the
-  EXACT v2 estimand to `<1e-9` (S3_tau is the v3 pooled-tau).
-- **Registered-N boundary preflight (Pi #2)** — `scripts/oracle_realism_v3_regn_preflight.py` (hash **`9b4024f8…`**):
-  at N=8000 the bounded S3_loggap map ISSUES (evaluable) — the dev-scale "structurally un-calibratable" claim is
-  WITHDRAWN; both S3 exemptions rest on the DETECTION criterion (bounded detect **0.0 < 0.5**, full/SCID/MIMIC/
-  structural-zero **1.0**), reported per regime with/without each independently. Both remain PROVISIONAL.
-- **Corrected exact-group demo (Pi #1)** — `scripts/oracle_realism_v3_group_power.py` (hash **`79a6da45…`**), via
-  the engine: INDEPENDENT per-(profile,check) map-design samples (no leakage), `exp_id` in every fixture seed,
-  structural-zero 3 within-stratum quotas, tied-KS on 8-dp-rounded support, honest sparse one-experiment/two-primary
-  attribution. Group-level sensitivity for ALL THREE active components (burst_timing via the burst-timing group;
-  mark_burst_tie & cluster_size_mark_diversity via the class-mark group, argmin = the registered primary cell). Dev
-  floor/N LABELLED. The rev-5 3-cell run is a MECHANICAL SMOKE (`oracle_realism_v3_group_demo.py`, `29da0411…`).
+- **Issuance-complete map builder + HARDENED validator (Pi #3/#6)** — `scripts/oracle_realism_v3_map.py` (map-set
+  hash **`5106ad09…`**): original bins + reference-owned `coarsen_reference` grouping + per-sequence means/equal-
+  weight/floors (S6 on LENGTH_BINS). Full issuance trust root; the validator now enforces registered estimator/bin/
+  n_original_bins identities, a **floor-consistent denominator policy** (a dev-floor map cannot record the registered
+  floor), positive non-bool N/seed/floor, **status↔groups consistency**, and a **complete disjoint bin partition**;
+  it REFUSES cross-identity application. Callers record the EXACT map-design seed/namespace actually used. Adequate-
+  support tests prove EXACT v2-value reproduction (not `None==None`).
+- **Registry-owned heterogeneous engine + TRUSTED boundary (Pi #4)** — `scripts/oracle_realism_v3_engine.py`: the
+  production entry `gate_group_trusted(group_id, pools_by_exp, seed, B, map_artifacts)` loads the canonical group
+  registry INTERNALLY (hash-bound), computes precompute ITSELF from the raw pools, and treats any non-finite
+  precompute/discrepancy as NE (never zero-fill). No caller-supplied check/Δ/registered/precompute is trusted.
+  Adversarial self-tests reproduce Pi's two fail-open exploits (all-NaN precompute → PASS; mismatched check+Δ →
+  PASS) and confirm they now **NE/REFUSE**. The gate validates before any statistic (exact cell ids+order /
+  mandatory per-map identity + floor-policy / alpha_group∈(0,1) / positive-int B / present seed / executable RNG
+  identity), one trusted assignment path (IID-with-replacement; duplicates valid+bound), NE policy. Each
+  per-permutation recompute reproduces the EXACT v2 estimand to `<1e-9`. 10 estimators wired (burst-timing +
+  class-mark); the other three full-support groups are the next wiring step.
+- **Registered-N boundary preflight (Pi #2, canonical constructor Pi #3, provenance Pi #6)** —
+  `scripts/oracle_realism_v3_regn_preflight.py` (hash **`da499057…`**): at N=8000 the bounded S3_loggap map ISSUES
+  (evaluable) — the dev-scale "structurally un-calibratable" claim is WITHDRAWN; both S3 exemptions rest on the
+  DETECTION criterion (bounded detect **0.0 < 0.5**, full/SCID/MIMIC/structural-zero **1.0**), per regime with/
+  without each. **structural-zero uses the CANONICAL multiscale constructor** (means 18/60/250), and the map
+  artifact records the EXACT seed/namespace. Both PROVISIONAL; finalisation needs a separately-authorized power
+  battery (Pi #7).
+- **Corrected SPARSE + trusted demo (Pi #1/#3)** — `scripts/oracle_realism_v3_group_power.py` (hash **`97384e76…`**),
+  via `gate_group_trusted`: perturbs EXACTLY one experiment and ASSERTS (hashed, timestamps included) every other
+  pool is content-identical to null; independent map-design samples with correct provenance; structural-zero via
+  the canonical multiscale constructor; the permutation count is a LABELLED MECHANICAL dev test (B<resolution). The
+  **burst-timing group** demonstrates it end-to-end: null PASS, sparse-unchanged True, **argmin attribution rate
+  1.0** (every trial argmins to the perturbed experiment's primary cell) and direction rate 1.0. The **class-mark
+  group correctly NEs at dev N=810** — the leakage-free INDEPENDENT frozen map is (correctly) stricter than the
+  rev-7 leaky version, so a small dev pool can miss a frozen-group floor and the group fail-closes; its
+  multi-component sensitivity therefore belongs to the adequate/registered-scale run (deferred). The rev-5 3-cell
+  run is a MECHANICAL SMOKE (`29da0411…`).
 - **Δ-aligned pilot (dev evidence only)** — `scripts/oracle_realism_v3_phase0_pilot.py` (hash **`24ca0123…`**),
   formula err `0.0`; the boundary decision is DEFERRED to the registered-N preflight (Pi #2); full-support
   S3_loggap null-exceedance `0.0`.
@@ -332,11 +340,19 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   SD-main ≈ 10.3 h does NOT fit one 8 h job → separately-gated per-group SD jobs. (Full per-group wired benchmark
   follows once all five groups' estimators are wired.)
 
-## Still open (next, ONLY after this rev-7 package passes review + Pi separately authorizes)
-- **Wire the remaining three full-support groups into the engine** — the engine (`oracle_realism_v3_engine.py`)
-  binds the burst-timing (4) + class-mark (6) estimators; the length_density / run_size / phase_seam group
-  estimators, the full per-group wired benchmark, and an all-component power demonstration at registered scale are
-  the next wiring step.
+## Still open (Pi-authorized next scope; NOT yet done in rev-8)
+- **Wire the length_density / run_size / phase_seam estimators** into the engine (burst-timing + class-mark are
+  wired); then a full per-group **wired benchmark at the registered `B=20000`** per exact profile/stratum, with the
+  1.5× margin applied to EVERY group + checkpoint/resume + real evidence persistence, then mint job kinds. (The
+  current benchmark's wired measurement uses a mechanical `B=5400` and covers only the burst-timing group; the
+  route surrogate already forecasts phase/seam ≈ 8.46 h, so that route needs a predeclared split — Pi rev-7 #8.)
+- **Executable RNG-provenance manifest** — bind exact per-role derived seeds + generator/coupling CODE identities
+  in a trusted experiment manifest and compare content/count hashes at the engine boundary (the current
+  `rng_identity` hashes metadata, not the generator call — Pi rev-7 #5).
+- **Reserved map-set MANIFEST** — enumerate (do NOT execute) every required `(profile, regime, check)`, seed,
+  namespace, N/floor, builder/code identity, output path, and set-hash rule, with missing/extra/duplicate failing
+  closed (Pi rev-7 #6). The final Δ-aligned exemption then needs a separately-authorized calibration/power battery
+  using the frozen map (Pi rev-7 #7).
 - **Reference-owned frozen-map CALIBRATION draw + calibration-build preflight** — the corrected + issuance-complete
   builder is written and tested on dev fixtures; the one-time reserved-namespace DRAW is **NOT authorized** until
   Pi separately authorizes.
