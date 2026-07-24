@@ -1,12 +1,21 @@
-# Oracle Realism Verifier — Design Family v3 (rev-21, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-22, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-20 (Pi rev-19/20 GO-WITH-CHANGES). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Status:** DRAFT for Pi review. Supersedes rev-21 (which folded Pi rev-19/20 GO-WITH-CHANGES). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
 build, reserved map-design draw, audit/evaluation seed, policy population, or run. There is **no production/trusted
 readiness claim.** Registered mode is a **BLOCKED STUB**: its invariants are DECLARED and its structured assembly +
 identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED — it never runs a statistic, never
 consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
 can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
+
+**Rev-22 change (no Pi ruling folded — new measured evidence):** the FULL per-group registered-scale benchmark at
+`N=8000, B=20000` (§9, `scripts/oracle_realism_v3_registered_benchmark.py`). It replaces the five-route SURROGATE
+cost model with a direct measurement of every in-scope cell's ACTUAL wired estimator at its own experiment's
+profile volume, and it prices three registered-scale stages the surrogate never costed. It **withdraws the
+surrogate per-group hours** (they were wrong in both directions, worst case 52×) and it surfaces **two blocking
+findings that require a reviewer decision before any registered run can be planned**: two groups bust the 8 h cap,
+and the current assignment RNG law makes checkpoint/resume impossible. Nothing was drawn, populated or frozen; no
+reviewed module was modified.
 
 **Rev-21 changes folded (Pi rev-19/20 GO-WITH-CHANGES — manifest-semantics tightening):**
 1. **Canonical-VALUE validation (#1)** — `_eq` compares every design-bearing field to its canonical expected value
@@ -529,6 +538,80 @@ than MIMIC (the rev-5 "one MIMIC cost × M0" understated SCID). The **distributi
 pairs, strata, cells, B, statistic recomputation route, wall time, peak RAM, checkpoint size`; aggregate-only
 (per-cell/group permutation summaries + hashes; no sequence arrays).
 
+### 9.1 FULL per-group registered-scale benchmark at `B = 20000` (rev-22, MEASURED — supersedes the surrogate)
+
+`scripts/oracle_realism_v3_registered_benchmark.py` (deterministic `config_identity`
+**`651f5c9f…`**; self-tests pass). With all twenty estimators wired, every in-scope cell is priced by measuring
+**its own engine estimator** on a registered-scale pooled draw (`N=8000`/arm, `M=16000`) of **its own
+experiment's profile** — 74 `(profile, statistic)` measurements — rather than through a route surrogate. Maps used
+for timing are TIMING-ONLY artifacts in a distinct namespace carrying the exact fixture seed of the reference arm
+they were built from; no reserved draw, calibration/evaluation seed, manifest population or persisted run.
+
+**The surrogate per-group hours are WITHDRAWN.** Measured against surrogate (`with_exemption`, hours):
+
+| group | K | surrogate | MEASURED | error |
+|---|---|---|---|---|
+| `G_full_phase_seam` | 45 | 6.68 | **13.89** | understated 2.1× |
+| `G_full_length_density` | 36 | 0.105 | **5.51** | understated **52×** |
+| `G_full_burst_timing` | 36 | 1.70 | **2.59** | understated 1.5× |
+| `G_full_class_mark` | 54 | 0.12 | **0.24** | understated 2× |
+| `G_full_run_size` | 9 | 1.66 | **0.04** | **overstated 41×** |
+| `G_bounded_support` | 12 | 0.03 | **0.04** | ≈ |
+
+The surrogate erred in BOTH directions because its per-item KS route mis-modelled the real estimators: `count_ks`
+/ `length_ks` / `S2_ks` recompute over an `(n × |support|)` indicator matrix, so their cost scales with the
+**support cardinality**, not with the sequence or cluster count. This is exactly the rebuild Pi rev-5 #6 required
+(`Σ_experiment Σ_cell measured_cost`), and it is why a surrogate forecast must not gate a job plan.
+
+**Two groups bust the cap.** At the 8 h cap with the required 1.5× margin
+(`G_full_phase_seam` 20.84 h, `G_full_length_density` 8.27 h), so a single per-group job is NOT sufficient and the
+rev-6 "per-group jobs each fit" claim is **WITHDRAWN**. Cost is overwhelmingly permutation recompute (phase_seam:
+49 950 s of 50 015 s), concentrated in a few cells — SCID `S9_gap` at **476 ms/permutation** is 2.65 h **per cell**,
+and phase_seam contains four of them.
+
+**Split rule (normative).** A group whose single-job forecast exceeds `cap/margin` is split into the smallest
+number of **sequentially gated permutation-replicate jobs** such that `fixed_overhead + divisible/jobs` fits that
+budget, plus one final ranking/aggregation job. Fixed overhead (draw + canonicalise + precompute) is repaid by
+every split job; the min-p ranking runs ONCE at the end over the assembled `E` matrix. Stop-on-failure applies
+across a split exactly as it does across groups. Measured: `G_full_phase_seam` → **3 jobs @ 6.96 h** (with margin),
+`G_full_length_density` → **2 jobs @ 4.14 h**; the other four groups stay single-job. `B=20000` still satisfies the
+`B ≥ K_max/α_group = 8100` resolution rule.
+
+**Checkpoint / persistence (normative).** Checkpoint unit = permutation-replicate block (1000 replicates, 20
+blocks/group). Block state = that block's columns of the per-cell discrepancy matrix `E[K, block]` ONLY (432 KB;
+the full deepest-group null matrix is 8.64 MB). A resumed job recomputes only missing blocks and must re-verify the
+bound identity set (registry, source identities, map-set identity, RNG-manifest identity, floor, `B`, `α_group`,
+group id) and **REFUSE on any mismatch rather than merge across identities**. Persistence stays **aggregate-only**:
+the result artifact carries verdict / `p_g` / `α_group` / `B` / `K` / `argmin_cell` / observed per-cell `p` and `e`
+/ null-`S` quantiles / the bound identity set / a per-block assignment-digest manifest (1355 bytes measured). Never
+persisted: per-permutation `E` columns beyond the live checkpoint, assignment masks, canonicalised pools,
+precompute payloads.
+
+**Three registered-scale stages the surrogate never costed** (all invisible at the dev `B ≤ 5400`):
+
+1. **Assignment materialisation — RAM.** `_gate_group` builds `[canonical] + [perm]×B` masks for every experiment
+   before any statistic: `(B+1)·M` = 320 MB per experiment, **5.4–8.2 GB per full-support group**, held across the
+   whole recompute phase. Streaming masks per replicate instead is `O(M)` and brings peak RAM to 0.03–2.81 GB
+   (`G_full_length_density` remains 2.81 GB because its `length_ks`/`count_ks` precompute indicator matrices are
+   266 MB and 176 MB per SCID experiment — that part is irreducible without changing the estimator).
+2. **Min-p ranking — RAM, not time.** `cell_upper_p` forms an `A × A` boolean matrix (`A = B+1`): at `A = 20001`
+   that is an exact **400.0 MB transient per cell**, 217 ms/cell measured. A `sort`/`searchsorted` formulation is
+   **bit-identical** (proven here over 400 adversarial cases spanning heavy ties, `+inf` NE sentinels, all-constant
+   and all-NE vectors) at 1.42 ms and `O(A)` memory — 153×. **Honest scale: ranking is ~10 s per group, so this is
+   a memory and hygiene fix, NOT a feasibility blocker.**
+3. **Block-addressable assignments — a genuine blocker for the checkpoint plan.** The current law draws every mask
+   from ONE sequential `default_rng(seed)` stream, so block *k* cannot be regenerated without replaying blocks
+   `0..k-1`. **The split/checkpoint/resume plan above is therefore not implementable under the current law.** The
+   measured alternative derives a per-replicate seed from
+   `sha256(namespace | group | experiment | replicate_index)`, costing **+1.4 % to +8.9 %** per mask. This CHANGES
+   the assignment RNG law that the RNG manifest binds, so it is a **reviewer decision and has NOT been applied.**
+
+**None of the three fixes has been applied** — `randomization.py`, `gate.py` and `engine.py` are untouched by
+rev-22. The benchmark measures both the current and the proposed path and reports each separately, so the reviewer
+decides. Two identities are emitted as before: the deterministic `config_identity` (formula, per-cell routing,
+per-experiment strata/volumes, `B`, cap/margin/block, split rule, source identity layers) and a separate
+environment-dependent timing artifact (seconds, hours, RAM — NOT reproducible across machines).
+
 ## Revised phases (Pi's, adapted)
 0. Estimator pilot — DONE. 1. Design freeze — this contract + registry artifact + Δ table + Pi ratification of the
 reference-owned original-bin coarsening + G/group/Δ specifics. 2. Calibration-build preflight (benchmark/caps/
@@ -544,7 +627,15 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-21, Pi rev-9/rev-10/rev-12/rev-13/rev-18/rev-19-20 authorized dev-only scope — all tested)
+## Delivered (rev-22, Pi rev-9/rev-10/rev-12/rev-13/rev-18/rev-19-20 authorized dev-only scope — all tested)
+- **FULL per-group registered-scale benchmark + cap/checkpoint/persistence plan (rev-22, §9.1)** —
+  `scripts/oracle_realism_v3_registered_benchmark.py`, deterministic `config_identity` **`651f5c9f…`**, self-tests
+  pass. 74 measured `(profile, statistic)` costs at `N=8000`/arm; per-group forecast at `B=20000` for BOTH
+  variants; measured ranking / assignment / persistence stages; normative split, checkpoint and aggregate-only
+  persistence plans. Withdraws the surrogate per-group hours and the rev-6 "per-group jobs each fit" claim:
+  `G_full_phase_seam` 13.89 h and `G_full_length_density` 5.51 h exceed the 8 h cap with margin and need 3 and 2
+  sequentially gated jobs. The surrogate benchmark is unchanged and still reproduces its own
+  `config_identity` **`b1f97d1a…`**. No reviewed module modified; nothing drawn, populated or frozen.
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
@@ -657,11 +748,14 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   authorized calibration/power battery using the frozen map (Pi rev-7 #7). *(This single bullet consolidates the
   previously duplicated RNG-manifest and map-set bullets — Pi rev-9 contract change.)*
 - **Boundary-short canonical map** (Pi rev-8 #8) — route boundary-short through its canonical control constructor.
-- **Full per-group wired benchmark at the registered `B=20000`** (ALL five groups' estimators are now wired); then a full per-group **wired benchmark at the registered
-  `B=20000`** per exact profile/stratum, with the 1.5× margin applied to EVERY group + checkpoint/resume + real
-  evidence persistence, then mint job kinds. (The current benchmark's wired measurement uses a mechanical `B=5400`
-  and covers only the burst-timing group; the route surrogate already forecasts phase/seam ≈ 8.46 h, so that route
-  needs a predeclared split — Pi rev-7 #8.)
+- **Job-kind minting for the split SD jobs** — §9.1 delivers the measured per-group forecast, the cap verdict, the
+  split rule and the checkpoint/persistence plan, but the split job kinds / run IDs are NOT minted (that belongs
+  with the launch-manifest work, which is blocked).
+- **Reviewer decision on the three registered-scale implementation changes** surfaced by §9.1, none of which is
+  applied: (a) streamed per-replicate assignments instead of materialising `(B+1)·M` masks (RAM: 5.4–8.2 GB →
+  ≤2.81 GB per group); (b) the bit-identical sorted min-p ranking (400 MB transient per cell → `O(A)`);
+  (c) **blocking** — the block-addressable assignment RNG law, without which the split/checkpoint/resume plan
+  cannot be implemented at all. (c) changes a law the RNG manifest binds and so cannot be adopted unilaterally.
 - **Reference-owned frozen-map CALIBRATION draw + calibration-build preflight** — the corrected + issuance-complete
   builder is written and tested on dev fixtures; the one-time reserved-namespace DRAW is **NOT authorized** until
   Pi separately authorizes.
@@ -679,6 +773,12 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   domain-stripped problem statement.
 - Not followed: none. Permutation architecture + phase-spanning estimator imported from external statistical
   consult + standard exchangeability/rank theory (not in Cog distillation); flagged as candidate Cog feedback.
+- **rev-22 preflight (2026-07-24):** the Cog planning query for this benchmark work (route-identity binding,
+  reserved-but-unexecuted draw paths, honest compute forecasting) returned only ORCA/JEPA representation-space
+  material — **no relevant distilled guidance**, so §9.1 imports nothing from Cog. Candidate Cog feedback from
+  this rev: *a surrogate cost model must not gate a compute plan* — the five-route surrogate erred 52× low on one
+  group and 41× high on another, because it modelled cost by sequence/cluster volume while the real estimators
+  scale with support cardinality.
 
 ## Scout trigger
 Resolved by the permutation architecture + Phase-0 pilot + the §9 feasibility benchmark. No scout needed for v3;
