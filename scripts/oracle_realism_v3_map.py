@@ -133,6 +133,8 @@ def build_frozen_map(reference_sample, check, *, profile, regime, namespace="v3-
     sequence counts, and bind the full issuance trust root (Pi rev-6 #3). `floor` defaults to the registered
     FLOOR=500; a LOWER floor is only for LABELLED dev-scale demonstrations (recorded in the artifact)."""
     builder, _, _ = CHECK_SPEC[check]
+    if N is not None and len(reference_sample) != N:               # provenance: the sample IS the declared N (Pi #4)
+        raise RefusalError(f"reference_sample length {len(reference_sample)} != declared N {N}")
     pb, _ = builder(reference_sample)
     counts = np.asarray([len(v) for v in pb])
     groups = coarsen_reference(counts, floor=floor)
@@ -176,20 +178,27 @@ def validate_map_artifact(art):
         raise RefusalError(f"map original_bin_identity mismatch for {chk}")
     if art["denominator_policy"] != _denom_policy(chk, art["floor"]):   # floor-consistent (no floor-500 on dev-60)
         raise RefusalError(f"map denominator_policy inconsistent with floor {art['floor']} for {chk}")
-    # positive, non-bool N / seed / floor
+    # N / seed / floor MANDATORY positive non-bool integers for every issued artifact (Pi rev-7 #4)
     for f in ("N", "seed", "floor"):
         v = art[f]
-        if f == "floor" and (isinstance(v, bool) or not isinstance(v, int) or v <= 0):
-            raise RefusalError(f"map floor {v!r} not a positive int")
-        if f in ("N", "seed") and v is not None and (isinstance(v, bool) or not isinstance(v, int) or v <= 0):
-            raise RefusalError(f"map {f} {v!r} not a positive int")
-    # status <-> groups consistency + complete disjoint partition of 0..n_original_bins-1
+        if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+            raise RefusalError(f"map {f} {v!r} must be a positive non-bool integer")
+    # nonempty profile / regime / namespace
+    for f in ("profile", "regime", "namespace"):
+        if not (isinstance(art[f], str) and art[f].strip()):
+            raise RefusalError(f"map {f} must be a nonempty string")
+    # status <-> groups: an OK map's groups are ORDERED, CONTIGUOUS, nonempty, disjoint, covering 0..n-1 exactly
+    # (a frozen v2 merge yields ordered contiguous runs — an arbitrary mathematical partition is NOT valid; Pi #4)
     if art["status"] == "OK":
-        if not isinstance(art["groups"], list) or not art["groups"]:
+        groups = art["groups"]
+        if not isinstance(groups, list) or not groups:
             raise RefusalError("map status OK but groups empty/None")
-        flat = [i for g in art["groups"] for i in g]
-        if sorted(flat) != list(range(nbins)):
-            raise RefusalError(f"map groups are not a complete disjoint partition of 0..{nbins - 1}")
+        for g in groups:
+            if not isinstance(g, list) or not g or any(isinstance(i, bool) or not isinstance(i, int) for i in g):
+                raise RefusalError(f"map group {g!r} must be a nonempty list of int bin indices")
+        flat = [i for g in groups for i in g]
+        if flat != list(range(nbins)):                          # ORDERED CONTIGUOUS (not merely sorted)
+            raise RefusalError(f"map groups not an ordered contiguous partition of 0..{nbins - 1}: {flat}")
     elif art["groups"] is not None:
         raise RefusalError("map status REFUSED but groups non-null")
 
@@ -272,9 +281,9 @@ def selftest():
     if build_frozen_map(ref, "S6_tv", profile=prof, regime=reg)["bins_id"] != "LENGTH_BINS":
         errs.append("S6_tv bins_id != LENGTH_BINS")
 
-    # floor enforcement: tiny reference => NE
+    # floor enforcement: tiny reference => NE (artifact carries mandatory seed/N)
     tiny = _dev_sample(prof, 50, "tiny")
-    art_tiny = build_frozen_map(ref, "S3_loggap", profile=prof, regime=reg)
+    art_tiny = build_frozen_map(ref, "S3_loggap", profile=prof, regime=reg, seed=7, N=N)
     if apply_frozen_map(tiny, tiny, "S3_loggap", art_tiny, expect_profile=prof, expect_regime=reg) is not None:
         errs.append("floor not enforced (tiny sample should be NE)")
 
@@ -299,11 +308,22 @@ def selftest():
             validate_map_artifact(bad); return False
         except RefusalError:
             return True
-    missing = {k: v for k, v in art.items() if k != "seed"}
-    extra = {**art, "sneaky": 1}
-    mistyped = {**art, "floor": "500"}
-    badbins = {**art, "bins_id": "LENGTH_BINS"}          # wrong bins_id for a CLUSTER_BINS check
-    for label, bad in (("missing", missing), ("extra", extra), ("mistyped", mistyped), ("wrong_bins", badbins)):
+    # Pi rev-7 #4 reproduced-acceptance cases must now REFUSE
+    ncb = len(_BINS[ORIGINAL_BINS["S3_loggap"]])
+    noncontig = {**art, "groups": [[0, 2], [1, 3]] + [[i] for i in range(4, ncb)]}   # disjoint+complete but NOT ordered
+    emptyfirst = {**art, "groups": [[]] + [[i] for i in range(ncb)]}                  # empty group prepended
+    malformed = {
+        "missing": {k: v for k, v in art.items() if k != "seed"},
+        "extra": {**art, "sneaky": 1},
+        "mistyped": {**art, "floor": "500"},
+        "wrong_bins": {**art, "bins_id": "LENGTH_BINS"},
+        "seed_none": {**art, "seed": None},
+        "N_none": {**art, "N": None},
+        "blank_profile": {**art, "profile": "  "},
+        "non_contiguous_groups": noncontig,
+        "empty_group": emptyfirst,
+    }
+    for label, bad in malformed.items():
         if not _mrefused(bad):
             errs.append(f"malformed-artifact NOT refused: {label}")
 

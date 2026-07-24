@@ -48,7 +48,7 @@ def _tau_pre(pool):
     return np.array([_seq_components(r) for r in pool])
 
 
-def _tau_re(pre, mask, groups=None):
+def _tau_re(pre, mask, groups=None, floor=FLOOR):
     def t(Cm):
         s = Cm.sum(0); dA, dB = s[1] - s[2], s[1] - s[3]
         return None if (dA <= 0 or dB <= 0) else s[0] / np.sqrt(dA * dB)
@@ -62,7 +62,7 @@ def _dt0_pre(pool):
     return np.stack([nz, na], 1)
 
 
-def _dt0_re(pre, mask, groups=None):
+def _dt0_re(pre, mask, groups=None, floor=FLOOR):
     a, b = pre[mask].sum(0), pre[~mask].sum(0)
     return None if (a[1] == 0 or b[1] == 0) else abs(a[0] / a[1] - b[0] / b[1])
 
@@ -79,7 +79,7 @@ def _gap_pre(pool):
     return {"owner": owner, "inv": inv, "nu": len(uniq)}
 
 
-def _gap_re(pre, mask, groups=None):
+def _gap_re(pre, mask, groups=None, floor=FLOOR):
     inA = mask[pre["owner"]]; nA = int(inA.sum()); nB = len(inA) - nA
     if nA == 0 or nB == 0:
         return None
@@ -102,7 +102,7 @@ def _loggap_pre(pool):
     return {"sm": sm, "sp": sp}
 
 
-def _loggap_re(pre, mask, groups):
+def _loggap_re(pre, mask, groups, floor=FLOOR):
     if groups is None:
         return None
     d = 0.0
@@ -113,7 +113,7 @@ def _loggap_re(pre, mask, groups):
             cv.append(sm[pres & mask]); rv.append(sm[pres & ~mask])
             cp += sp[pres & mask].sum(); rp += sp[pres & ~mask].sum()
         cvv, rvv = np.concatenate(cv), np.concatenate(rv)
-        if cvv.size < FLOOR or rvv.size < FLOOR or cp < FLOOR or rp < FLOOR:
+        if cvv.size < floor or rvv.size < floor or cp < floor or rp < floor:
             return None
         d = max(d, abs(cvv.mean() - rvv.mean()))
     return d
@@ -129,11 +129,11 @@ def _s4_pre(pool):
     return out
 
 
-def _s4_re(pre, mask, groups=None):
+def _s4_re(pre, mask, groups=None, floor=FLOOR):
     pres = ~np.isnan(pre[:, 0]); ca = pres & mask; cr = pres & ~mask
-    if int(ca.sum()) < FLOOR or int(cr.sum()) < FLOOR:
+    if int(ca.sum()) < floor or int(cr.sum()) < floor:
         return None
-    if min(pre[ca, 1].sum(), pre[cr, 1].sum(), pre[ca, 2].sum(), pre[cr, 2].sum()) < FLOOR:
+    if min(pre[ca, 1].sum(), pre[cr, 1].sum(), pre[ca, 2].sum(), pre[cr, 2].sum()) < floor:
         return None
     return abs(float(pre[ca, 0].mean()) - float(pre[cr, 0].mean()))
 
@@ -142,7 +142,7 @@ def _classtv_pre(pool):
     return np.array([np.bincount(r.class_ids, minlength=C)[:C] for r in pool], float)
 
 
-def _classtv_re(pre, mask, groups=None):
+def _classtv_re(pre, mask, groups=None, floor=FLOOR):
     a, b = pre[mask].sum(0), pre[~mask].sum(0)
     if a.sum() == 0 or b.sum() == 0:
         return None
@@ -153,9 +153,9 @@ def _occ_pre(pool):
     return np.array([len(np.unique(r.class_ids)) / C for r in pool], float)
 
 
-def _occ_re(pre, mask, groups=None):
+def _occ_re(pre, mask, groups=None, floor=FLOOR):
     a, b = pre[mask], pre[~mask]
-    return None if (a.size < FLOOR or b.size < FLOOR) else abs(float(a.mean()) - float(b.mean()))
+    return None if (a.size < floor or b.size < floor) else abs(float(a.mean()) - float(b.mean()))
 
 
 def _lenbin_scalar_pre(pool, val):
@@ -196,7 +196,7 @@ def _s7_pre(pool):
     return {"sm": sm, "cc": cc}
 
 
-def _map_re_scalar(pre, mask, groups, extra_key=None):
+def _map_re_scalar(pre, mask, groups, extra_key=None, floor=FLOOR):
     if groups is None:
         return None
     sm = pre["sm"]; extra = pre.get(extra_key) if extra_key else None
@@ -209,13 +209,13 @@ def _map_re_scalar(pre, mask, groups, extra_key=None):
             if extra is not None:
                 ce += extra[b][pres & mask].sum(); re_ += extra[b][pres & ~mask].sum()
         cvv, rvv = np.concatenate(cv), np.concatenate(rv)
-        if cvv.size < FLOOR or rvv.size < FLOOR or (extra is not None and (ce < FLOOR or re_ < FLOOR)):
+        if cvv.size < floor or rvv.size < floor or (extra is not None and (ce < floor or re_ < floor)):
             return None
         d = max(d, abs(cvv.mean() - rvv.mean()))
     return d
 
 
-def _map_re_vector(pre, mask, groups):
+def _map_re_vector(pre, mask, groups, floor=FLOOR):
     if groups is None:
         return None
     vec = pre["vec"]; d = 0.0
@@ -225,7 +225,7 @@ def _map_re_vector(pre, mask, groups):
             v = vec[b]; pres = ~np.isnan(v[:, 0])
             cvs.append(v[pres & mask]); rvs.append(v[pres & ~mask])
         cv, rv = np.concatenate(cvs), np.concatenate(rvs)
-        if cv.shape[0] < FLOOR or rv.shape[0] < FLOOR:
+        if cv.shape[0] < floor or rv.shape[0] < floor:
             return None
         d = max(d, 0.5 * float(np.abs(cv.mean(0) - rv.mean(0)).sum()))
     return d
@@ -250,7 +250,7 @@ ESTIMATORS = {
                "identity": "v2.cond_maxbin.mean(occupancy)@LENGTH_BINS[ref_coarsen]"},
     "S6_tv": {"precompute": _s6_pre, "recompute": _map_re_vector, "map_carrying": True,
               "identity": "v2.maxabs_tv(class_prior)@LENGTH_BINS[ref_coarsen]"},
-    "S7_abs": {"precompute": _s7_pre, "recompute": (lambda pre, m, g: _map_re_scalar(pre, m, g, extra_key="cc")),
+    "S7_abs": {"precompute": _s7_pre, "recompute": (lambda pre, m, g, floor=FLOOR: _map_re_scalar(pre, m, g, extra_key="cc", floor=floor)),
                "map_carrying": True, "identity": "v2.cond_maxbin.mean(distinct_class_frac)@CLUSTER_BINS[ref_coarsen]"},
 }
 
@@ -314,7 +314,7 @@ def gate_group(spec):
     """spec: {cells:[{cell_id,exp,check,pre,[map_art]}], experiments:{e:{strata,source,replicate_seed,coupled_component}},
     registered:{cell_ids,map_hashes,rng_identities,alpha_group,floor_policy}, B, seed}. Fail-closed."""
     _validate(spec)                                                 # BEFORE any statistic
-    reg = spec["registered"]; B = spec["B"]
+    reg = spec["registered"]; B = spec["B"]; floor = spec.get("floor", FLOOR)   # floor is a PARAM, not a global
     rng = np.random.default_rng(spec["seed"])
     exps = spec["experiments"]
     # ONE trusted assignment path (IID-with-replacement MC; duplicates VALID + bound)
@@ -323,7 +323,7 @@ def gate_group(spec):
     def d_of(c, m):
         est = ESTIMATORS[c["check"]]
         groups = c["map_art"]["groups"] if est["map_carrying"] else None
-        return est["recompute"](c["pre"], m, groups)
+        return est["recompute"](c["pre"], m, groups, floor)
     for c in spec["cells"]:                                          # observed NE (or non-finite) -> group NE
         d0 = d_of(c, masks[c["exp"]][0])
         if d0 is None or not np.isfinite(d0):
@@ -333,7 +333,7 @@ def gate_group(spec):
         est = ESTIMATORS[c["check"]]; groups = c["map_art"]["groups"] if est["map_carrying"] else None
         ej = np.empty(B + 1)
         for j, m in enumerate(masks[c["exp"]]):
-            d = est["recompute"](c["pre"], m, groups)
+            d = est["recompute"](c["pre"], m, groups, floor)
             # NaN/Inf discrepancy is a support/precompute failure -> maximally extreme NE, NEVER zero-fill (Pi #4)
             ej[j] = np.inf if (d is None or not np.isfinite(d)) else max(0.0, d - c["delta"])
         E.append(ej)
@@ -362,17 +362,29 @@ def _build_canonical_groups():
                 raise RefusalError(f"canonical group {gid} has unwired check {chk}")
             cells.append({"cell_id": cid, "exp": c["experiment_id"], "check": chk, "delta": float(c["delta"]),
                           "map_carrying": ESTIMATORS[chk]["map_carrying"]})
+            strata = c["exchangeability_strata"]
             exps.setdefault(c["experiment_id"], {
                 "source": c["source"], "condition": c["condition"], "coupled_component": c["coupled_component"],
-                "n_strata": len(c["exchangeability_strata"]),
-                "registered_quota": [(s["n_candidate"], s["n_reference"]) for s in c["exchangeability_strata"]]})
-        out[gid] = {"group_id": gid, "cells": cells, "experiments": exps,
-                    "alpha_group": round(0.04 / len(groups), 10), "floor_policy": "registered_500"}
+                "stratum_ids": [s["stratum_id"] for s in strata],
+                "registered_quota": [(s["n_candidate"], s["n_reference"]) for s in strata]})
+        out[gid] = {"group_id": gid, "cells": cells, "experiments": exps}
     return out
 
 
 CANONICAL_GROUPS = _build_canonical_groups()
 CANONICAL_REGISTRY_HASH = canonical_hash(CANONICAL_GROUPS)
+ALPHA_GROUP_EXACT = 0.04 / 6          # EXACT float (Pi rev-8 #2: bind exact 0.04/6, not a rounded value)
+
+
+def _registry_identity():
+    return {v: canonical_hash(REG._build_variant(u)[0]) for v, u in (("with", True), ("without", False))}
+
+
+# The exact REGISTERED configuration — no mutable module globals carry registered semantics (Pi rev-8 #2).
+REGISTERED = {"N_per_arm": 8000, "B": 20000, "floor": 500, "alpha_group": ALPHA_GROUP_EXACT,
+              "registry_identity": _registry_identity(),
+              "map_set_identity": "RESERVED_MAP_SET_NOT_DRAWN",       # reserved draw BLOCKED -> real registered run blocks
+              "rng_manifest_identity": "RESERVED_RNG_MANIFEST_NOT_BOUND"}
 
 
 def _validate_precompute(pre, check):
@@ -391,56 +403,112 @@ def _validate_precompute(pre, check):
     return pre
 
 
-def _derive_strata(pool, n_strata):
-    """Balanced within-stratum quotas from the RAW pool; n_strata from the canonical registry. Pool order is
-    stratum-interleaved [candA,refA,candB,refB,...]; each stratum balanced (nA==nB)."""
-    M = len(pool)
-    if n_strata <= 0 or M % (2 * n_strata) != 0:
-        raise RefusalError(f"pool length {M} not divisible into {n_strata} balanced strata")
-    per = M // n_strata
-    return [(per // 2, per // 2) for _ in range(n_strata)]
-
-
-def gate_group_trusted(group_id, pools_by_exp, *, seed, B, map_artifacts=None):
-    """TRUSTED entry point. Caller passes only group_id + raw experiment pools + seed + B (+ dev map artifacts)."""
-    if group_id not in CANONICAL_GROUPS:
-        raise RefusalError(f"unknown/unwired canonical group {group_id}")
-    canon = CANONICAL_GROUPS[group_id]
-    if isinstance(B, bool) or not isinstance(B, int) or B <= 0:
-        raise RefusalError(f"B {B!r} not a positive integer")
-    if seed is None:
-        raise RefusalError("missing seed")
-    if set(pools_by_exp) != set(canon["experiments"]):
-        raise RefusalError(f"experiments {sorted(pools_by_exp)} != canonical {sorted(canon['experiments'])}")
-    map_artifacts = map_artifacts or {}
-    experiments, cells = {}, []
+def _assemble_arms(arms_by_exp, canon, *, exact_counts):
+    """STRUCTURED arms -> validated experiments with per-stratum (nA,nB) + a canonical-order pool
+    [cand_s0, ref_s0, cand_s1, ref_s1, ...]. Fixes the flat-pool divisibility bug (Pi rev-8 #1): unequal registered
+    strata (2667,2667,2666) are given explicitly, never guessed from a pool length."""
+    if set(arms_by_exp) != set(canon["experiments"]):
+        raise RefusalError(f"experiments {sorted(arms_by_exp)} != canonical {sorted(canon['experiments'])}")
+    experiments = {}
     for e, meta in canon["experiments"].items():
-        pool = pools_by_exp[e]
-        if not isinstance(pool, list) or len(pool) == 0:
-            raise RefusalError(f"experiment {e} pool must be a non-empty list of sequences")
-        experiments[e] = {"strata": _derive_strata(pool, meta["n_strata"]), "source": meta["source"],
-                          "replicate_seed": 0, "coupled_component": meta["coupled_component"]}
-    for cc in canon["cells"]:                                        # cells built from canonical registry ONLY
-        est = ESTIMATORS[cc["check"]]; pool = pools_by_exp[cc["exp"]]
-        pre = _validate_precompute(est["precompute"](pool), cc["check"])   # computed HERE + finiteness-checked
+        arms = arms_by_exp[e]
+        if list(arms) != list(meta["stratum_ids"]):
+            raise RefusalError(f"experiment {e} stratum ids/order {list(arms)} != canonical {meta['stratum_ids']}")
+        strata, pool = [], []
+        for sid, (qc, qr) in zip(meta["stratum_ids"], meta["registered_quota"]):
+            arm = arms[sid]
+            if not isinstance(arm, dict) or set(arm) != {"candidate", "reference"}:
+                raise RefusalError(f"{e}/{sid} arm must be exactly {{candidate, reference}}")
+            cand, ref = arm["candidate"], arm["reference"]
+            if not isinstance(cand, list) or not isinstance(ref, list):
+                raise RefusalError(f"{e}/{sid} candidate/reference must be lists")
+            nc, nr = len(cand), len(ref)
+            if exact_counts and (nc, nr) != (qc, qr):
+                raise RefusalError(f"{e}/{sid} registered quota {(nc, nr)} != canonical {(qc, qr)}")
+            if nc != nr or nc == 0:
+                raise RefusalError(f"{e}/{sid} must be balanced non-empty")
+            strata.append((nc, nr)); pool += list(cand) + list(ref)   # canonical order: cand then ref per stratum
+        experiments[e] = {"strata": strata, "source": meta["source"], "replicate_seed": 0,
+                          "coupled_component": meta["coupled_component"], "pool": pool}
+    return experiments
+
+
+def _gate_core(group_id, experiments, *, floor, B, seed, alpha_group, map_for_cell):
+    """Common core: build cells from the canonical registry ONLY, compute precompute INTERNALLY, run the gate at
+    the given `floor` (a parameter — no module-global mutation)."""
+    canon = CANONICAL_GROUPS[group_id]; cells = []
+    for cc in canon["cells"]:
+        est = ESTIMATORS[cc["check"]]; pool = experiments[cc["exp"]]["pool"]
+        pre = _validate_precompute(est["precompute"](pool), cc["check"])
         cell = {"cell_id": cc["cell_id"], "exp": cc["exp"], "check": cc["check"], "pre": pre, "delta": cc["delta"]}
         if cc["map_carrying"]:
-            art = map_artifacts.get(cc["cell_id"])
-            if art is None:
-                raise RefusalError(f"map-carrying cell {cc['cell_id']} missing mandatory map artifact")
-            validate_map_artifact(art)
-            if art["check"] != cc["check"]:
-                raise RefusalError(f"map artifact check {art['check']} != canonical {cc['check']}")
-            cell["map_art"] = art
+            cell["map_art"] = map_for_cell(cc)                        # bound + validated by the caller's mode
         cells.append(cell)
-    spec = {"cells": cells, "experiments": experiments, "B": B, "seed": seed,
-            "registered": {"cell_ids": [c["cell_id"] for c in cells], "alpha_group": canon["alpha_group"],
-                           "floor_policy": canon["floor_policy"],
+    spec = {"cells": cells, "experiments": experiments, "B": B, "seed": seed, "floor": floor,
+            "registered": {"cell_ids": [c["cell_id"] for c in cells], "alpha_group": alpha_group,
+                           "floor_policy": f"floor_{floor}",
                            "map_hashes": {c["cell_id"]: (map_identity(c["map_art"]) if c.get("map_art") else None)
                                           for c in cells},
                            "rng_identities": {e: rng_identity(m["source"], m["replicate_seed"], m["coupled_component"])
                                               for e, m in experiments.items()}}}
     return gate_group(spec)
+
+
+def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_config_hash):
+    """DEVELOPMENT entry point (Pi rev-8 #2): explicit hash-bound dev config (floor/B passed, NOT a mutated global).
+    Strata STRUCTURE is validated (canonical stratum ids/order, balanced) but sizes are dev-scaled. Each map-cell's
+    artifact is CONTEXT-BOUND to its (profile,regime,check)+dev floor/N, and one shared map identity per
+    (profile,regime,check) is enforced (Pi rev-8 #3)."""
+    if group_id not in CANONICAL_GROUPS:
+        raise RefusalError(f"unknown/unwired canonical group {group_id}")
+    if isinstance(B, bool) or not isinstance(B, int) or B <= 0 or seed is None:
+        raise RefusalError("dev B must be a positive int and seed present")
+    if dev_config_hash != canonical_hash({"mode": "dev", "floor": floor, "B": B, "group": group_id}):
+        raise RefusalError("dev_config_hash does not bind (floor,B,group)")
+    canon = CANONICAL_GROUPS[group_id]
+    experiments = _assemble_arms(arms_by_exp, canon, exact_counts=False)
+    # CONTEXT-bind maps: one shared identity per (profile,regime,check); dev floor must match; profile/regime match
+    per_ctx = {}
+    def map_for_cell(cc):
+        art = (map_artifacts or {}).get(cc["cell_id"])
+        if art is None:
+            raise RefusalError(f"map-carrying cell {cc['cell_id']} missing mandatory map artifact")
+        validate_map_artifact(art)
+        src = canon["experiments"][cc["exp"]]["source"]; ctx = (src, "full", cc["check"])
+        if art["check"] != cc["check"] or art["profile"] != src or art["regime"] != "full":
+            raise RefusalError(f"map context mismatch for {cc['cell_id']} (expected {ctx})")
+        if art["floor"] != floor:
+            raise RefusalError(f"map floor {art['floor']} != dev floor {floor} for {cc['cell_id']}")
+        mid = map_identity(art)
+        if per_ctx.setdefault(ctx, mid) != mid:
+            raise RefusalError(f"cells sharing {ctx} received different maps")
+        return art
+    return _gate_core(group_id, experiments, floor=floor, B=B, seed=seed, alpha_group=ALPHA_GROUP_EXACT,
+                      map_for_cell=map_for_cell)
+
+
+def gate_group_registered(group_id, arms_by_exp, *, seed, registry_identity, map_set_identity, rng_manifest_identity):
+    """REGISTERED entry point (Pi rev-8 #2): enforces the EXACT registered N/arm, B=20000, floor 500, exact
+    alpha=0.04/6, exact per-stratum quotas, the full registry identity, and the approved map-set + RNG manifest
+    identities — refusing ANY deviation. The reserved map-set/RNG manifests are NOT yet drawn, so a real registered
+    run is BLOCKED here; the enforcement + structured-strata assembly (no divisibility refusal) are exercised by the
+    registered adversarial preflight."""
+    if group_id not in CANONICAL_GROUPS:
+        raise RefusalError(f"unknown/unwired canonical group {group_id}")
+    if seed is None:
+        raise RefusalError("missing seed")
+    if registry_identity != REGISTERED["registry_identity"]:
+        raise RefusalError("registry identity mismatch")
+    canon = CANONICAL_GROUPS[group_id]
+    experiments = _assemble_arms(arms_by_exp, canon, exact_counts=True)     # exact (2667,2667,2666) etc.
+    for e, ex in experiments.items():
+        if sum(nc for nc, _ in ex["strata"]) != REGISTERED["N_per_arm"]:
+            raise RefusalError(f"experiment {e} candidate N != registered {REGISTERED['N_per_arm']}")
+    if map_set_identity != REGISTERED["map_set_identity"]:
+        raise RefusalError("map-set identity != approved (reserved map set not yet drawn)")
+    if rng_manifest_identity != REGISTERED["rng_manifest_identity"]:
+        raise RefusalError("RNG manifest identity != approved (reserved RNG manifest not yet bound)")
+    raise RefusalError("registered run BLOCKED: reserved map-set + RNG manifest not yet drawn/bound (stop line)")
 
 
 # --- self-tests ---------------------------------------------------------------------------------------
@@ -500,7 +568,7 @@ def selftest():
 
     # MANDATORY map-hash: a map-carrying cell with a missing/mismatched map_art must refuse
     mcell = {"cell_id": "SD|e0|S3_loggap", "exp": "e0", "check": "S3_loggap", "pre": _loggap_pre(pool),
-             "delta": 0.09531, "map_art": build_frozen_map(ref, "S3_loggap", profile=prof, regime="full", N=1500)}
+             "delta": 0.09531, "map_art": build_frozen_map(ref, "S3_loggap", profile=prof, regime="full", seed=11, N=1500)}
     mcells = cells + [mcell]
     if not refused_map(mcells, exps, drop_art=True):
         errs.append("missing mandatory map_art NOT refused")
@@ -514,7 +582,7 @@ def selftest():
         c2, r2 = draw(("neA", t), 400), draw(("neB", t), 400)      # small N so S3_loggap NEs on some perms
         p2 = list(c2) + list(r2)
         e2 = {"e0": {"strata": [(len(c2), len(r2))], "source": prof, "replicate_seed": 0, "coupled_component": None}}
-        art = build_frozen_map(r2, "S3_loggap", profile=prof, regime="full", N=400)
+        art = build_frozen_map(r2, "S3_loggap", profile=prof, regime="full", seed=100 + t, N=400)
         cl = [{"cell_id": "SD|e0|S3_loggap", "exp": "e0", "check": "S3_loggap", "pre": _loggap_pre(p2),
                "delta": 0.09531, "map_art": art}]
         res = gate_group(_mk_spec(cl, e2, B=99, seed=100 + t))
@@ -533,7 +601,7 @@ def selftest():
     for chk in ("delta_t_zero_abs", "positive_gap_ks", "S4_abs", "class_tv", "occupancy_abs",
                 "S3_loggap", "S5_abs", "S6_tv", "S7_abs"):
         est = ESTIMATORS[chk]; pre = est["precompute"](poolc)
-        g = build_frozen_map(rr, chk, profile=prof, regime="full", N=6000)["groups"] if est["map_carrying"] else None
+        g = build_frozen_map(rr, chk, profile=prof, regime="full", seed=13, N=6000)["groups"] if est["map_carrying"] else None
         got, want = est["recompute"](pre, obs, g), v2[chk].value
         ok = (got is None and want is None) or (got is not None and want is not None and abs(got - want) < 1e-9)
         if not ok:
@@ -545,23 +613,60 @@ def selftest():
                   "pre": np.full(len(cand) + len(ref), np.nan), "delta": 0.03}]
     if gate_group(_mk_spec(nan_cells, exps))["verdict"] != NOT_EVALUABLE:
         errs.append("all-NaN precompute did not NE (fail-open persists)")
-    # (b) the TRUSTED entry structurally closes caller check/Delta/precompute injection + validates inputs
-    def _trust_refused(fn):
+    # (b) DEV + REGISTERED entry points close caller injection + validate inputs (Pi rev-8 #2)
+    def _refused(fn):
         try:
             fn(); return False
         except RefusalError:
             return True
-    trust = {
-        "unknown_group": lambda: gate_group_trusted("NOT_A_GROUP", {}, seed=1, B=99),
-        "wrong_experiments": lambda: gate_group_trusted("G_full_burst_timing", {"eX": [1]}, seed=1, B=99),
-        "bad_B": lambda: gate_group_trusted("G_full_burst_timing", {}, seed=1, B=0),
-        "missing_seed": lambda: gate_group_trusted("G_full_burst_timing", {}, seed=None, B=99),
+    ref = {
+        "dev_unknown_group": lambda: gate_group_dev("NOT_A_GROUP", {}, seed=1, B=99, floor=60,
+                                                    map_artifacts={}, dev_config_hash="x"),
+        "dev_bad_B": lambda: gate_group_dev("G_full_burst_timing", {}, seed=1, B=0, floor=60,
+                                            map_artifacts={}, dev_config_hash="x"),
+        "dev_bad_config_hash": lambda: gate_group_dev("G_full_burst_timing", {}, seed=1, B=99, floor=60,
+                                                      map_artifacts={}, dev_config_hash="WRONG"),
         "inf_precompute": lambda: _validate_precompute(np.array([1.0, np.inf, 2.0]), "x"),
     }
-    for name, fn in trust.items():
-        if not _trust_refused(fn):
-            errs.append(f"trusted-entry refusal NOT raised: {name}")
-    # canonical registry is hash-bound + only wired groups present
+    for name, fn in ref.items():
+        if not _refused(fn):
+            errs.append(f"entry refusal NOT raised: {name}")
+
+    # (c) REGISTERED adversarial preflight (Pi rev-8 next-gate ask): structured registered strata ASSEMBLE with no
+    # divisibility refusal; gate_group_registered refuses every deviation and blocks the (reserved) real run.
+    burst = "G_full_burst_timing"
+    canon = CANONICAL_GROUPS[burst]
+    def _reg_arms(quota_override=None):                              # synthetic registered arms (dummy sequences)
+        arms = {}
+        for e, meta in canon["experiments"].items():
+            arms[e] = {}
+            for sid, (qc, qr) in zip(meta["stratum_ids"], meta["registered_quota"]):
+                if quota_override and e == "structural_zero":
+                    qc, qr = quota_override
+                arms[e][sid] = {"candidate": [0] * qc, "reference": [0] * qr}
+        return arms
+    RID, MSI, RMI = REGISTERED["registry_identity"], REGISTERED["map_set_identity"], REGISTERED["rng_manifest_identity"]
+    # structured registered structural-zero (2667,2667,2666) ASSEMBLES without the old flat-pool divisibility error
+    try:
+        _assemble_arms(_reg_arms(), canon, exact_counts=True)
+    except RefusalError as ex:
+        errs.append(f"registered structured-strata assembly refused (divisibility not fixed): {ex}")
+    reg_refusals = {
+        "reg_blocked_when_all_valid": lambda: gate_group_registered(burst, _reg_arms(), seed=1, registry_identity=RID,
+                                                                    map_set_identity=MSI, rng_manifest_identity=RMI),
+        "reg_wrong_registry": lambda: gate_group_registered(burst, _reg_arms(), seed=1, registry_identity="X",
+                                                            map_set_identity=MSI, rng_manifest_identity=RMI),
+        "reg_wrong_quota": lambda: gate_group_registered(burst, _reg_arms(quota_override=(2000, 2000)), seed=1,
+                                                         registry_identity=RID, map_set_identity=MSI,
+                                                         rng_manifest_identity=RMI),
+        "reg_wrong_mapset": lambda: gate_group_registered(burst, _reg_arms(), seed=1, registry_identity=RID,
+                                                          map_set_identity="X", rng_manifest_identity=RMI),
+    }
+    for name, fn in reg_refusals.items():
+        if not _refused(fn):                                        # ALL must raise (incl. the reserved-run block)
+            errs.append(f"registered refusal NOT raised: {name}")
+    if REGISTERED["alpha_group"] != 0.04 / 6:
+        errs.append("alpha_group not the exact 0.04/6 float")
     if set(CANONICAL_GROUPS) != {"G_full_burst_timing", "G_full_class_mark"}:
         errs.append("canonical groups drift")
     return errs
