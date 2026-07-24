@@ -1,12 +1,26 @@
-# Oracle Realism Verifier — Design Family v3 (rev-18, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-19, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-17. The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Status:** DRAFT for Pi review. Supersedes rev-18 (Pi REVISE). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
 build, reserved map-design draw, audit/evaluation seed, policy population, or run. There is **no production/trusted
 readiness claim.** Registered mode is a **BLOCKED STUB**: its invariants are DECLARED and its structured assembly +
 identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED — it never runs a statistic, never
 consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
 can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
+
+**Rev-19 changes folded (Pi rev-18 REVISE — boundary-short / bounded-support wiring FIRST):**
+1. **`G_bounded_support` wired** into `CANONICAL_GROUPS` (the one `boundary_short` experiment — condition=boundary,
+   3 strata `(2667,2667,2666)`, all 12 checks already wired; map-carrying = `S7_abs` under the with-exemption
+   variant). The canonical-group builder now stores each experiment's **`support_regime`** (`full` | `bounded`).
+2. **Map-context regime is no longer hardcoded** — `gate_group_dev` binds the map artifact's regime to the
+   experiment's `support_regime` (a bounded cell requires a `regime="bounded"` map; a `full` map is refused). Six
+   engine-wired groups now; the drift assertion updates.
+3. **Consequence for the manifest universe** — because the manifest derives from `CANONICAL_GROUPS`, wiring
+   boundary_short already lifts the RNG universe to the full 10 experiments / 14 strata and adds the
+   `(boundary_short, bounded, S7_abs)` map. The remaining Pi rev-18 items — carrying BOTH exemption variants,
+   role-specific RNG provenance, strict unknown-field-refusing schemas, full-registry + manifest-source identities,
+   and a deterministic schema identity separated from the env-dependent instance hash (the reported-hash fix) — are
+   the NEXT increment (the manifest rework). Benchmark `09f413c9…` → `b1f97d1a…`.
 
 **Rev-18 changes (Pi rev-13 authorized — DRAFT-ONLY reserved-manifest schemas):**
 1. **New module `scripts/oracle_realism_v3_manifest.py`** defines the STRUCTURE + fail-closed VALIDATORS for the two
@@ -481,7 +495,7 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-18, Pi rev-9/rev-10/rev-12/rev-13 authorized dev-only scope — all tested)
+## Delivered (rev-19, Pi rev-9/rev-10/rev-12/rev-13/rev-18 authorized dev-only scope — all tested)
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
@@ -515,8 +529,8 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   structured registered structural-zero `(2667,2667,2666)` **assembly self-test uses DUMMY sequences and checks
   quotas/order only** (no divisibility refusal), NOT registered statistic execution. Each per-permutation recompute
   reproduces the EXACT v2 estimand to `<1e-9`. The low-level kernel is `_gate_group` (private/test-only). 20
-  estimators wired across ALL FIVE full-support groups (burst-timing + class-mark + run_size + length_density +
-  phase_seam/`S8_density,S8_class,S9_zero,S9_class,S9_gap`). Estimator wiring is COMPLETE.
+  estimators wired across ALL SIX groups — the five full-support groups + `G_bounded_support` (boundary_short, bounded
+  regime; map-context regime is per-experiment `support_regime`, not hardcoded). Estimator + group wiring is COMPLETE.
 - **DRAFT-ONLY reserved-manifest schemas (Pi rev-13; rev-18)** — `scripts/oracle_realism_v3_manifest.py`:
   fail-closed schema + validator + self-test for the RNG manifest (9 experiments / 11 strata; real quotas + arm order
   + `rng_identity` + count hash; reserved seeds/content/generator identities) and the map-set manifest (15 required
@@ -544,9 +558,9 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   artifact records the EXACT seed/namespace. Both PROVISIONAL; finalisation needs a separately-authorized power
   battery (Pi #7).
 - **SPARSE + PAIRED dev-boundary demo (Pi rev-7 #1, rev-8 #7; RC1/RC4/RC5 + rev-11–rev-14 follow-through)** —
-  `scripts/oracle_realism_v3_group_power.py` (hash **`09573553…`** — successively
-  `…→`de1969a5`→`09573553` as the dev stable identity was rebound to the source identity layers and the registry
-  grew by all five wired groups; the schemas AND the
+  `scripts/oracle_realism_v3_group_power.py` (hash **`f1d0f3a0…`** — successively
+  `…→`09573553`→`f1d0f3a0` as the dev stable identity was rebound to the source identity layers and the
+  registry grew by all six wired groups (incl. bounded); the schemas AND the
   derive-not-trust canonicalization are a NO-OP on valid pipeline data — the component p-values/verdicts/evald/argmin
   are unchanged, confirming `sample_fixture`/`apply_coupling` already emit canonical records), via `gate_group_dev`
   with STRUCTURED arms:
@@ -572,7 +586,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   7 refusals; strict `p_g > α_group` (Pi #7).
 - **Per-profile + wired-engine benchmark (Pi #6; rev-11 repair, rev-12/rev-13 provenance/identity)** —
   `scripts/oracle_realism_v3_benchmark.py`: per-profile `Σ_experiment Σ_cell cost(route, profile volume)·B_main`,
-  DETERMINISTIC `config_identity` **`09f413c9…`** (re-minted through `…→ c4970291 → 09f413c9`; it now
+  DETERMINISTIC `config_identity` **`b1f97d1a…`** (re-minted through `…→ 09f413c9 → b1f97d1a`; it now
   binds the FOUR deterministic SOURCE identity layers (`SOURCE_IDENTITY_BUNDLE`: semantic + impl-source +
   engine-canon/schema/gate + map-source) and is no longer version-bearing; the env-dependent
   `ESTIMATOR_DEPENDENCY_IDENTITY` lives in the timing artifact, Pi rev-12/rev-13 #3). The wired timing map records the EXACT `Bs` fixture seed (`236460273103544`) and is labelled TIMING-ONLY
@@ -581,7 +595,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   cap margin** (not merely <8h). Honest: SD-main ≈ 10.3 h does NOT fit one 8 h job → separately-gated per-group SD
   jobs. (Full per-group wired benchmark + re-mint follows as each remaining group's estimators are wired.)
 
-## Still open (Pi-authorized next scope; NOT yet done in rev-18)
+## Still open (Pi-authorized next scope; NOT yet done in rev-19)
 - **Reserved map-set + RNG-manifest FREEZE/POPULATION** (the DRAFT SCHEMAS are done — rev-18; freezing needs a separately-authorized draw) — `gate_group_registered` binds to
   `RESERVED_MAP_SET_NOT_DRAWN` / `RESERVED_RNG_MANIFEST_NOT_BOUND`, so a real registered run is BLOCKED. The RNG
   manifest must bind exact per-role/stratum seeds + generator/coupling CODE identities + profile identity +

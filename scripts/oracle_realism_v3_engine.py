@@ -623,7 +623,8 @@ def _build_canonical_groups():
     groups = REG.build_groups(sd)
     out = {}
     for gid in ("G_full_burst_timing", "G_full_class_mark", "G_full_run_size",     # engine-wired full-support groups
-                "G_full_length_density", "G_full_phase_seam"):
+                "G_full_length_density", "G_full_phase_seam",
+                "G_bounded_support"):                                              # + the bounded-support group (Pi rev-18 #1/#2)
         cells, exps = [], {}
         for cid in list(groups[gid]["cells"]):
             c = by_id[cid]; chk = c["statistic"]
@@ -634,6 +635,7 @@ def _build_canonical_groups():
             strata = c["exchangeability_strata"]
             exps.setdefault(c["experiment_id"], {
                 "source": c["source"], "condition": c["condition"], "coupled_component": c["coupled_component"],
+                "support_regime": c["support_regime"],                            # "full" | "bounded" (map-context regime)
                 "stratum_ids": [s["stratum_id"] for s in strata],
                 "registered_quota": [(s["n_candidate"], s["n_reference"]) for s in strata]})
         out[gid] = {"group_id": gid, "cells": cells, "experiments": exps}
@@ -1023,8 +1025,10 @@ def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_
         if art is None:
             raise RefusalError(f"map-carrying cell {cc['cell_id']} missing mandatory map artifact")
         validate_map_artifact(art)
-        src = canon["experiments"][cc["exp"]]["source"]; ctx = (src, "full", cc["check"])
-        if art["check"] != cc["check"] or art["profile"] != src or art["regime"] != "full":
+        exp_meta = canon["experiments"][cc["exp"]]
+        src = exp_meta["source"]; regime = exp_meta["support_regime"]   # "full" | "bounded" (Pi rev-18 #1/#2)
+        ctx = (src, regime, cc["check"])
+        if art["check"] != cc["check"] or art["profile"] != src or art["regime"] != regime:
             raise RefusalError(f"map context mismatch for {cc['cell_id']} (expected {ctx})")
         if art["floor"] != floor:
             raise RefusalError(f"map floor {art['floor']} != dev floor {floor} for {cc['cell_id']}")
@@ -1421,7 +1425,7 @@ def selftest():
     if REGISTERED["alpha_group"] != 0.04 / 6:
         errs.append("alpha_group not the exact 0.04/6 float")
     if set(CANONICAL_GROUPS) != {"G_full_burst_timing", "G_full_class_mark", "G_full_run_size",
-                                 "G_full_length_density", "G_full_phase_seam"}:
+                                 "G_full_length_density", "G_full_phase_seam", "G_bounded_support"}:
         errs.append("canonical groups drift")
     return errs
 
