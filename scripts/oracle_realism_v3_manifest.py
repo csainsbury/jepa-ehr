@@ -1,32 +1,35 @@
 #!/usr/bin/env python3
-"""Oracle realism v3 — DRAFT-ONLY reserved-manifest schemas (Pi rev-13 authorized; reworked for Pi rev-18).
+"""Oracle realism v3 — DRAFT-ONLY reserved-manifest schemas (Pi rev-13 authorized; reworked Pi rev-18; tightened Pi
+rev-19/20).
 
 Exact STRUCTURE + STRICT fail-closed VALIDATORS for the two reserved manifests the registered evaluation will need,
-derived from the FULL schema-validated SD registry (not the wired projection), carrying BOTH exemption variants, with
-role-specific RNG provenance and explicit manifest/schema identities. SCHEMAS ONLY — NOTHING is drawn, populated, or
-frozen: seeds/maps/paths/content hashes are `RESERVED_NOT_DRAWN`, and the composed manifest identities stay the
-engine's `RESERVED_*` sentinels, so `gate_group_registered` remains unconditionally BLOCKED.
+derived from the FULL schema-validated SD registry, carrying BOTH exemption variants, with role-specific RNG
+provenance, CANONICAL-VALUE validation of every design-bearing field, and a union/variant map-identity model.
+SCHEMAS ONLY — NOTHING is drawn/populated/frozen: seeds/maps/paths/content hashes are `RESERVED_NOT_DRAWN`, and the
+composed manifest identities stay the engine's `RESERVED_*` sentinels, so `gate_group_registered` stays BLOCKED.
 
-Reworked per Pi rev-18:
-  #1 RNG universe = the full SD registry (10 experiments / 14 strata incl. boundary_short), not the wired groups;
-  #2 map-set carries BOTH exemption variants (16 with / 17 without) independently;
-  #3 role-specific RNG provenance (fixture/coupling seed per experiment x stratum x role; component + strength;
-     constructor-route + profile-config identities; per-role content + count hashes binding exp/stratum/role/count);
-  #4 STRICT schemas — exact required-field sets/types at every nesting level, refusing unknown/missing/mistyped;
-     a FROZEN schema is a SEPARATE VERSION, never a status toggle over a permissive draft;
-  #5 bind full-registry variant identities + manifest-source + schema-definition identities; a DETERMINISTIC schema
-     identity is reported SEPARATELY from the environment-dependent instance hash (which includes the dependency layer);
-  #6 exact map-set canonical semantics (sort key, set-hash payload, output-path grammar, REFUSED-artifact handling).
+Pi rev-19/20 tightening folded:
+  #1 validators compare every design-bearing scalar/string/hash to a CANONICAL EXPECTED value (not just type-check),
+     with adversarial tests per field;
+  #2 `profile_config_identity` binds the ACTUAL profile configuration (exact `PROFILES[...]` payload + source
+     skeleton + constructor route + stratum allocation), recomputed and compared;
+  #3 a SEED-INDEPENDENT RNG-law identity (derivation formulas + role symmetry + constructor route + coupling rule),
+     distinct from the seed-bearing `rng_identity`;
+  #4 a union/variant map-identity model — one union of the 17 unique maps (drawn once) + separately-hashed 16/17
+     variant projections, with STRUCTURED set-hash payloads (all `map_identity` still RESERVED);
+  #5 separate RNG / map-set schema identities + a combined bundle identity, with a REAL dependency-exclusion proof;
+  #6 nonempty + non-bool value checks (reject bool-as-int).
 
 Development-only. Run: PYTHONPATH=<repo> python3 scripts/oracle_realism_v3_manifest.py
 """
 from __future__ import annotations
 
+import copy
 import hashlib
-import inspect
 import json
 
 from clinical_jepa.eval.oracle_contracts import canonical_hash
+from clinical_jepa.eval.oracle_realism_v2_verifier_design import PROFILES
 from scripts.oracle_realism_v3_randomization import RefusalError
 import scripts.oracle_realism_v3_engine as ENG
 import scripts.oracle_realism_v3_registry as REG
@@ -36,10 +39,17 @@ NONE_COUPLING = "NONE"
 DRAFT = "DRAFT"
 _ARM_ORDER = ["candidate", "reference"]
 _ROLES = ("candidate", "reference")
-_COUPLING_STRENGTH = 0.5                                   # repeatability coupling strength (v2/v3 fixed)
+_COUPLING_STRENGTH = 0.5
+_STRATUM_ALLOC = [2667, 2667, 2666]
 _CONTENT_HASH_ALGO = "sha256(canonical_hash) over derive_record-canonical (source,class_ids,timestamps) per role"
-RNG_SCHEMA_VERSION = "v3-rng-manifest-draft-2"
-MAPSET_SCHEMA_VERSION = "v3-map-set-manifest-draft-2"
+_SET_HASH_RULE = ("variant_set_identity = canonical_hash({variant, registry_identity, sorted "
+                  "[(profile,regime,check,map_identity)], builder_identity, apply_code_identity, "
+                  "schema_definition_identity}); union_set_identity over the 17 unique drawn maps")
+_OUTPUT_PATH_GRAMMAR = "relative POSIX under the reserved map-design root; no '..'/absolute/symlink (traversal refused)"
+_REFUSED_ARTIFACT_RULE = ("an issued REFUSED_reference_coarsening map neither satisfies an entry nor grants a "
+                          "provisional exemption; it is parked for exemption review; no set identity is issued")
+RNG_SCHEMA_VERSION = "v3-rng-manifest-draft-3"
+MAPSET_SCHEMA_VERSION = "v3-map-set-manifest-draft-3"
 
 _MAP_CARRYING = frozenset(k for k, v in ENG.ESTIMATORS.items() if v["map_carrying"])
 _LAYER_KEYS = ("estimator_semantic", "estimator_impl_source", "engine_canon_schema_gate", "map_source", "dependency")
@@ -56,7 +66,6 @@ def _manifest_source_identity():
 
 
 def _constructor_route(source):
-    """Canonical construction route identity per source (Pi rev-18 #3)."""
     if source == "structural_zero_control":
         return "structural_multiscale"
     if source == "boundary_short":
@@ -64,7 +73,31 @@ def _constructor_route(source):
     return "source_profile_fixture"
 
 
-# --- exact strict-schema helper: fields must be EXACTLY `spec` keys, each of the declared type ------------------
+def _profile_config_identity(source, regime):
+    """The ACTUAL profile configuration identity (Pi rev-19/20 #2): the exact PROFILES payload + source skeleton +
+    constructor route + stratum allocation — not a bare {profile,regime} label."""
+    return canonical_hash({
+        "profile": source, "regime": regime,
+        "profile_payload": PROFILES[source],
+        "skeleton": ENG._PROFILE_SKELETON[source],
+        "constructor_route": _constructor_route(source),
+        "stratum_allocation": list(_STRATUM_ALLOC),
+    })
+
+
+def _rng_law_identity(source, coupled):
+    """A SEED-INDEPENDENT RNG-law semantic identity (Pi rev-19/20 #3): derivation formulas + role symmetry +
+    constructor route + coupling rule. Contains NO seed value; distinct from the seed-bearing `rng_identity`."""
+    return canonical_hash({
+        "fixture_law": "per (experiment,stratum,role) role-symmetric derived seed -> numpy default_rng",
+        "coupling_law": (f"apply_coupling(component={coupled}, strength={_COUPLING_STRENGTH}) per role"
+                         if coupled is not None else NONE_COUPLING),
+        "constructor_route": _constructor_route(source),
+        "role_symmetric": True, "canonical_arm_order": list(_ARM_ORDER),
+    })
+
+
+# --- strict schema helpers -------------------------------------------------------------------------------------
 def _strict(obj, spec, where):
     if not isinstance(obj, dict):
         raise RefusalError(f"{where} must be a dict, got {type(obj).__name__}")
@@ -74,8 +107,19 @@ def _strict(obj, spec, where):
     if req - keys:
         raise RefusalError(f"{where} missing field(s) {sorted(req - keys)}")
     for f, t in spec.items():
-        if not isinstance(obj[f], t):
-            raise RefusalError(f"{where}.{f} type {type(obj[f]).__name__} != {getattr(t, '__name__', t)}")
+        v = obj[f]
+        if t is int and isinstance(v, bool):                       # reject bool-as-int (Pi rev-19/20 #6)
+            raise RefusalError(f"{where}.{f} is a bool, not an int")
+        if not isinstance(v, t):
+            raise RefusalError(f"{where}.{f} type {type(v).__name__} != {getattr(t, '__name__', t)}")
+        if isinstance(v, str) and not v.strip():                   # nonempty strings (Pi rev-19/20 #6)
+            raise RefusalError(f"{where}.{f} must be a nonempty string")
+
+
+def _eq(obj, field, expected, where):
+    """Compare a design-bearing value to its CANONICAL expected value (Pi rev-19/20 #1)."""
+    if obj.get(field) != expected:
+        raise RefusalError(f"{where}.{field} != canonical expected value")
 
 
 def _check_identity_layers(bundle, where):
@@ -85,8 +129,6 @@ def _check_identity_layers(bundle, where):
 
 
 def _full_registry_experiments():
-    """The full SD registry experiment/stratum universe (variant-INVARIANT: only bounded cell scope differs, not the
-    experiment/stratum set). 10 experiments / 14 strata incl. boundary_short."""
     sd = REG.build_sd_cells(apply_uncalibratable_exemption=True)
     exps = {}
     for c in sd:
@@ -99,8 +141,6 @@ def _full_registry_experiments():
 
 
 def _map_triples_for_variant(with_exemption):
-    """Sorted `(profile, regime, check)` triples needing a frozen map for one exemption variant (map-carrying cells
-    across ALL groups). Sort key is exactly `(profile, regime, check)` (Pi rev-18 #6)."""
     sd = REG.build_sd_cells(apply_uncalibratable_exemption=with_exemption)
     by_id = {c["cell_id"]: c for c in sd}
     triples = set()
@@ -112,9 +152,12 @@ def _map_triples_for_variant(with_exemption):
     return sorted(triples)
 
 
-# ---------------------------------------------------------------------------------------------------------------
-# builders (DRAFT: every drawn value is RESERVED; composed identities stay the engine's reserved sentinels)
-# ---------------------------------------------------------------------------------------------------------------
+def _union_triples():
+    """The union of unique map triples across BOTH variants (drawn ONCE; the without-exemption superset). Pi #4."""
+    return sorted(set(_map_triples_for_variant(True)) | set(_map_triples_for_variant(False)))
+
+
+# --- builders (DRAFT: drawn values RESERVED; composed identities are the engine's reserved sentinels) -----------
 def build_draft_rng_manifest():
     exps = {}
     for e, meta in _full_registry_experiments().items():
@@ -126,137 +169,141 @@ def build_draft_rng_manifest():
                 roles[role] = {
                     "fixture_seed": RESERVED,
                     "coupling_seed": RESERVED if coupled is not None else NONE_COUPLING,
-                    "content_hash": RESERVED,                     # per-ROLE, not one combined stratum hash (Pi rev-18 #3)
+                    "content_hash": RESERVED,
                     "count_hash": canonical_hash({"experiment": e, "stratum": sid, "role": role, "count": int(count)}),
                     "expected_count": int(count),
                 }
-            strata.append({
-                "stratum_id": sid, "n_candidate": qc, "n_reference": qr,
-                "coupling_strength": (_COUPLING_STRENGTH if coupled is not None else NONE_COUPLING),
-                "roles": roles,
-            })
+            strata.append({"stratum_id": sid, "n_candidate": qc, "n_reference": qr,
+                           "coupling_strength": (_COUPLING_STRENGTH if coupled is not None else NONE_COUPLING),
+                           "roles": roles})
         exps[e] = {
             "source_profile": meta["source"], "condition": meta["condition"], "support_regime": meta["support_regime"],
             "coupled_component": (coupled if coupled is not None else NONE_COUPLING),
             "constructor_route": _constructor_route(meta["source"]),
-            "profile_config_identity": canonical_hash({"profile": meta["source"], "regime": meta["support_regime"]}),
-            "rng_law_identity": ENG.rng_identity(meta["source"], 0, coupled),   # LAW/semantic id — NOT executable seed
+            "profile_config_identity": _profile_config_identity(meta["source"], meta["support_regime"]),
+            "rng_law_identity": _rng_law_identity(meta["source"], coupled),
+            "reserved_replicate_identity": RESERVED,               # the reserved final evaluation/replicate identity
             "canonical_arm_order": list(_ARM_ORDER), "strata": strata,
         }
     return {
         "schema_version": RNG_SCHEMA_VERSION, "status": DRAFT,
         "identity_layers": _identity_layers(),
-        "registry_variant_identities": dict(ENG.REGISTERED["registry_identity"]),   # full registry with/without
+        "registry_variant_identities": dict(ENG.REGISTERED["registry_identity"]),
         "manifest_source_identity": _manifest_source_identity(),
         "schema_definition_identity": SCHEMA_DEFINITION_IDENTITY,
         "content_hash_algorithm_identity": _CONTENT_HASH_ALGO,
         "generator_code_identity": RESERVED, "coupling_code_identity": RESERVED,
         "experiments": exps,
-        "rng_manifest_identity": ENG.REGISTERED["rng_manifest_identity"],   # RESERVED_RNG_MANIFEST_NOT_BOUND
+        "rng_manifest_identity": ENG.REGISTERED["rng_manifest_identity"],
     }
 
 
-def _map_entry(profile, regime, check):
-    return {
-        "profile": profile, "regime": regime, "check": check,
-        "N": int(ENG.REGISTERED["N_per_arm"]), "floor": int(ENG.REGISTERED["floor"]),
-        "builder_identity": ENG.SOURCE_IDENTITY_BUNDLE["map_source"],
-        "apply_code_identity": ENG.SOURCE_IDENTITY_BUNDLE["map_source"],    # builder+apply live in the map module
-        "expected_status": "OK",                                           # a REFUSED_reference_coarsening map is NOT ok here
-        "seed": RESERVED, "namespace": RESERVED, "output_path": RESERVED, "map_identity": RESERVED,
-    }
+def _union_entry(profile, regime, check):
+    return {"profile": profile, "regime": regime, "check": check,
+            "N": int(ENG.REGISTERED["N_per_arm"]), "floor": int(ENG.REGISTERED["floor"]),
+            "builder_identity": ENG.SOURCE_IDENTITY_BUNDLE["map_source"],
+            "apply_code_identity": ENG.SOURCE_IDENTITY_BUNDLE["map_source"],
+            "expected_status": "OK",
+            "seed": RESERVED, "namespace": RESERVED, "output_path": RESERVED, "map_identity": RESERVED}
+
+
+def _set_hash_payload(variant_name, reg_id, triples):
+    """STRUCTURED set-hash payload (Pi rev-19/20 #4) — not prose. map_identity stays RESERVED until draw."""
+    return {"variant": variant_name, "registry_identity": reg_id,
+            "entries": [{"profile": p, "regime": r, "check": c, "map_identity": RESERVED} for (p, r, c) in triples],
+            "builder_identity": ENG.SOURCE_IDENTITY_BUNDLE["map_source"],
+            "apply_code_identity": ENG.SOURCE_IDENTITY_BUNDLE["map_source"],
+            "schema_definition_identity": SCHEMA_DEFINITION_IDENTITY}
 
 
 def build_draft_map_set_manifest():
     variants = {}
     for name, with_ex, reg_id in (("with_exemption", True, ENG.REGISTERED["registry_identity"]["with"]),
                                   ("without_exemption", False, ENG.REGISTERED["registry_identity"]["without"])):
-        variants[name] = {"registry_identity": reg_id,
-                          "entries": [_map_entry(p, r, c) for (p, r, c) in _map_triples_for_variant(with_ex)]}
+        triples = _map_triples_for_variant(with_ex)
+        variants[name] = {"registry_identity": reg_id, "triples": [list(t) for t in triples],
+                          "set_hash_payload": _set_hash_payload(name, reg_id, triples),
+                          "variant_set_identity": RESERVED}
     return {
         "schema_version": MAPSET_SCHEMA_VERSION, "status": DRAFT,
         "identity_layers": _identity_layers(),
         "manifest_source_identity": _manifest_source_identity(),
         "schema_definition_identity": SCHEMA_DEFINITION_IDENTITY,
         "sort_key": ["profile", "regime", "check"],
-        "set_hash_rule": ("map_set_identity = canonical_hash({(profile,regime,check): map_identity} over sorted "
-                          "entries, per variant) once every map is drawn"),
-        "output_path_grammar": "relative POSIX under the reserved map-design root; no '..' / absolute / symlink (traversal refused)",
-        "refused_artifact_rule": ("an issued REFUSED_reference_coarsening artifact does NOT satisfy an entry and does "
-                                  "NOT grant a provisional exemption; only a malformed/missing map is an error, an "
-                                  "honest REFUSED map is a separate exemption-review input"),
+        "set_hash_rule": _SET_HASH_RULE,
+        "output_path_grammar": _OUTPUT_PATH_GRAMMAR,
+        "refused_artifact_rule": _REFUSED_ARTIFACT_RULE,
+        "union_entries": [_union_entry(*t) for t in _union_triples()],   # 17 unique maps drawn ONCE
+        "union_set_identity": RESERVED,
         "variants": variants,
-        "map_set_identity": ENG.REGISTERED["map_set_identity"],            # RESERVED_MAP_SET_NOT_DRAWN
+        "map_set_identity": ENG.REGISTERED["map_set_identity"],
     }
 
 
-# --- strict validators -----------------------------------------------------------------------------------------
+# --- strict + value validators ---------------------------------------------------------------------------------
 _RNG_TOP = {"schema_version": str, "status": str, "identity_layers": dict, "registry_variant_identities": dict,
             "manifest_source_identity": str, "schema_definition_identity": str, "content_hash_algorithm_identity": str,
             "generator_code_identity": str, "coupling_code_identity": str, "experiments": dict,
             "rng_manifest_identity": str}
 _RNG_EXP = {"source_profile": str, "condition": str, "support_regime": str, "coupled_component": str,
             "constructor_route": str, "profile_config_identity": str, "rng_law_identity": str,
-            "canonical_arm_order": list, "strata": list}
+            "reserved_replicate_identity": str, "canonical_arm_order": list, "strata": list}
 _RNG_STRATUM = {"stratum_id": str, "n_candidate": int, "n_reference": int, "coupling_strength": (float, str), "roles": dict}
 _RNG_ROLE = {"fixture_seed": str, "coupling_seed": str, "content_hash": str, "count_hash": str, "expected_count": int}
 
 
 def validate_rng_manifest(m):
     _strict(m, _RNG_TOP, "rng manifest")
-    if m["schema_version"] != RNG_SCHEMA_VERSION:
-        raise RefusalError("rng manifest schema_version mismatch")
-    if m["status"] != DRAFT:
-        raise RefusalError("only DRAFT rng manifests are defined here (FROZEN is a separate schema version)")
+    _eq(m, "schema_version", RNG_SCHEMA_VERSION, "rng manifest")
+    _eq(m, "status", DRAFT, "rng manifest")
+    _eq(m, "content_hash_algorithm_identity", _CONTENT_HASH_ALGO, "rng manifest")
     _check_identity_layers(m["identity_layers"], "rng manifest")
-    if m["registry_variant_identities"] != dict(ENG.REGISTERED["registry_identity"]):
-        raise RefusalError("rng manifest registry_variant_identities != full registry with/without")
-    if m["manifest_source_identity"] != _manifest_source_identity() or m["schema_definition_identity"] != SCHEMA_DEFINITION_IDENTITY:
-        raise RefusalError("rng manifest source/schema-definition identity mismatch")
-    if m["generator_code_identity"] != RESERVED or m["coupling_code_identity"] != RESERVED:
-        raise RefusalError("DRAFT rng manifest must not bind generator/coupling code identities")
-    if m["rng_manifest_identity"] != ENG.REGISTERED["rng_manifest_identity"]:
-        raise RefusalError("DRAFT rng manifest identity must be the reserved sentinel")
+    _eq(m, "registry_variant_identities", dict(ENG.REGISTERED["registry_identity"]), "rng manifest")
+    _eq(m, "manifest_source_identity", _manifest_source_identity(), "rng manifest")
+    _eq(m, "schema_definition_identity", SCHEMA_DEFINITION_IDENTITY, "rng manifest")
+    _eq(m, "generator_code_identity", RESERVED, "rng manifest")
+    _eq(m, "coupling_code_identity", RESERVED, "rng manifest")
+    _eq(m, "rng_manifest_identity", ENG.REGISTERED["rng_manifest_identity"], "rng manifest")
     universe = _full_registry_experiments()
     if set(m["experiments"]) != set(universe):
-        raise RefusalError(f"rng manifest experiments {sorted(m['experiments'])} != full registry {sorted(universe)}")
+        raise RefusalError("rng manifest experiments != full registry")
     for e, meta in universe.items():
         em = m["experiments"][e]; _strict(em, _RNG_EXP, f"rng experiment {e}")
         coupled = meta["coupled_component"]
-        exp_coupled = coupled if coupled is not None else NONE_COUPLING
-        if (em["source_profile"], em["condition"], em["support_regime"], em["coupled_component"]) != \
-                (meta["source"], meta["condition"], meta["support_regime"], exp_coupled):
-            raise RefusalError(f"rng experiment {e} source/condition/regime/coupling mismatch")
-        if em["constructor_route"] != _constructor_route(meta["source"]) or em["canonical_arm_order"] != _ARM_ORDER:
-            raise RefusalError(f"rng experiment {e} constructor_route / arm order mismatch")
-        if em["rng_law_identity"] != ENG.rng_identity(meta["source"], 0, coupled):
-            raise RefusalError(f"rng experiment {e} rng_law_identity mismatch")
+        _eq(em, "source_profile", meta["source"], f"rng experiment {e}")
+        _eq(em, "condition", meta["condition"], f"rng experiment {e}")
+        _eq(em, "support_regime", meta["support_regime"], f"rng experiment {e}")
+        _eq(em, "coupled_component", (coupled if coupled is not None else NONE_COUPLING), f"rng experiment {e}")
+        _eq(em, "constructor_route", _constructor_route(meta["source"]), f"rng experiment {e}")
+        _eq(em, "profile_config_identity", _profile_config_identity(meta["source"], meta["support_regime"]), f"rng experiment {e}")
+        _eq(em, "rng_law_identity", _rng_law_identity(meta["source"], coupled), f"rng experiment {e}")
+        _eq(em, "reserved_replicate_identity", RESERVED, f"rng experiment {e}")
+        _eq(em, "canonical_arm_order", _ARM_ORDER, f"rng experiment {e}")
         if [s.get("stratum_id") for s in em["strata"]] != [sid for sid, _, _ in meta["strata"]]:
             raise RefusalError(f"rng experiment {e} stratum ids/order mismatch")
         for sm, (sid, qc, qr) in zip(em["strata"], meta["strata"]):
             _strict(sm, _RNG_STRATUM, f"rng {e}/{sid} stratum")
             if (sm["n_candidate"], sm["n_reference"]) != (qc, qr):
                 raise RefusalError(f"rng {e}/{sid} quota mismatch")
-            if sm["coupling_strength"] != (_COUPLING_STRENGTH if coupled is not None else NONE_COUPLING):
-                raise RefusalError(f"rng {e}/{sid} coupling_strength mismatch")
+            _eq(sm, "coupling_strength", (_COUPLING_STRENGTH if coupled is not None else NONE_COUPLING), f"rng {e}/{sid}")
             if set(sm["roles"]) != set(_ROLES):
                 raise RefusalError(f"rng {e}/{sid} roles must be exactly {sorted(_ROLES)}")
             for role, count in (("candidate", qc), ("reference", qr)):
-                rm = sm["roles"][role]; _strict(rm, _RNG_ROLE, f"rng {e}/{sid}/{role} role")
-                if rm["expected_count"] != count:
-                    raise RefusalError(f"rng {e}/{sid}/{role} expected_count mismatch")
-                if rm["count_hash"] != canonical_hash({"experiment": e, "stratum": sid, "role": role, "count": count}):
-                    raise RefusalError(f"rng {e}/{sid}/{role} count_hash mismatch")
-                want_couple = RESERVED if coupled is not None else NONE_COUPLING
-                if rm["fixture_seed"] != RESERVED or rm["content_hash"] != RESERVED or rm["coupling_seed"] != want_couple:
-                    raise RefusalError(f"rng {e}/{sid}/{role} DRAFT role fields must be reserved (coupling {want_couple})")
+                rm = sm["roles"][role]; _strict(rm, _RNG_ROLE, f"rng {e}/{sid}/{role}")
+                _eq(rm, "expected_count", count, f"rng {e}/{sid}/{role}")
+                _eq(rm, "count_hash", canonical_hash({"experiment": e, "stratum": sid, "role": role, "count": count}),
+                    f"rng {e}/{sid}/{role}")
+                _eq(rm, "fixture_seed", RESERVED, f"rng {e}/{sid}/{role}")
+                _eq(rm, "content_hash", RESERVED, f"rng {e}/{sid}/{role}")
+                _eq(rm, "coupling_seed", RESERVED if coupled is not None else NONE_COUPLING, f"rng {e}/{sid}/{role}")
     return m
 
 
 _MAPSET_TOP = {"schema_version": str, "status": str, "identity_layers": dict, "manifest_source_identity": str,
                "schema_definition_identity": str, "sort_key": list, "set_hash_rule": str, "output_path_grammar": str,
-               "refused_artifact_rule": str, "variants": dict, "map_set_identity": str}
-_MAPSET_VARIANT = {"registry_identity": str, "entries": list}
+               "refused_artifact_rule": str, "union_entries": list, "union_set_identity": str, "variants": dict,
+               "map_set_identity": str}
+_MAPSET_VARIANT = {"registry_identity": str, "triples": list, "set_hash_payload": dict, "variant_set_identity": str}
 _MAPSET_ENTRY = {"profile": str, "regime": str, "check": str, "N": int, "floor": int, "builder_identity": str,
                  "apply_code_identity": str, "expected_status": str, "seed": str, "namespace": str,
                  "output_path": str, "map_identity": str}
@@ -264,73 +311,87 @@ _MAPSET_ENTRY = {"profile": str, "regime": str, "check": str, "N": int, "floor":
 
 def validate_map_set_manifest(m):
     _strict(m, _MAPSET_TOP, "map-set manifest")
-    if m["schema_version"] != MAPSET_SCHEMA_VERSION:
-        raise RefusalError("map-set manifest schema_version mismatch")
-    if m["status"] != DRAFT:
-        raise RefusalError("only DRAFT map-set manifests are defined here (FROZEN is a separate schema version)")
+    _eq(m, "schema_version", MAPSET_SCHEMA_VERSION, "map-set manifest")
+    _eq(m, "status", DRAFT, "map-set manifest")
     _check_identity_layers(m["identity_layers"], "map-set manifest")
-    if m["manifest_source_identity"] != _manifest_source_identity() or m["schema_definition_identity"] != SCHEMA_DEFINITION_IDENTITY:
-        raise RefusalError("map-set manifest source/schema-definition identity mismatch")
-    if m["sort_key"] != ["profile", "regime", "check"]:
-        raise RefusalError("map-set manifest sort_key must be [profile, regime, check]")
-    if m["map_set_identity"] != ENG.REGISTERED["map_set_identity"]:
-        raise RefusalError("DRAFT map-set manifest identity must be the reserved sentinel")
+    _eq(m, "manifest_source_identity", _manifest_source_identity(), "map-set manifest")
+    _eq(m, "schema_definition_identity", SCHEMA_DEFINITION_IDENTITY, "map-set manifest")
+    _eq(m, "sort_key", ["profile", "regime", "check"], "map-set manifest")
+    _eq(m, "set_hash_rule", _SET_HASH_RULE, "map-set manifest")
+    _eq(m, "output_path_grammar", _OUTPUT_PATH_GRAMMAR, "map-set manifest")
+    _eq(m, "refused_artifact_rule", _REFUSED_ARTIFACT_RULE, "map-set manifest")
+    _eq(m, "union_set_identity", RESERVED, "map-set manifest")
+    _eq(m, "map_set_identity", ENG.REGISTERED["map_set_identity"], "map-set manifest")
+    # union entries == the 17 unique triples, each drawn once
+    union = _union_triples()
+    if [(e.get("profile"), e.get("regime"), e.get("check")) for e in m["union_entries"]] != union:
+        raise RefusalError("map-set union_entries != the unique union triples (missing/extra/duplicate/order)")
+    for e in m["union_entries"]:
+        _strict(e, _MAPSET_ENTRY, f"map-set union entry {e.get('check')}@{e.get('profile')}")
+        if (e["N"], e["floor"]) != (int(ENG.REGISTERED["N_per_arm"]), int(ENG.REGISTERED["floor"])):
+            raise RefusalError("map-set union entry N/floor != registered")
+        _eq(e, "builder_identity", ENG.SOURCE_IDENTITY_BUNDLE["map_source"], "map-set union entry")
+        _eq(e, "apply_code_identity", ENG.SOURCE_IDENTITY_BUNDLE["map_source"], "map-set union entry")
+        _eq(e, "expected_status", "OK", "map-set union entry")
+        for k in ("seed", "namespace", "output_path", "map_identity"):
+            _eq(e, k, RESERVED, "map-set union entry")
     if set(m["variants"]) != {"with_exemption", "without_exemption"}:
-        raise RefusalError("map-set manifest must carry exactly the with/without exemption variants")
+        raise RefusalError("map-set variants must be exactly with/without exemption")
     for name, with_ex, reg_id in (("with_exemption", True, ENG.REGISTERED["registry_identity"]["with"]),
                                   ("without_exemption", False, ENG.REGISTERED["registry_identity"]["without"])):
         var = m["variants"][name]; _strict(var, _MAPSET_VARIANT, f"map-set variant {name}")
-        if var["registry_identity"] != reg_id:
-            raise RefusalError(f"map-set variant {name} registry_identity mismatch")
-        got = [(e.get("profile"), e.get("regime"), e.get("check")) for e in var["entries"]]
-        if len(got) != len(set(got)):
-            raise RefusalError(f"map-set variant {name} has duplicate entries")
-        if sorted(got) != _map_triples_for_variant(with_ex):
-            raise RefusalError(f"map-set variant {name} triples != required (missing/extra)")
-        for e in var["entries"]:
-            _strict(e, _MAPSET_ENTRY, f"map-set {name} entry {e.get('check')}@{e.get('profile')}")
-            if e["N"] != int(ENG.REGISTERED["N_per_arm"]) or e["floor"] != int(ENG.REGISTERED["floor"]):
-                raise RefusalError(f"map-set {name} entry N/floor != registered")
-            if e["builder_identity"] != ENG.SOURCE_IDENTITY_BUNDLE["map_source"] or e["apply_code_identity"] != ENG.SOURCE_IDENTITY_BUNDLE["map_source"]:
-                raise RefusalError(f"map-set {name} entry builder/apply identity mismatch")
-            if e["expected_status"] != "OK":
-                raise RefusalError(f"map-set {name} entry expected_status must be OK")
-            if any(e[k] != RESERVED for k in ("seed", "namespace", "output_path", "map_identity")):
-                raise RefusalError(f"map-set {name} entry DRAFT fields must be reserved")
+        _eq(var, "registry_identity", reg_id, f"map-set variant {name}")
+        _eq(var, "variant_set_identity", RESERVED, f"map-set variant {name}")
+        triples = _map_triples_for_variant(with_ex)
+        if [tuple(t) for t in var["triples"]] != triples:
+            raise RefusalError(f"map-set variant {name} triples != required (missing/extra/order)")
+        if var["set_hash_payload"] != _set_hash_payload(name, reg_id, triples):
+            raise RefusalError(f"map-set variant {name} set_hash_payload != canonical structured payload")
     return m
 
 
-# --- identities ------------------------------------------------------------------------------------------------
-# The SCHEMA-DEFINITION identity is a DETERMINISTIC hash over the exact field-set definitions + versions (no runtime
-# values, no environment). It reproduces across environments (Pi rev-18 #5).
-SCHEMA_DEFINITION_IDENTITY = canonical_hash({
-    "rng_version": RNG_SCHEMA_VERSION, "mapset_version": MAPSET_SCHEMA_VERSION,
-    "rng_fields": {"top": {k: t.__name__ if isinstance(t, type) else str(t) for k, t in _RNG_TOP.items()},
-                   "experiment": {k: t.__name__ if isinstance(t, type) else str(t) for k, t in _RNG_EXP.items()},
-                   "stratum": {k: (t.__name__ if isinstance(t, type) else str(t)) for k, t in _RNG_STRATUM.items()},
-                   "role": {k: t.__name__ for k, t in _RNG_ROLE.items()}},
-    "mapset_fields": {"top": {k: t.__name__ if isinstance(t, type) else str(t) for k, t in _MAPSET_TOP.items()},
-                      "variant": {k: t.__name__ for k, t in _MAPSET_VARIANT.items()},
-                      "entry": {k: t.__name__ for k, t in _MAPSET_ENTRY.items()}},
-    "layer_keys": list(_LAYER_KEYS), "arm_order": _ARM_ORDER, "coupling_strength": _COUPLING_STRENGTH,
-    "content_hash_algorithm": _CONTENT_HASH_ALGO})
-
-
-def _deterministic_schema_identity():
-    """Reproducible-across-environments schema identity: field definitions + versions + full-registry variant
-    identities + the four DETERMINISTIC SOURCE identity layers + manifest source. Excludes the env-dependent
-    dependency layer (Pi rev-18 #5)."""
-    return canonical_hash({
+# --- identities (Pi rev-19/20 #5): SEPARATE per-manifest schema identities + a combined bundle; DETERMINISTIC ----
+def _deterministic_payload():
+    """The exact env-INDEPENDENT payload hashed into the schema identities. Provably free of the dependency layer:
+    only the four SOURCE layers + registry variants + field definitions + manifest source."""
+    return {
         "schema_definition": SCHEMA_DEFINITION_IDENTITY,
         "manifest_source": _manifest_source_identity(),
         "registry_variant_identities": dict(ENG.REGISTERED["registry_identity"]),
         "source_identity_layers": {k: ENG.SOURCE_IDENTITY_BUNDLE[k] for k in _SOURCE_LAYER_KEYS},
-    })
+    }
+
+
+def _rng_schema_identity():
+    return canonical_hash({"kind": "rng", "version": RNG_SCHEMA_VERSION, **_deterministic_payload()})
+
+
+def _mapset_schema_identity():
+    return canonical_hash({"kind": "map_set", "version": MAPSET_SCHEMA_VERSION, **_deterministic_payload()})
+
+
+def _combined_schema_identity():
+    return canonical_hash({"rng": _rng_schema_identity(), "map_set": _mapset_schema_identity(),
+                           **_deterministic_payload()})
+
+
+SCHEMA_DEFINITION_IDENTITY = canonical_hash({
+    "rng_version": RNG_SCHEMA_VERSION, "mapset_version": MAPSET_SCHEMA_VERSION,
+    "rng_fields": {"top": {k: getattr(t, "__name__", str(t)) for k, t in _RNG_TOP.items()},
+                   "experiment": {k: getattr(t, "__name__", str(t)) for k, t in _RNG_EXP.items()},
+                   "stratum": {k: getattr(t, "__name__", str(t)) for k, t in _RNG_STRATUM.items()},
+                   "role": {k: t.__name__ for k, t in _RNG_ROLE.items()}},
+    "mapset_fields": {"top": {k: getattr(t, "__name__", str(t)) for k, t in _MAPSET_TOP.items()},
+                      "variant": {k: getattr(t, "__name__", str(t)) for k, t in _MAPSET_VARIANT.items()},
+                      "entry": {k: t.__name__ for k, t in _MAPSET_ENTRY.items()}},
+    "layer_keys": list(_LAYER_KEYS), "arm_order": _ARM_ORDER, "coupling_strength": _COUPLING_STRENGTH,
+    "stratum_allocation": _STRATUM_ALLOC, "content_hash_algorithm": _CONTENT_HASH_ALGO,
+    "set_hash_rule": _SET_HASH_RULE, "output_path_grammar": _OUTPUT_PATH_GRAMMAR,
+    "refused_artifact_rule": _REFUSED_ARTIFACT_RULE})
 
 
 # --- self-tests ------------------------------------------------------------------------------------------------
 def selftest():
-    import copy
     errs = []
     rng = build_draft_rng_manifest(); mapset = build_draft_map_set_manifest()
     for label, (mm, vv) in (("rng", (rng, validate_rng_manifest)), ("map-set", (mapset, validate_map_set_manifest))):
@@ -346,82 +407,93 @@ def selftest():
         except RefusalError:
             return True
 
-    e0 = next(iter(rng["experiments"])); coupled_e = next((e for e, x in rng["experiments"].items()
-                                                            if x["coupled_component"] != NONE_COUPLING), e0)
+    e0 = next(iter(rng["experiments"]))
     rng_bad = {
         "unknown_top_field": lambda m: m.__setitem__("sneaky", 1),
         "unknown_experiment_field": lambda m: m["experiments"][e0].__setitem__("sneaky", 1),
-        "unknown_stratum_field": lambda m: m["experiments"][e0]["strata"][0].__setitem__("sneaky", 1),
         "unknown_role_field": lambda m: m["experiments"][e0]["strata"][0]["roles"]["candidate"].__setitem__("sneaky", 1),
         "drop_experiment": lambda m: m["experiments"].pop(e0),
-        "wrong_registry_variants": lambda m: m.__setitem__("registry_variant_identities", {"with": "X", "without": "Y"}),
-        "tamper_layer": lambda m: m["identity_layers"].__setitem__("estimator_semantic", "X"),
-        "wrong_manifest_source": lambda m: m.__setitem__("manifest_source_identity", "X"),
+        "empty_string_field": lambda m: m.__setitem__("content_hash_algorithm_identity", "  "),
+        "bool_as_int_count": lambda m: m["experiments"][e0]["strata"][0]["roles"]["candidate"].__setitem__("expected_count", True),
+        # value tampers (Pi rev-19/20 #1) — typed-but-tampered must refuse:
+        "tamper_profile_config": lambda m: m["experiments"][e0].__setitem__("profile_config_identity", "X"),
+        "tamper_content_hash_algo": lambda m: m.__setitem__("content_hash_algorithm_identity", "other"),
+        "tamper_constructor_route": lambda m: m["experiments"][e0].__setitem__("constructor_route", "other"),
+        "tamper_rng_law": lambda m: m["experiments"][e0].__setitem__("rng_law_identity", "X"),
+        "tamper_schema_version": lambda m: m.__setitem__("schema_version", "vX"),
         "wrong_count_hash": lambda m: m["experiments"][e0]["strata"][0]["roles"]["candidate"].__setitem__("count_hash", "X"),
-        "populated_fixture_seed": lambda m: m["experiments"][e0]["strata"][0]["roles"]["candidate"].__setitem__("fixture_seed", 7),
-        "coupling_seed_on_uncoupled": lambda m: m["experiments"][e0]["strata"][0]["roles"]["candidate"].__setitem__("coupling_seed", RESERVED)
-        if rng["experiments"][e0]["coupled_component"] == NONE_COUPLING else None,
+        "populated_fixture_seed": lambda m: m["experiments"][e0]["strata"][0]["roles"]["candidate"].__setitem__("fixture_seed", "7"),
+        "populated_replicate": lambda m: m["experiments"][e0].__setitem__("reserved_replicate_identity", "bound"),
         "bound_manifest_identity": lambda m: m.__setitem__("rng_manifest_identity", "BOUND"),
-        "not_draft": lambda m: m.__setitem__("status", "FROZEN"),
     }
     for name, mut in rng_bad.items():
-        if mut is None or (name == "coupling_seed_on_uncoupled" and rng["experiments"][e0]["coupled_component"] != NONE_COUPLING):
-            continue
         if not refused(rng, validate_rng_manifest, mut):
             errs.append(f"rng manifest did NOT refuse {name}")
 
     mapset_bad = {
-        "unknown_top_field": lambda m: m.__setitem__("sneaky", 1),
         "unknown_variant_field": lambda m: m["variants"]["with_exemption"].__setitem__("sneaky", 1),
-        "unknown_entry_field": lambda m: m["variants"]["with_exemption"]["entries"][0].__setitem__("sneaky", 1),
+        "unknown_union_entry_field": lambda m: m["union_entries"][0].__setitem__("sneaky", 1),
         "drop_variant": lambda m: m["variants"].pop("without_exemption"),
-        "drop_entry": lambda m: m["variants"]["with_exemption"]["entries"].pop(),
-        "duplicate_entry": lambda m: m["variants"]["with_exemption"]["entries"].append(
-            copy.deepcopy(m["variants"]["with_exemption"]["entries"][0])),
-        "wrong_variant_registry": lambda m: m["variants"]["with_exemption"].__setitem__("registry_identity", "X"),
-        "swap_variants_favorably": lambda m: m["variants"].__setitem__(
-            "without_exemption", copy.deepcopy(m["variants"]["with_exemption"])),
-        "tamper_layer": lambda m: m["identity_layers"].__setitem__("map_source", "X"),
-        "wrong_N": lambda m: m["variants"]["with_exemption"]["entries"][0].__setitem__("N", 4000),
-        "populated_map_identity": lambda m: m["variants"]["with_exemption"]["entries"][0].__setitem__("map_identity", "abcd"),
+        "drop_union_entry": lambda m: m["union_entries"].pop(),
+        "duplicate_union_entry": lambda m: m["union_entries"].append(copy.deepcopy(m["union_entries"][0])),
+        "swap_variants_favorably": lambda m: m["variants"].__setitem__("without_exemption",
+                                                                       copy.deepcopy(m["variants"]["with_exemption"])),
+        "tamper_set_hash_rule": lambda m: m.__setitem__("set_hash_rule", "other"),
+        "tamper_output_path_grammar": lambda m: m.__setitem__("output_path_grammar", "anything goes"),
+        "tamper_refused_rule": lambda m: m.__setitem__("refused_artifact_rule", "auto-exempt"),
+        "tamper_variant_payload": lambda m: m["variants"]["with_exemption"]["set_hash_payload"].__setitem__("variant", "X"),
+        "wrong_N": lambda m: m["union_entries"][0].__setitem__("N", 4000),
+        "populated_map_identity": lambda m: m["union_entries"][0].__setitem__("map_identity", "abcd"),
+        "populated_union_set_identity": lambda m: m.__setitem__("union_set_identity", "bound"),
         "bound_set_identity": lambda m: m.__setitem__("map_set_identity", "BOUND"),
-        "not_draft": lambda m: m.__setitem__("status", "FROZEN"),
     }
     for name, mut in mapset_bad.items():
         if not refused(mapset, validate_map_set_manifest, mut):
             errs.append(f"map-set manifest did NOT refuse {name}")
 
-    # DETERMINISTIC schema identity must NOT depend on the environment dependency layer
-    if "dependency" in json.dumps(_deterministic_schema_identity.__doc__ or ""):
-        pass
+    # Pi rev-19/20 #5: REAL dependency-exclusion proof — the deterministic payload has no dependency layer, and a
+    # synthetic change to the dependency identity leaves the schema identities UNCHANGED.
+    payload = _deterministic_payload()
+    if "dependency" in payload.get("source_identity_layers", {}):
+        errs.append("deterministic payload leaks the dependency layer")
+    before = (_rng_schema_identity(), _mapset_schema_identity(), _combined_schema_identity())
+    saved = ENG.ESTIMATOR_DEPENDENCY_IDENTITY
+    try:
+        ENG.ESTIMATOR_DEPENDENCY_IDENTITY = "SYNTHETIC_DIFFERENT_DEPENDENCY"
+        after = (_rng_schema_identity(), _mapset_schema_identity(), _combined_schema_identity())
+    finally:
+        ENG.ESTIMATOR_DEPENDENCY_IDENTITY = saved
+    if before != after:
+        errs.append("deterministic schema identities change when the dependency identity changes (not env-independent)")
+    if _rng_schema_identity() == _mapset_schema_identity():
+        errs.append("rng and map-set schema identities are not distinct")
     return errs, rng, mapset
 
 
 def main():
     errs, rng, mapset = selftest()
     out = {
-        "purpose": "DRAFT-ONLY reserved-manifest schemas + STRICT validators; full-registry universes, both exemption "
-                   "variants, role-specific provenance; nothing drawn/frozen/populated.",
-        "identity_layers_bound": sorted(_LAYER_KEYS),
+        "purpose": "DRAFT-ONLY reserved-manifest schemas with CANONICAL-VALUE strict validators, full-registry "
+                   "universes, both exemption variants, role-specific provenance, union/variant map-identity model. "
+                   "Nothing drawn/frozen/populated.",
         "rng_manifest": {"experiments": len(rng["experiments"]),
                          "strata_total": sum(len(v["strata"]) for v in rng["experiments"].values()),
-                         "registry_variants": sorted(rng["registry_variant_identities"]),
                          "identity": rng["rng_manifest_identity"]},
-        "map_set_manifest": {"variants": {k: len(v["entries"]) for k, v in mapset["variants"].items()},
+        "map_set_manifest": {"union_entries": len(mapset["union_entries"]),
+                             "variants": {k: len(v["triples"]) for k, v in mapset["variants"].items()},
                              "identity": mapset["map_set_identity"]},
+        "rng_schema_identity": _rng_schema_identity(),
+        "mapset_schema_identity": _mapset_schema_identity(),
+        "combined_manifest_schema_identity": _combined_schema_identity(),
         "schema_definition_identity": SCHEMA_DEFINITION_IDENTITY,
-        "deterministic_schema_identity": _deterministic_schema_identity(),
         "selftests_pass": not errs, "selftest_errors": errs,
-        "authorization": "dev-only DRAFT schemas; reserved seeds/maps/paths/content NOT drawn; manifests NOT "
-                         "frozen/populated; gate_group_registered stays BLOCKED. Freezing needs a separate review.",
+        "authorization": "dev-only DRAFT schemas; reserved seeds/maps/paths/content NOT drawn; NOT frozen/populated; "
+                         "gate_group_registered stays BLOCKED. Freezing needs a separate review.",
     }
     print(json.dumps(out, indent=2, default=str))
-    # DETERMINISTIC (reproducible across environments) schema identities:
-    print("\nDRAFT_RNG_SCHEMA_IDENTITY (deterministic):", _deterministic_schema_identity())
-    print("DRAFT_MAPSET_SCHEMA_IDENTITY (deterministic):", _deterministic_schema_identity())
-    print("SCHEMA_DEFINITION_IDENTITY (deterministic):", SCHEMA_DEFINITION_IDENTITY)
-    # NOTE: a full-manifest instance hash would ALSO fold the env-dependent dependency layer and is therefore NOT
-    # reproducible across environments — it is intentionally not reported as a schema hash (Pi rev-18 #5).
+    print("\nRNG_SCHEMA_IDENTITY (deterministic):", _rng_schema_identity())
+    print("MAPSET_SCHEMA_IDENTITY (deterministic):", _mapset_schema_identity())
+    print("COMBINED_MANIFEST_SCHEMA_IDENTITY (deterministic):", _combined_schema_identity())
     assert not errs, f"manifest schema self-tests FAILED: {errs}"
     return out
 

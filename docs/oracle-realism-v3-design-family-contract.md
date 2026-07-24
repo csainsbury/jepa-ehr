@@ -1,12 +1,35 @@
-# Oracle Realism Verifier — Design Family v3 (rev-20, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-21, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-19 (folds the rest of Pi rev-18 REVISE). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Status:** DRAFT for Pi review. Supersedes rev-20 (Pi rev-19/20 GO-WITH-CHANGES). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
 build, reserved map-design draw, audit/evaluation seed, policy population, or run. There is **no production/trusted
 readiness claim.** Registered mode is a **BLOCKED STUB**: its invariants are DECLARED and its structured assembly +
 identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED — it never runs a statistic, never
 consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
 can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
+
+**Rev-21 changes folded (Pi rev-19/20 GO-WITH-CHANGES — manifest-semantics tightening):**
+1. **Canonical-VALUE validation (#1)** — `_eq` compares every design-bearing field to its canonical expected value
+   (not just type): `schema_version`, `content_hash_algorithm_identity`, `constructor_route`,
+   `profile_config_identity`, `rng_law_identity`, `sort_key`, `set_hash_rule`, `output_path_grammar`,
+   `refused_artifact_rule`, `expected_status`, per-role `count_hash`, registry/manifest-source/schema-def identities,
+   and the reserved sentinels. Adversarial tests tamper each typed-but-unvalidated field Pi reproduced → all refuse.
+2. **Real `profile_config_identity` (#2)** — binds the ACTUAL config: exact `PROFILES[source]` payload + source
+   skeleton + constructor route + stratum allocation `(2667,2667,2666)` (recomputed and compared), not a bare
+   `{profile,regime}` label hash.
+3. **Seed-independent RNG-law identity (#3)** — `_rng_law_identity` hashes derivation formulas + role symmetry +
+   constructor route + coupling rule with NO seed; the seed-bearing `rng_identity(seed=0)` is no longer presented as
+   a law identity. A `reserved_replicate_identity` slot holds the (reserved) final replicate identity.
+4. **Union/variant map-identity model (#4)** — one `union_entries` list of the 17 unique maps (drawn once) + two
+   variant projections (16/17) with STRUCTURED `set_hash_payload` (`{variant, registry_identity, sorted
+   (profile,regime,check,map_identity), builder/apply identities, schema identity}`), not prose; per-variant
+   `variant_set_identity` + a `union_set_identity`, all RESERVED until draw. No duplicate physical draws.
+5. **Schema-identity naming + real dependency-exclusion (#5)** — separate `rng_schema_identity` (`b56e5e12…`) and
+   `mapset_schema_identity` (`41a1a10c…`, now DISTINCT) plus a `combined_manifest_schema_identity` (`74f9a252…`), all
+   from a `_deterministic_payload()` that provably excludes the env dependency layer; a self-test asserts no
+   dependency field and that mutating a synthetic dependency identity leaves the schema identities UNCHANGED.
+6. **Nonempty + non-bool value checks (#6)** — `_strict` rejects empty strings and bool-as-int. Schema versions
+   bumped to `-draft-3`. Still draft-only; reserved sentinels + `gate_group_registered` BLOCK unchanged.
 
 **Rev-20 changes folded (Pi rev-18 REVISE — manifest rework, items #2–#6):**
 1. **Full-registry universes (#1/#2)** — the manifests derive from `REG.build_sd_cells` (the full schema-validated
@@ -521,7 +544,7 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-20, Pi rev-9/rev-10/rev-12/rev-13/rev-18 authorized dev-only scope — all tested)
+## Delivered (rev-21, Pi rev-9/rev-10/rev-12/rev-13/rev-18/rev-19-20 authorized dev-only scope — all tested)
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
@@ -624,7 +647,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   cap margin** (not merely <8h). Honest: SD-main ≈ 10.3 h does NOT fit one 8 h job → separately-gated per-group SD
   jobs. (Full per-group wired benchmark + re-mint follows as each remaining group's estimators are wired.)
 
-## Still open (Pi-authorized next scope; NOT yet done in rev-20)
+## Still open (Pi-authorized next scope; NOT yet done in rev-21)
 - **Reserved map-set + RNG-manifest FREEZE/POPULATION** (the DRAFT SCHEMAS are done — rev-18; freezing needs a separately-authorized draw) — `gate_group_registered` binds to
   `RESERVED_MAP_SET_NOT_DRAWN` / `RESERVED_RNG_MANIFEST_NOT_BOUND`, so a real registered run is BLOCKED. The RNG
   manifest must bind exact per-role/stratum seeds + generator/coupling CODE identities + profile identity +
