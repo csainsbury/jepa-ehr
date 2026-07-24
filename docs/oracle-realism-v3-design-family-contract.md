@@ -8,14 +8,25 @@ identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED
 consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
 can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
 
-**Rev-22 change (no Pi ruling folded — new measured evidence):** the FULL per-group registered-scale benchmark at
-`N=8000, B=20000` (§9, `scripts/oracle_realism_v3_registered_benchmark.py`). It replaces the five-route SURROGATE
-cost model with a direct measurement of every in-scope cell's ACTUAL wired estimator at its own experiment's
-profile volume, and it prices three registered-scale stages the surrogate never costed. It **withdraws the
-surrogate per-group hours** (they were wrong in both directions, worst case 52×) and it surfaces **two blocking
-findings that require a reviewer decision before any registered run can be planned**: two groups bust the 8 h cap,
-and the current assignment RNG law makes checkpoint/resume impossible. Nothing was drawn, populated or frozen; no
-reviewed module was modified.
+**Rev-22 — the last three authorized dev-only items (Pi rev-19/20 "authorized next scope" 2, 3 and 4):**
+
+1. **Full per-group registered-scale benchmark** at `N=8000, B=20000` (§9.1,
+   `scripts/oracle_realism_v3_registered_benchmark.py`). Replaces the five-route SURROGATE cost model with a
+   direct measurement of every in-scope cell's ACTUAL wired estimator at its own experiment's profile volume, and
+   prices three registered-scale stages the surrogate never costed. **Withdraws the surrogate per-group hours**
+   (wrong in both directions, worst case 52×) and the rev-6 "per-group jobs each fit" claim.
+2. **Canonical boundary-short structured constructor** (§8.1, `scripts/oracle_realism_v3_constructors.py`), plus
+   the manifest follow-through it exposed (§8.2). The declared `len_i` strata were fictitious and
+   `G_bounded_support` was not runnable; the route is now executable and both allocation variants are
+   identity-bound.
+3. **Union/variant map-identity model** — already PREPARED (not activated) at rev-21 and re-verified here: 17
+   union entries drawn once, separately-hashed 16/17 variant projections, structured set-hash payloads, every
+   identity `RESERVED`.
+
+**Three findings need a reviewer decision before any registered run can be planned:** two groups bust the 8 h cap;
+the current assignment RNG law makes checkpoint/resume impossible; and the bounded-control allocation variant is a
+genuine either/or. Nothing was drawn, populated or frozen; `randomization.py`, `gate.py` and `engine.py` are
+untouched; `gate_group_registered` stays BLOCKED.
 
 **Rev-21 changes folded (Pi rev-19/20 GO-WITH-CHANGES — manifest-semantics tightening):**
 1. **Canonical-VALUE validation (#1)** — `_eq` compares every design-bearing field to its canonical expected value
@@ -486,6 +497,67 @@ exchangeability_stratum, scope(in|exempt-degenerate|exempt-uncalibratable), cali
   proof recorded per repeatability experiment.
 - Exemption permissions are encoded per cell; **core/full-support cells cannot be exempted** by the classifier.
 
+### 8.1 Boundary-short canonical structured constructor (rev-22, Pi rev-8 #8 / rev-19-20 authorized item 2)
+
+`scripts/oracle_realism_v3_constructors.py` (self-tests pass). The registry declared three length strata for the
+boundary-short experiment (`len_0/len_1/len_2`, allocation `(2667,2667,2666)`, "permute WITHIN each length
+stratum") and the RNG manifest bound its constructor route as `bounded_length_control` — but **nothing
+implemented that route.** Every draw site used the GENERIC single-profile fixture path
+(`sample_fixture("MIMIC", PROFILES["boundary_short"], N, seed)`), producing one pooled homogeneous sample. Two
+consequences, both now reproduced as self-tests:
+
+- **the declared `len_i` strata were fictitious** — a pooled `uniform_int[1,7]` draw carries no length
+  stratification, so labelling its first 2667 records `len_0` bound a design identity the data did not have
+  (contrast `structural_zero`, whose `_multiscale` constructor genuinely creates three length strata);
+- **`G_bounded_support` was NOT RUNNABLE.** The engine's `_assemble_arms` correctly REFUSES the generic path's
+  single-stratum arms against the canonical three — fail-closed behaviour working as designed, but it means the
+  bounded group was wired at rev-19 with no constructor able to feed it.
+
+The route is now executable: one `uniform_int` draw per **disjoint length band** partitioning the canonical
+support, `BOUNDED_BANDS = ((1,2),(3,4),(5,7))` — same family, per-stratum bounds — exactly the shape of
+`_multiscale`, which keeps the length family and varies the per-stratum location. Per-stratum seeds mirror
+`_derive_seed(tag, seed, i)` with the experiment id in `tag`. The structural bound `L ≤ 7` is **asserted, not
+assumed**, so the boundary-short guarantee that no 8-item block can form (S9 seam checks NE by construction)
+provably survives.
+
+**An open design decision, deliberately not taken.** Band widths are 2/2/3, so a three-stratum bounded control
+**cannot simultaneously** keep the registered allocation and the uniform `L ~ U{1..7}` pooled marginal. Both
+variants are implemented, identity-bound and reported; the caller **must name one** (there is no default):
+
+| variant | allocation @ N=8000 | pooled marginal | route identity |
+|---|---|---|---|
+| `registered_alloc` | **(2667, 2667, 2666)** — registered | perturbed: max deviation **0.031774**; long lengths `L∈{5,6,7}` under-represented ~22 % | `af2d41fd…` |
+| `width_proportional` | (2286, 2286, 3428) — **re-mints registry quotas + manifest allocation** | uniform to integer-allocation rounding (**2.4e-05** at N=8000; exact iff `n_total` is a multiple of 7) | `4bb56463…` |
+
+Self-tests cover: route/skeleton agreement with the manifest and engine; exact allocation partitioning; the
+marginal-law claim (including that `width_proportional` is exact only at multiples of 7 — an earlier
+"reproduces uniform EXACTLY" claim was **wrong at N=8000** and was corrected by the test, not the other way
+round); band containment and the `L ≤ 7` bound for both variants; that the arms now ASSEMBLE through the engine
+for `G_bounded_support`; that the OLD generic single-stratum path is **still refused**; four adversarial
+refusals (unknown variant, non-positive/bool `n_total`, missing stratum, short count, swapped strata,
+non-contiguous bands); and reproducibility with `exp_id` genuinely entering the seed. **The registered
+bounded-control DRAW stays RESERVED** (`RESERVED_BOUNDED_CONTROL_NOT_DRAWN`).
+
+### 8.2 Manifest follow-through (rev-22)
+
+Implementing the constructor exposed a defect of the class Pi rev-19/20 #2 targeted, in the code that was
+supposed to fix that class: `_profile_config_identity` bound a **hardcoded** `[2667,2667,2666]` allocation into
+**every** profile's configuration identity, but only the two stratified sources carry it — the eight
+source-profile experiments have a single pooled stratum of 8000. The allocation is now **DERIVED from the
+registry** per source (refusing if a source's experiments disagree), and the boundary route binds the **real
+executable constructor identities for both allocation variants** with `constructor_allocation_variant` left
+`RESERVED_NOT_DRAWN` (the choice is undecided). New self-tests assert the derived allocation matches the
+registry, that pooled sources bind one 8000 stratum and no longer the stratified allocation, that pooled and
+stratified sources cannot share a configuration identity, that recomputing with the old hardcoded allocation
+gives a *different* identity (i.e. the fix bites), and that the two boundary variants do not collapse to one
+constructor identity. The misleading constant `_STRATUM_ALLOC` is renamed `_STRATIFIED_CONTROL_ALLOC`.
+
+Schema identities re-mint accordingly (draft, expected): RNG `b56e5e12…` → **`dbfd7bb4…`**, map-set
+`41a1a10c…` → **`f2c29973…`**, combined `74f9a252…` → **`e786b4be…`**, schema-definition `cf762bed…` →
+**`7b91b7bc…`**. The union/variant map-identity model is unchanged (17 union entries drawn once, 16/17 variant
+projections), every reserved field stays `RESERVED_NOT_DRAWN`, both manifest identities stay the engine's
+`RESERVED_*` sentinels, and `gate_group_registered` stays BLOCKED.
+
 ## 9. Whole-battery permutation feasibility (Pi §9 + rev-3 §2/§6 corrections)
 
 **Independent reference-owned frozen coarsening (Pi rev-3 §2 — replaces the rejected pooled-frozen idea).** The
@@ -541,7 +613,7 @@ pairs, strata, cells, B, statistic recomputation route, wall time, peak RAM, che
 ### 9.1 FULL per-group registered-scale benchmark at `B = 20000` (rev-22, MEASURED — supersedes the surrogate)
 
 `scripts/oracle_realism_v3_registered_benchmark.py` (deterministic `config_identity`
-**`651f5c9f…`**; self-tests pass). With all twenty estimators wired, every in-scope cell is priced by measuring
+**`0f147205…`**; self-tests pass). With all twenty estimators wired, every in-scope cell is priced by measuring
 **its own engine estimator** on a registered-scale pooled draw (`N=8000`/arm, `M=16000`) of **its own
 experiment's profile** — 74 `(profile, statistic)` measurements — rather than through a route surrogate. Maps used
 for timing are TIMING-ONLY artifacts in a distinct namespace carrying the exact fixture seed of the reference arm
@@ -551,9 +623,9 @@ they were built from; no reserved draw, calibration/evaluation seed, manifest po
 
 | group | K | surrogate | MEASURED | error |
 |---|---|---|---|---|
-| `G_full_phase_seam` | 45 | 6.68 | **13.89** | understated 2.1× |
-| `G_full_length_density` | 36 | 0.105 | **5.51** | understated **52×** |
-| `G_full_burst_timing` | 36 | 1.70 | **2.59** | understated 1.5× |
+| `G_full_phase_seam` | 45 | 6.68 | **13.82** | understated 2.1× |
+| `G_full_length_density` | 36 | 0.105 | **5.50** | understated **52×** |
+| `G_full_burst_timing` | 36 | 1.70 | **2.60** | understated 1.5× |
 | `G_full_class_mark` | 54 | 0.12 | **0.24** | understated 2× |
 | `G_full_run_size` | 9 | 1.66 | **0.04** | **overstated 41×** |
 | `G_bounded_support` | 12 | 0.03 | **0.04** | ≈ |
@@ -564,16 +636,16 @@ The surrogate erred in BOTH directions because its per-item KS route mis-modelle
 (`Σ_experiment Σ_cell measured_cost`), and it is why a surrogate forecast must not gate a job plan.
 
 **Two groups bust the cap.** At the 8 h cap with the required 1.5× margin
-(`G_full_phase_seam` 20.84 h, `G_full_length_density` 8.27 h), so a single per-group job is NOT sufficient and the
+(`G_full_phase_seam` 20.73 h, `G_full_length_density` 8.26 h), so a single per-group job is NOT sufficient and the
 rev-6 "per-group jobs each fit" claim is **WITHDRAWN**. Cost is overwhelmingly permutation recompute (phase_seam:
-49 950 s of 50 015 s), concentrated in a few cells — SCID `S9_gap` at **476 ms/permutation** is 2.65 h **per cell**,
-and phase_seam contains four of them.
+49 676 s of 49 742 s = 99.9 %), concentrated in a few cells — SCID `S9_gap` at **473 ms/permutation** is 2.63 h
+**per cell**, and phase_seam contains four of them.
 
 **Split rule (normative).** A group whose single-job forecast exceeds `cap/margin` is split into the smallest
 number of **sequentially gated permutation-replicate jobs** such that `fixed_overhead + divisible/jobs` fits that
 budget, plus one final ranking/aggregation job. Fixed overhead (draw + canonicalise + precompute) is repaid by
 every split job; the min-p ranking runs ONCE at the end over the assembled `E` matrix. Stop-on-failure applies
-across a split exactly as it does across groups. Measured: `G_full_phase_seam` → **3 jobs @ 6.96 h** (with margin),
+across a split exactly as it does across groups. Measured: `G_full_phase_seam` → **3 jobs @ 6.92 h** (with margin),
 `G_full_length_density` → **2 jobs @ 4.14 h**; the other four groups stay single-job. `B=20000` still satisfies the
 `B ≥ K_max/α_group = 8100` resolution rule.
 
@@ -595,9 +667,9 @@ precompute payloads.
    (`G_full_length_density` remains 2.81 GB because its `length_ks`/`count_ks` precompute indicator matrices are
    266 MB and 176 MB per SCID experiment — that part is irreducible without changing the estimator).
 2. **Min-p ranking — RAM, not time.** `cell_upper_p` forms an `A × A` boolean matrix (`A = B+1`): at `A = 20001`
-   that is an exact **400.0 MB transient per cell**, 217 ms/cell measured. A `sort`/`searchsorted` formulation is
+   that is an exact **400.0 MB transient per cell**, 213 ms/cell measured. A `sort`/`searchsorted` formulation is
    **bit-identical** (proven here over 400 adversarial cases spanning heavy ties, `+inf` NE sentinels, all-constant
-   and all-NE vectors) at 1.42 ms and `O(A)` memory — 153×. **Honest scale: ranking is ~10 s per group, so this is
+   and all-NE vectors) at 1.36 ms and `O(A)` memory — 156×. **Honest scale: ranking is ~10 s per group, so this is
    a memory and hygiene fix, NOT a feasibility blocker.**
 3. **Block-addressable assignments — a genuine blocker for the checkpoint plan.** The current law draws every mask
    from ONE sequential `default_rng(seed)` stream, so block *k* cannot be regenerated without replaying blocks
@@ -629,13 +701,24 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
 
 ## Delivered (rev-22, Pi rev-9/rev-10/rev-12/rev-13/rev-18/rev-19-20 authorized dev-only scope — all tested)
 - **FULL per-group registered-scale benchmark + cap/checkpoint/persistence plan (rev-22, §9.1)** —
-  `scripts/oracle_realism_v3_registered_benchmark.py`, deterministic `config_identity` **`651f5c9f…`**, self-tests
+  `scripts/oracle_realism_v3_registered_benchmark.py`, deterministic `config_identity` **`0f147205…`**, self-tests
   pass. 74 measured `(profile, statistic)` costs at `N=8000`/arm; per-group forecast at `B=20000` for BOTH
   variants; measured ranking / assignment / persistence stages; normative split, checkpoint and aggregate-only
   persistence plans. Withdraws the surrogate per-group hours and the rev-6 "per-group jobs each fit" claim:
-  `G_full_phase_seam` 13.89 h and `G_full_length_density` 5.51 h exceed the 8 h cap with margin and need 3 and 2
+  `G_full_phase_seam` 13.82 h and `G_full_length_density` 5.50 h exceed the 8 h cap with margin and need 3 and 2
   sequentially gated jobs. The surrogate benchmark is unchanged and still reproduces its own
   `config_identity` **`b1f97d1a…`**. No reviewed module modified; nothing drawn, populated or frozen.
+- **Canonical boundary-short constructor (rev-22, §8.1)** — `scripts/oracle_realism_v3_constructors.py`,
+  self-tests pass. Makes the declared `bounded_length_control` route executable (three disjoint length bands over
+  `L∈[1,7]`), proves the `L≤7` structural bound and the S9 NE guarantee, makes `G_bounded_support` assemblable for
+  the first time, keeps the old generic path refused, and identity-binds BOTH allocation variants
+  (**`af2d41fd…`** / **`4bb56463…`**) without adopting either. Registered draw RESERVED.
+- **Manifest allocation/constructor follow-through (rev-22, §8.2)** — `scripts/oracle_realism_v3_manifest.py`:
+  `profile_config_identity` now DERIVES each source's stratum allocation from the registry instead of binding one
+  hardcoded `(2667,2667,2666)` to every profile, and binds the real boundary constructor identities for both
+  variants with the variant choice left RESERVED. Schema identities re-mint to **`dbfd7bb4…`** (RNG) /
+  **`f2c29973…`** (map-set) / **`e786b4be…`** (combined) / **`7b91b7bc…`** (schema-definition); union/variant
+  model and every RESERVED sentinel unchanged.
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
@@ -747,7 +830,11 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   missing/extra/duplicate failing closed (Pi rev-7 #6). The final Δ-aligned exemption then needs a separately-
   authorized calibration/power battery using the frozen map (Pi rev-7 #7). *(This single bullet consolidates the
   previously duplicated RNG-manifest and map-set bullets — Pi rev-9 contract change.)*
-- **Boundary-short canonical map** (Pi rev-8 #8) — route boundary-short through its canonical control constructor.
+- **Bounded-control ALLOCATION VARIANT decision** — §8.1 implements and identity-binds both
+  (`registered_alloc` keeps the registered quotas and perturbs the pooled length marginal; `width_proportional`
+  keeps the marginal and re-mints the registry quotas + manifest allocation). Neither is adopted; the registered
+  bounded-control draw stays RESERVED. *(The rev-8 #8 "route boundary-short through its canonical control
+  constructor" item is otherwise DONE — see §8.1.)*
 - **Job-kind minting for the split SD jobs** — §9.1 delivers the measured per-group forecast, the cap verdict, the
   split rule and the checkpoint/persistence plan, but the split job kinds / run IDs are NOT minted (that belongs
   with the launch-manifest work, which is blocked).

@@ -40,7 +40,7 @@ DRAFT = "DRAFT"
 _ARM_ORDER = ["candidate", "reference"]
 _ROLES = ("candidate", "reference")
 _COUPLING_STRENGTH = 0.5
-_STRATUM_ALLOC = [2667, 2667, 2666]
+_STRATIFIED_CONTROL_ALLOC = [2667, 2667, 2666]   # the STRATIFIED (structural-zero / boundary) control allocation only
 _CONTENT_HASH_ALGO = "sha256(canonical_hash) over derive_record-canonical (source,class_ids,timestamps) per role"
 _SET_HASH_RULE = ("variant_set_identity = canonical_hash({variant, registry_identity, sorted "
                   "[(profile,regime,check,map_identity)], builder_identity, apply_code_identity, "
@@ -73,16 +73,57 @@ def _constructor_route(source):
     return "source_profile_fixture"
 
 
+def _stratum_alloc_for(source):
+    """The source's ACTUAL registered stratum allocation, DERIVED from the registry (rev-22).
+
+    The rev-21 implementation bound the hardcoded `[2667,2667,2666]` allocation into every profile's
+    configuration identity, but only the two STRATIFIED sources (structural-zero, boundary-short) carry that
+    allocation: the source-profile experiments have a single pooled stratum of 8000. Binding the same wrong
+    allocation for those was the same defect class Pi rev-19/20 #2 targeted — a design-bearing field that does
+    not reflect the actual configuration. Refuses if a source's experiments disagree on their strata."""
+    seen = {}
+    for c in REG.build_sd_cells(apply_uncalibratable_exemption=False):
+        if c["scope"] != "in" or c["source"] != source:
+            continue
+        key = tuple((s["stratum_id"], s["n_candidate"], s["n_reference"]) for s in c["exchangeability_strata"])
+        seen.setdefault(key, set()).add(c["experiment_id"])
+    if not seen:
+        raise RefusalError(f"no in-scope registry cells for source {source!r}")
+    if len(seen) > 1:
+        raise RefusalError(f"source {source!r} has inconsistent registered strata across experiments: "
+                           f"{ {k: sorted(v) for k, v in seen.items()} }")
+    strata = next(iter(seen))
+    return {"stratum_ids": [s[0] for s in strata],
+            "n_candidate": [int(s[1]) for s in strata], "n_reference": [int(s[2]) for s in strata]}
+
+
+def _boundary_constructor_identities():
+    """The REAL bounded-length control constructor identities (rev-22), one per allocation variant.
+
+    Pi rev-19/20 #2 requires the boundary constructor/allocation identity to be bound, not merely the route
+    LABEL. Now that `oracle_realism_v3_constructors` implements the `bounded_length_control` route, its
+    deterministic route identity is bound here. BOTH allocation variants are bound because the choice between
+    them is an open reviewer decision (band widths 2/2/3 cannot preserve both the registered allocation and the
+    uniform pooled length marginal), exactly as both exemption variants are carried elsewhere."""
+    import scripts.oracle_realism_v3_constructors as CON      # local import: CON imports this module in its tests
+    return {v: CON.constructor_route_identity(v) for v in CON.ALLOC_VARIANTS}
+
+
 def _profile_config_identity(source, regime):
     """The ACTUAL profile configuration identity (Pi rev-19/20 #2): the exact PROFILES payload + source skeleton +
-    constructor route + stratum allocation — not a bare {profile,regime} label."""
-    return canonical_hash({
+    constructor route + REGISTRY-DERIVED stratum allocation (+ the executable constructor identities for the
+    bounded route) — not a bare {profile,regime} label and not a hardcoded allocation."""
+    payload = {
         "profile": source, "regime": regime,
         "profile_payload": PROFILES[source],
         "skeleton": ENG._PROFILE_SKELETON[source],
         "constructor_route": _constructor_route(source),
-        "stratum_allocation": list(_STRATUM_ALLOC),
-    })
+        "stratum_allocation": _stratum_alloc_for(source),
+    }
+    if source == "boundary_short":
+        payload["constructor_route_identities"] = _boundary_constructor_identities()
+        payload["constructor_allocation_variant"] = RESERVED       # the variant choice is not yet decided
+    return canonical_hash(payload)
 
 
 def _rng_law_identity(source, coupled):
@@ -385,7 +426,8 @@ SCHEMA_DEFINITION_IDENTITY = canonical_hash({
                       "variant": {k: getattr(t, "__name__", str(t)) for k, t in _MAPSET_VARIANT.items()},
                       "entry": {k: t.__name__ for k, t in _MAPSET_ENTRY.items()}},
     "layer_keys": list(_LAYER_KEYS), "arm_order": _ARM_ORDER, "coupling_strength": _COUPLING_STRENGTH,
-    "stratum_allocation": _STRATUM_ALLOC, "content_hash_algorithm": _CONTENT_HASH_ALGO,
+    "stratified_control_allocation": _STRATIFIED_CONTROL_ALLOC,
+    "content_hash_algorithm": _CONTENT_HASH_ALGO,
     "set_hash_rule": _SET_HASH_RULE, "output_path_grammar": _OUTPUT_PATH_GRAMMAR,
     "refused_artifact_rule": _REFUSED_ARTIFACT_RULE})
 
@@ -467,6 +509,60 @@ def selftest():
         errs.append("deterministic schema identities change when the dependency identity changes (not env-independent)")
     if _rng_schema_identity() == _mapset_schema_identity():
         errs.append("rng and map-set schema identities are not distinct")
+
+    # rev-22: the stratum allocation bound into profile_config_identity must be DERIVED from the registry, not
+    # a hardcoded constant applied to every profile.
+    reg_strata = {}
+    for c in REG.build_sd_cells(apply_uncalibratable_exemption=False):
+        if c["scope"] == "in":
+            reg_strata.setdefault(c["source"], [(s["stratum_id"], s["n_candidate"], s["n_reference"])
+                                                for s in c["exchangeability_strata"]])
+    for src, strata in reg_strata.items():
+        got = _stratum_alloc_for(src)
+        want = {"stratum_ids": [s[0] for s in strata], "n_candidate": [int(s[1]) for s in strata],
+                "n_reference": [int(s[2]) for s in strata]}
+        if got != want:
+            errs.append(f"derived stratum allocation for {src} {got} != registry {want}")
+    # the two POOLED sources must bind a single 8000 stratum, NOT the stratified control allocation
+    for src in ("scid_scale_control", "mimic_scale_control"):
+        a = _stratum_alloc_for(src)
+        if a["stratum_ids"] != ["pooled_source"] or a["n_candidate"] != [8000]:
+            errs.append(f"{src} should bind one pooled 8000 stratum, got {a}")
+        if a["n_candidate"] == _STRATIFIED_CONTROL_ALLOC:
+            errs.append(f"{src} still binds the stratified control allocation (the rev-21 defect)")
+    for src in ("structural_zero_control", "boundary_short"):
+        if _stratum_alloc_for(src)["n_candidate"] != _STRATIFIED_CONTROL_ALLOC:
+            errs.append(f"{src} should bind the stratified control allocation")
+    # the fix must BITE: a pooled source and a stratified source must not share a configuration identity, and
+    # recomputing with the old hardcoded allocation must give a DIFFERENT identity for the pooled sources.
+    if _profile_config_identity("scid_scale_control", "full") == _profile_config_identity("structural_zero_control",
+                                                                                          "full"):
+        errs.append("pooled and stratified sources share a profile_config_identity")
+    old_style = canonical_hash({"profile": "scid_scale_control", "regime": "full",
+                                "profile_payload": PROFILES["scid_scale_control"],
+                                "skeleton": ENG._PROFILE_SKELETON["scid_scale_control"],
+                                "constructor_route": _constructor_route("scid_scale_control"),
+                                "stratum_allocation": list(_STRATIFIED_CONTROL_ALLOC)})
+    if old_style == _profile_config_identity("scid_scale_control", "full"):
+        errs.append("profile_config_identity unchanged by the allocation fix (the defect is not actually fixed)")
+
+    # rev-22: the boundary route must bind the REAL executable constructor identities, both variants, and the
+    # variant choice must remain RESERVED (undecided).
+    try:
+        import scripts.oracle_realism_v3_constructors as CON
+        bound = _boundary_constructor_identities()
+        if set(bound) != set(CON.ALLOC_VARIANTS):
+            errs.append(f"boundary constructor identities {sorted(bound)} != variants {sorted(CON.ALLOC_VARIANTS)}")
+        for v in CON.ALLOC_VARIANTS:
+            if bound[v] != CON.constructor_route_identity(v):
+                errs.append(f"bound boundary constructor identity for {v} does not recompute")
+        if len(set(bound.values())) != len(bound):
+            errs.append("the two boundary allocation variants collapse to one constructor identity")
+        if CON.CANONICAL_ROUTE["boundary_short"] != _constructor_route("boundary_short"):
+            errs.append("constructor module and manifest disagree on the boundary route id")
+    except ImportError as ex:                                   # pragma: no cover
+        errs.append(f"cannot import the constructor module to bind the boundary route: {ex}")
+
     return errs, rng, mapset
 
 

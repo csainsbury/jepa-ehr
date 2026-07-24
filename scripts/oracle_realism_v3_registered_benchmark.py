@@ -597,8 +597,9 @@ def main():
         "B_main": B_MAIN, "N_per_arm": N_PER_ARM, "floor": FLOOR_REG,
         "alpha_group": ALPHA_GROUP_EXACT, "cap_hours": CAP_HOURS, "margin": MARGIN,
         "checkpoint_block": CHECKPOINT_BLOCK,
+        # the split RULE is deterministic and belongs here; the resulting per-group JOB COUNTS are derived from
+        # measured timings and must NOT enter a deterministic identity (they live in the timing artifact).
         "split_rule": plan["split_rule"],
-        "split_jobs_by_group": plan["split_jobs_by_group"],
         "rank_formulation": "sorted searchsorted-left complement; bit-identical to the A x A reference",
         "registry_identity": CANONICAL_REGISTRY_HASH,
         "source_identities": SOURCE_IDENTITY_BUNDLE,
