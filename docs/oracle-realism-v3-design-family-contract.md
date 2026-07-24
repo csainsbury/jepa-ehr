@@ -1,10 +1,33 @@
-# Oracle Realism Verifier — Design Family v3 (rev-9, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-10, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-8. The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Status:** DRAFT for Pi review. Supersedes rev-9. The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
 build, reserved map-design draw, audit/evaluation seed, policy population, or run. There is **no production/trusted
-readiness claim** — the registered boundary is DEFINED and its refusals are tested, but a real registered run is
-BLOCKED (reserved map-set + RNG manifest not drawn).
+readiness claim.** Registered mode is a **BLOCKED STUB**: its invariants are DECLARED and its structured assembly +
+identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED — it never runs a statistic, never
+consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
+can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
+
+**Rev-10 changes folded (Pi rev-9 GO-WITH-CHANGES, RC1–RC5):**
+1. **Uniform keyword-only estimator protocol (RC1)** — every registry estimator is now called
+   `recompute(pre, mask, *, groups, floor)`; `S5_abs`/`S6_tv`/`S7_abs` bind keyword-only wrappers. The rev-9 defect
+   bound `_map_re_scalar` positionally, so the dev floor was assigned to `extra_key` and the real floor stayed 500 —
+   which is what produced the class-mark `NOT_EVALUABLE`, **not** a legitimately stricter map (that rev-9 claim is
+   withdrawn). A controlled self-test exercises every floor-gated estimator at floor 60 (evaluates) and floor 500
+   (refuses) and every floor-insensitive estimator identically at both.
+2. **Registered mode framed as a blocked stub (RC2)** — the docstring/contract no longer say it "enforces exact
+   B/floor/α" as an executable evaluator; it declares invariants and tests structured assembly/refusals, execution
+   unimplemented and unconditionally blocked.
+3. **Map builder never emits an unvalidated artifact (RC3)** — `seed` and `N` are MANDATORY builder arguments;
+   profile/regime/namespace/seed/N/floor are validated BEFORE integer coercion (so `True` is not coerced to `1`);
+   the artifact is validated before return. `5106ad09…` is a **development self-test** map-set hash, not the
+   reserved registered map-set identity.
+4. **Strict paired direction (RC4)** — the mechanical paired check records success only for strict
+   `p_g(perturbed) < p_g(base)` (a tie is no direction evidence).
+5. **Dev-config semantics hardened (RC5)** — `gate_group_dev` requires a positive non-bool floor and a non-bool
+   integer seed, rejects extra map artifacts, and returns a FULL dev-config reproducibility record (per-stratum
+   counts, map identities + set identity, registry identity, namespace, seed law) with a stable seed-invariant
+   identity — not merely `(floor,B,group)`. The low-level kernel is renamed `_gate_group` (private/test-only).
 
 **Rev-9 changes folded (Pi rev-8 #1–#9):**
 1. **Structured strata (#1)** — the engine accepts `experiment → stratum_id → {candidate, reference}`, compares
@@ -12,9 +35,11 @@ BLOCKED (reserved map-set + RNG manifest not drawn).
    `(2667,2667,2666)` now assembles without the flat-pool divisibility refusal (a synthetic-registered assembly is
    in the engine self-test).
 2. **Explicit dev vs registered boundaries (#2)** — `gate_group_dev` (explicit hash-bound floor/B, no module-global
-   mutation) and `gate_group_registered` (enforces exact N/arm, `B=20000`, floor 500, EXACT `α=0.04/6`, exact
-   stratum quotas, the full registry identity, and the approved map-set + RNG-manifest identities — refusing ANY
-   deviation, and BLOCKING the real run until the reserved manifests are drawn). Floor is a parameter, not a global.
+   mutation) and `gate_group_registered`. Floor is a parameter, not a global. *(Superseded by rev-10 RC2: the
+   original wording here — that registered mode "enforces exact N/arm, B=20000, floor 500, α=0.04/6 … refusing ANY
+   deviation" as an executable evaluator — OVERCLAIMED. Registered mode is a blocked stub that declares invariants
+   and tests structured assembly/identity refusals; the statistic path is unimplemented and unconditionally blocked;
+   B/floor/α are not call arguments. See the rev-10 section above and the Delivered entry below.)*
 3. **Map context binding (#3)** — dev mode binds each map artifact's profile/regime/dev-floor to the canonical cell
    and enforces ONE shared identity per `(profile, regime, check)`; the engine no longer self-derives expected map
    hashes from the supplied artifacts.
@@ -33,10 +58,12 @@ BLOCKED (reserved map-set + RNG manifest not drawn).
    boundary-short canonical map; estimator/precompute/raw-record schemas.
 
 **Rev-8 changes folded (Pi rev-7 #1–#9):**
-1. **Trusted engine boundary (#4)** — `scripts/oracle_realism_v3_engine.py::gate_group_trusted` loads the canonical
-   group registry INTERNALLY, computes precompute ITSELF from raw pools, and treats any non-finite discrepancy as
-   NE (never zero-fill). Reproduced fail-open exploits (all-NaN precompute → PASS; wrong check/Δ → PASS) now
-   NE/refuse (adversarial self-tests). No caller-supplied check/Δ/registered/precompute is trusted.
+1. **Engine dispatcher boundary (#4)** — `scripts/oracle_realism_v3_engine.py` loads the canonical group registry
+   INTERNALLY, computes precompute ITSELF from raw pools, and treats any non-finite discrepancy as NE (never
+   zero-fill). Reproduced fail-open exploits (all-NaN precompute → PASS; wrong check/Δ → PASS) now NE/refuse
+   (adversarial self-tests). No caller-supplied check/Δ/registered/precompute is trusted. *(Superseded framing:
+   rev-8 called this a "trusted"/production boundary via `gate_group_trusted`; rev-9/rev-10 correct it to a
+   DEVELOPMENT dispatcher — `gate_group_dev` — distinct from the registered blocked stub `gate_group_registered`.)*
 2. **Sparse perturbation (#1)** — the demo perturbs EXACTLY one experiment and asserts (executable, hashed) that
    every other experiment pool is content-identical to its null construction; argmin reported + attributes to the
    perturbed experiment's registered primary cell. The dense-9-experiment claim is withdrawn.
@@ -140,13 +167,16 @@ code exactly):
   **`B ≥ 8100`**. Main **`B = 20,000`** meets it. (The rev-5 coarse `B = 2,000` audit could NOT resolve a
   single-cell effect in the deepest group and is REMOVED — §4.) `B` is frozen by this rule, not a default.
   Fisher/Cauchy combiners are **OUT** for v3.
-- **Real evaluator path (implemented + validated).** The product/stratified finite-`B` engine (within-stratum
-  label permutation preserving each stratum's quota; independent per-experiment permutation under one synchronized
-  MC index; nested cell upper-tail then group lower-tail min-p; deadbands and ties) reproduces the exhaustive
-  group `p_g` exactly, stays conservative under a finite-`B` product null, and replays deterministically. All
-  seven malformed-input classes (unequal candidate/reference size, wrong stratum quota, duplicate/missing pooled
-  index, non-bijection, role-dependent RNG law, `B`/RNG mismatch, truncated cell vector) fail closed BEFORE any
-  statistic is computed.
+- **Randomization kernel (implemented + exhaustively validated); registered integrated path BLOCKED (Pi rev-9 RC2).**
+  The product/stratified finite-`B` kernel (within-stratum label permutation preserving each stratum's quota;
+  independent per-experiment permutation under one synchronized MC index; nested cell upper-tail then group
+  lower-tail min-p; deadbands and ties) reproduces the exhaustive group `p_g` exactly, stays conservative under a
+  finite-`B` product null, and replays deterministically. All seven malformed-input classes (unequal
+  candidate/reference size, wrong stratum quota, duplicate/missing pooled index, non-bijection, role-dependent RNG
+  law, `B`/RNG mismatch, truncated cell vector) fail closed BEFORE any statistic is computed. This kernel is
+  exercised through the DEVELOPMENT dispatcher (`gate_group_dev`) only; the **registered** integrated path
+  (`gate_group_registered` at `B=20000`/floor 500 over a drawn map set + bound RNG manifest) is **not implemented**
+  and is unconditionally blocked until those reserved manifests exist and a later activation review passes.
 
 ## 4. Error budget — main SD level only; the coarse audit is REMOVED (Pi rev-5 #5)
 
@@ -301,31 +331,41 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-9, Pi rev-8 authorized dev-only scope — all tested)
+## Delivered (rev-10, Pi rev-9 authorized dev-only scope — all tested)
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
   audit prose removed; `B≥K/α` reframed as a conservative design rule. Both variants **M0 = 192 / 194**
   (hashes **`9a0ae6a8…` / `e978ecd0…`**); `G=6`, `K_max=54`.
-- **Issuance-complete map builder + HARDENED validator (Pi #3/#6)** — `scripts/oracle_realism_v3_map.py` (map-set
-  hash **`5106ad09…`**): original bins + reference-owned `coarsen_reference` grouping + per-sequence means/equal-
-  weight/floors (S6 on LENGTH_BINS). Full issuance trust root; the validator now enforces registered estimator/bin/
-  n_original_bins identities, a **floor-consistent denominator policy** (a dev-floor map cannot record the registered
-  floor), positive non-bool N/seed/floor, **status↔groups consistency**, and a **complete disjoint bin partition**;
-  it REFUSES cross-identity application. Callers record the EXACT map-design seed/namespace actually used. Adequate-
-  support tests prove EXACT v2-value reproduction (not `None==None`).
-- **Registry-owned engine + DEV/REGISTERED boundaries (Pi rev-7 #4, rev-8 #1/#2/#3)** —
+- **Issuance-complete map builder + HARDENED validator (Pi #3/#6; RC3)** — `scripts/oracle_realism_v3_map.py`
+  (**development self-test** map-set hash **`5106ad09…`** — NOT the reserved registered map-set identity, which is
+  not drawn): original bins + reference-owned `coarsen_reference` grouping + per-sequence means/equal-weight/floors
+  (S6 on LENGTH_BINS). Full issuance trust root; the validator enforces registered estimator/bin/n_original_bins
+  identities, a **floor-consistent denominator policy** (a dev-floor map cannot record the registered floor),
+  positive non-bool N/seed/floor, **status↔groups consistency**, and a **complete disjoint bin partition**; it
+  REFUSES cross-identity application. **RC3:** `seed` and `N` are MANDATORY builder arguments, all provenance fields
+  are validated BEFORE integer coercion (so `True` is not coerced to `1`), and the builder validates the artifact
+  before returning it — it can never emit an unvalidated/null-provenance map. Callers record the EXACT map-design
+  seed/namespace actually used. Adequate-support tests prove EXACT v2-value reproduction (not `None==None`).
+- **Registry-owned engine + DEV dispatcher / REGISTERED blocked stub (Pi rev-7 #4, rev-8 #1/#2/#3; RC1/RC2/RC5)** —
   `scripts/oracle_realism_v3_engine.py`: cells are built from the canonical registry ONLY (callers pass DATA as
   STRUCTURED arms `experiment → stratum → {candidate, reference}`, never check/Δ/registered/precompute); precompute
   is computed internally; non-finite → NE (Pi's two fail-open exploits — all-NaN precompute, mismatched check+Δ —
-  are reproduced as adversarial tests and confirmed NE/REFUSE). Two explicit boundaries, NO module-global mutation:
-  **`gate_group_dev`** (explicit hash-bound floor/B; context-bound maps; one identity per (profile,regime,check))
-  and **`gate_group_registered`** (enforces exact N/arm=8000, `B=20000`, floor 500, EXACT `α=0.04/6`, exact stratum
-  quotas, full registry identity, approved map-set + RNG-manifest identities — refusing ANY deviation; a real run is
-  BLOCKED until the reserved manifests are drawn). Structured registered structural-zero `(2667,2667,2666)`
-  assembles with NO divisibility refusal (self-test). Each per-permutation recompute reproduces the EXACT v2
-  estimand to `<1e-9`. 10 estimators wired (burst-timing + class-mark); the other three groups are the next wiring
-  step.
+  are reproduced as adversarial tests and confirmed NE/REFUSE). All estimators use a **uniform keyword-only protocol**
+  `recompute(pre, mask, *, groups, floor)` (**RC1**); a controlled self-test exercises every floor-gated estimator at
+  floor 60 (evaluates) and floor 500 (refuses). Two explicit boundaries, NO module-global mutation:
+  **`gate_group_dev`** — the DEVELOPMENT dispatcher (explicit hash-bound floor/B; positive non-bool floor + non-bool
+  integer seed; rejects extra map artifacts; context-bound maps, one identity per (profile,regime,check); returns a
+  full dev-config reproducibility record with a stable seed-invariant identity — **RC5**) — and
+  **`gate_group_registered`** — a **BLOCKED STUB (RC2)**: it DECLARES the registered invariants (exact N/arm=8000,
+  `B=20000`, floor 500, `α=0.04/6`, exact stratum quotas, full registry identity, approved map-set + RNG-manifest
+  identities) and TESTS structured assembly + identity refusals, then UNCONDITIONALLY blocks. It never runs a
+  statistic, never consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not call arguments and the
+  registered statistic path is unimplemented — activation is a later reviewed change after manifest generation. The
+  structured registered structural-zero `(2667,2667,2666)` **assembly self-test uses DUMMY sequences and checks
+  quotas/order only** (no divisibility refusal), NOT registered statistic execution. Each per-permutation recompute
+  reproduces the EXACT v2 estimand to `<1e-9`. The low-level kernel is `_gate_group` (private/test-only). 10
+  estimators wired (burst-timing + class-mark); the other three groups are the next wiring step.
 - **Registered-N boundary preflight (Pi #2, canonical constructor Pi #3, provenance Pi #6)** —
   `scripts/oracle_realism_v3_regn_preflight.py` (hash **`da499057…`**): at N=8000 the bounded S3_loggap map ISSUES
   (evaluable) — the dev-scale "structurally un-calibratable" claim is WITHDRAWN; both S3 exemptions rest on the
@@ -333,16 +373,21 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   without each. **structural-zero uses the CANONICAL multiscale constructor** (means 18/60/250), and the map
   artifact records the EXACT seed/namespace. Both PROVISIONAL; finalisation needs a separately-authorized power
   battery (Pi #7).
-- **SPARSE + PAIRED dev-boundary demo (Pi rev-7 #1, rev-8 #7)** — `scripts/oracle_realism_v3_group_power.py`
-  (hash **`105c4d9c…`**), via `gate_group_dev` with STRUCTURED arms: perturbs EXACTLY one experiment and ASSERTS
+- **SPARSE + PAIRED dev-boundary demo (Pi rev-7 #1, rev-8 #7; RC1/RC4/RC5)** — `scripts/oracle_realism_v3_group_power.py`
+  (hash **`f8c89bf5…`**), via `gate_group_dev` with STRUCTURED arms: perturbs EXACTLY one experiment and ASSERTS
   (hashed, timestamps included) every non-target arm is identical to null AND the target arm changed; evaluates
-  base AND its perturbation under the SAME permutation seed and compares `p_g(perturbed)` to `p_g(base)`;
-  structural-zero data AND map-design sample via the canonical multiscale constructor; maps context-bound to
-  (profile,regime,dev-floor). MECHANICAL (B<resolution). The **burst-timing group** demonstrates it end-to-end
-  (null PASS; paired perturbed `p_g` < base; argmin attributes to the perturbed primary cell). The **class-mark
-  group correctly NEs at dev N=810** (the leakage-free independent map is legitimately stricter) — its
-  multi-component sensitivity belongs to the registered-scale run (deferred). The rev-5 3-cell
-  run is a MECHANICAL SMOKE (`29da0411…`).
+  base AND its perturbation under the SAME permutation seed and compares `p_g(perturbed)` to `p_g(base)` with a
+  STRICT `<` (RC4); structural-zero data AND map-design sample via the canonical multiscale constructor; maps
+  context-bound to (profile,regime,dev-floor); records the full RC5 dev-config identity. MECHANICAL (B<resolution).
+  All three components are **group-sensitive**: perturbing the target experiment drives `p_g` from `1.0` to `~0.02`
+  (paired direction `1.0`) in every component. The **burst-timing group** (evald 4/4) attributes cleanly — argmin
+  is the perturbed primary cell (attribution `1.0`). **After the RC1 floor fix the class-mark group EVALUATES at dev
+  N=810** (evald 2/2 each) — withdrawing the rev-9 "correctly NEs / legitimately stricter map" claim, which was the
+  positional-floor bug, not real stricter behaviour: `mark_burst_tie` attributes cleanly to `S4_abs` (argmin `1.0`),
+  while `cluster_size_mark_diversity` is group-sensitive (paired `1.0`) but its argmin lands on the **co-moved
+  `S4_abs` sibling rather than the nominal `S7_abs`** (attribution `0.0`) — an HONEST mechanical-dev-scale limitation
+  (the coupling moves several class-mark statistics at once; surgical single-cell attribution is a registered-scale
+  question, not a dev claim). The rev-5 3-cell run is a MECHANICAL SMOKE (`29da0411…`).
 - **Δ-aligned pilot (dev evidence only)** — `scripts/oracle_realism_v3_phase0_pilot.py` (hash **`24ca0123…`**),
   formula err `0.0`; the boundary decision is DEFERRED to the registered-N preflight (Pi #2); full-support
   S3_loggap null-exceedance `0.0`.
@@ -355,28 +400,24 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   SD-main ≈ 10.3 h does NOT fit one 8 h job → separately-gated per-group SD jobs. (Full per-group wired benchmark
   follows once all five groups' estimators are wired.)
 
-## Still open (Pi-authorized next scope; NOT yet done in rev-9)
+## Still open (Pi-authorized next scope; NOT yet done in rev-10)
 - **Reserved map-set + RNG-manifest generation** (generate, do NOT execute) — `gate_group_registered` binds to
   `RESERVED_MAP_SET_NOT_DRAWN` / `RESERVED_RNG_MANIFEST_NOT_BOUND`, so a real registered run is BLOCKED. The RNG
   manifest must bind exact per-role/stratum seeds + generator/coupling CODE identities + profile identity +
-  content/count hashes + canonical arm order (Pi rev-8 #5/#6); the map-set manifest enumerates every
-  `(profile,regime,check)` + seed/namespace/N/floor/builder identity + set-hash rule.
+  content/count hashes + canonical arm order (Pi rev-8 #5/#6, rev-7 #5); the map-set manifest enumerates every
+  `(profile,regime,check)` + seed/namespace/N/floor/builder/code identity + output path + set-hash rule, with
+  missing/extra/duplicate failing closed (Pi rev-7 #6). The final Δ-aligned exemption then needs a separately-
+  authorized calibration/power battery using the frozen map (Pi rev-7 #7). *(This single bullet consolidates the
+  previously duplicated RNG-manifest and map-set bullets — Pi rev-9 contract change.)*
 - **Estimator/precompute/raw-record schemas** (Pi rev-8 #5) — `_validate_precompute` rejects Inf only; add
-  per-estimator key/shape/owner-index/vector-width/pooled-length + legal-NaN + raw-record finiteness schemas; mark
-  the low-level `gate_group(spec)` private/test-only.
+  per-estimator key/shape/owner-index/vector-width/pooled-length + legal-NaN + raw-record finiteness schemas.
+  (Marking the low-level kernel private/test-only is DONE in rev-10 RC5: it is renamed `_gate_group`.)
 - **Boundary-short canonical map** (Pi rev-8 #8) — route boundary-short through its canonical control constructor.
 - **Wire the length_density / run_size / phase_seam estimators** into the engine (burst-timing + class-mark are
   wired); then a full per-group **wired benchmark at the registered `B=20000`** per exact profile/stratum, with the
   1.5× margin applied to EVERY group + checkpoint/resume + real evidence persistence, then mint job kinds. (The
   current benchmark's wired measurement uses a mechanical `B=5400` and covers only the burst-timing group; the
   route surrogate already forecasts phase/seam ≈ 8.46 h, so that route needs a predeclared split — Pi rev-7 #8.)
-- **Executable RNG-provenance manifest** — bind exact per-role derived seeds + generator/coupling CODE identities
-  in a trusted experiment manifest and compare content/count hashes at the engine boundary (the current
-  `rng_identity` hashes metadata, not the generator call — Pi rev-7 #5).
-- **Reserved map-set MANIFEST** — enumerate (do NOT execute) every required `(profile, regime, check)`, seed,
-  namespace, N/floor, builder/code identity, output path, and set-hash rule, with missing/extra/duplicate failing
-  closed (Pi rev-7 #6). The final Δ-aligned exemption then needs a separately-authorized calibration/power battery
-  using the frozen map (Pi rev-7 #7).
 - **Reference-owned frozen-map CALIBRATION draw + calibration-build preflight** — the corrected + issuance-complete
   builder is written and tested on dev fixtures; the one-time reserved-namespace DRAW is **NOT authorized** until
   Pi separately authorizes.

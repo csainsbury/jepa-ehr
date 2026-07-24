@@ -127,14 +127,23 @@ MAP_SCHEMA = {"check": str, "bins_id": str, "n_original_bins": int, "groups": (l
 _VALID_STATUS = {"OK", "REFUSED_reference_coarsening"}
 
 
-def build_frozen_map(reference_sample, check, *, profile, regime, namespace="v3-map-dev", seed=None, N=None,
-                     floor=FLOOR):
+def build_frozen_map(reference_sample, check, *, profile, regime, seed, N, namespace="v3-map-dev", floor=FLOOR):
     """Freeze the reference-owned grouping of ORIGINAL bin indices via the v2 merge on the reference per-bin
-    sequence counts, and bind the full issuance trust root (Pi rev-6 #3). `floor` defaults to the registered
-    FLOOR=500; a LOWER floor is only for LABELLED dev-scale demonstrations (recorded in the artifact)."""
-    builder, _, _ = CHECK_SPEC[check]
-    if N is not None and len(reference_sample) != N:               # provenance: the sample IS the declared N (Pi #4)
+    sequence counts, and bind the full issuance trust root (Pi rev-6 #3). `seed` and `N` are MANDATORY (Pi rev-9
+    RC3): a builder must never emit an unvalidated artifact with a null provenance field. `floor` defaults to the
+    registered FLOOR=500; a LOWER floor is only for LABELLED dev-scale demonstrations (recorded in the artifact)."""
+    if check not in CHECK_SPEC:
+        raise RefusalError(f"map builder unknown check {check!r}")
+    # RC3: validate every provenance field BEFORE integer coercion (so True is NOT silently coerced to 1)
+    for nm, v in (("seed", seed), ("N", N), ("floor", floor)):
+        if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+            raise RefusalError(f"map builder {nm} {v!r} must be a positive non-bool integer")
+    for nm, v in (("profile", profile), ("regime", regime), ("namespace", namespace)):
+        if not (isinstance(v, str) and v.strip()):
+            raise RefusalError(f"map builder {nm} must be a nonempty string")
+    if len(reference_sample) != N:                                 # provenance: the sample IS the declared N (Pi #4)
         raise RefusalError(f"reference_sample length {len(reference_sample)} != declared N {N}")
+    builder, _, _ = CHECK_SPEC[check]
     pb, _ = builder(reference_sample)
     counts = np.asarray([len(v) for v in pb])
     groups = coarsen_reference(counts, floor=floor)
@@ -142,9 +151,10 @@ def build_frozen_map(reference_sample, check, *, profile, regime, namespace="v3-
            "groups": ([list(g) for g in groups] if groups is not None else None), "floor": int(floor),
            "status": "OK" if groups is not None else "REFUSED_reference_coarsening",
            "profile": profile, "regime": regime, "namespace": namespace,
-           "seed": (int(seed) if seed is not None else None), "N": (int(N) if N is not None else None),
+           "seed": int(seed), "N": int(N),
            "estimator_identity": ESTIMATOR_ID[check], "original_bin_identity": ORIGINAL_BINS[check],
            "denominator_policy": _denom_policy(check, int(floor))}
+    validate_map_artifact(art)                                     # RC3: never return an unvalidated artifact
     return art
 
 
@@ -278,7 +288,7 @@ def selftest():
             errs.append(f"{check}: map identity not deterministic")
 
     # S6 is LENGTH_BINS
-    if build_frozen_map(ref, "S6_tv", profile=prof, regime=reg)["bins_id"] != "LENGTH_BINS":
+    if build_frozen_map(ref, "S6_tv", profile=prof, regime=reg, seed=1, N=N)["bins_id"] != "LENGTH_BINS":
         errs.append("S6_tv bins_id != LENGTH_BINS")
 
     # floor enforcement: tiny reference => NE (artifact carries mandatory seed/N)
@@ -327,6 +337,21 @@ def selftest():
         if not _mrefused(bad):
             errs.append(f"malformed-artifact NOT refused: {label}")
 
+    # RC3 (Pi rev-9): the BUILDER refuses bad provenance BEFORE integer coercion and never returns an unvalidated
+    # artifact (True must not be coerced to 1; N must equal the sample length; seed/N mandatory positive non-bool).
+    builder_bad = {
+        "bool_seed": lambda: build_frozen_map(ref, "S3_loggap", profile=prof, regime=reg, seed=True, N=N),
+        "bool_N": lambda: build_frozen_map(ref, "S3_loggap", profile=prof, regime=reg, seed=1, N=True),
+        "nonpos_seed": lambda: build_frozen_map(ref, "S3_loggap", profile=prof, regime=reg, seed=0, N=N),
+        "N_mismatch": lambda: build_frozen_map(ref, "S3_loggap", profile=prof, regime=reg, seed=1, N=N + 1),
+        "blank_profile": lambda: build_frozen_map(ref, "S3_loggap", profile="  ", regime=reg, seed=1, N=N),
+    }
+    for label, fn in builder_bad.items():
+        try:
+            fn(); errs.append(f"builder did NOT refuse {label}")
+        except RefusalError:
+            pass
+
     return errs, {c: build_frozen_map(ref, c, profile=prof, regime=reg, seed=1, N=N) for c in MAP_CARRYING}
 
 
@@ -337,10 +362,12 @@ def main():
            "frozen_maps": {k: {"status": m["status"], "groups": m["groups"], "identity": map_identity(m)}
                            for k, m in maps.items()},
            "issuance_fields": sorted(MAP_SCHEMA),
+           "map_set_hash_label": "DEVELOPMENT self-test map-set hash (mimic_scale_control@full, dev fixtures) — "
+                                 "NOT the reserved registered map-set identity (that draw is BLOCKED) (Pi rev-9 RC3)",
            "selftests_pass": not errs, "selftest_errors": errs,
            "authorization": "dev-only map builder; the reserved one-time map-design namespace draw is BLOCKED."}
     print(json.dumps(out, indent=2, default=str))
-    print("\nMAP_SET_HASH:", canonical_hash(out["frozen_maps"]))
+    print("\nMAP_SET_HASH (dev self-test; NOT reserved):", canonical_hash(out["frozen_maps"]))
     assert not errs, f"map builder self-tests FAILED: {errs}"
     return out
 

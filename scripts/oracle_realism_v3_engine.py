@@ -48,7 +48,7 @@ def _tau_pre(pool):
     return np.array([_seq_components(r) for r in pool])
 
 
-def _tau_re(pre, mask, groups=None, floor=FLOOR):
+def _tau_re(pre, mask, *, groups=None, floor=FLOOR):
     def t(Cm):
         s = Cm.sum(0); dA, dB = s[1] - s[2], s[1] - s[3]
         return None if (dA <= 0 or dB <= 0) else s[0] / np.sqrt(dA * dB)
@@ -62,7 +62,7 @@ def _dt0_pre(pool):
     return np.stack([nz, na], 1)
 
 
-def _dt0_re(pre, mask, groups=None, floor=FLOOR):
+def _dt0_re(pre, mask, *, groups=None, floor=FLOOR):
     a, b = pre[mask].sum(0), pre[~mask].sum(0)
     return None if (a[1] == 0 or b[1] == 0) else abs(a[0] / a[1] - b[0] / b[1])
 
@@ -79,7 +79,7 @@ def _gap_pre(pool):
     return {"owner": owner, "inv": inv, "nu": len(uniq)}
 
 
-def _gap_re(pre, mask, groups=None, floor=FLOOR):
+def _gap_re(pre, mask, *, groups=None, floor=FLOOR):
     inA = mask[pre["owner"]]; nA = int(inA.sum()); nB = len(inA) - nA
     if nA == 0 or nB == 0:
         return None
@@ -102,7 +102,7 @@ def _loggap_pre(pool):
     return {"sm": sm, "sp": sp}
 
 
-def _loggap_re(pre, mask, groups, floor=FLOOR):
+def _loggap_re(pre, mask, *, groups=None, floor=FLOOR):
     if groups is None:
         return None
     d = 0.0
@@ -129,7 +129,7 @@ def _s4_pre(pool):
     return out
 
 
-def _s4_re(pre, mask, groups=None, floor=FLOOR):
+def _s4_re(pre, mask, *, groups=None, floor=FLOOR):
     pres = ~np.isnan(pre[:, 0]); ca = pres & mask; cr = pres & ~mask
     if int(ca.sum()) < floor or int(cr.sum()) < floor:
         return None
@@ -142,7 +142,7 @@ def _classtv_pre(pool):
     return np.array([np.bincount(r.class_ids, minlength=C)[:C] for r in pool], float)
 
 
-def _classtv_re(pre, mask, groups=None, floor=FLOOR):
+def _classtv_re(pre, mask, *, groups=None, floor=FLOOR):
     a, b = pre[mask].sum(0), pre[~mask].sum(0)
     if a.sum() == 0 or b.sum() == 0:
         return None
@@ -153,7 +153,7 @@ def _occ_pre(pool):
     return np.array([len(np.unique(r.class_ids)) / C for r in pool], float)
 
 
-def _occ_re(pre, mask, groups=None, floor=FLOOR):
+def _occ_re(pre, mask, *, groups=None, floor=FLOOR):
     a, b = pre[mask], pre[~mask]
     return None if (a.size < floor or b.size < floor) else abs(float(a.mean()) - float(b.mean()))
 
@@ -196,7 +196,7 @@ def _s7_pre(pool):
     return {"sm": sm, "cc": cc}
 
 
-def _map_re_scalar(pre, mask, groups, extra_key=None, floor=FLOOR):
+def _map_re_scalar(pre, mask, *, groups=None, extra_key=None, floor=FLOOR):
     if groups is None:
         return None
     sm = pre["sm"]; extra = pre.get(extra_key) if extra_key else None
@@ -215,7 +215,7 @@ def _map_re_scalar(pre, mask, groups, extra_key=None, floor=FLOOR):
     return d
 
 
-def _map_re_vector(pre, mask, groups, floor=FLOOR):
+def _map_re_vector(pre, mask, *, groups=None, floor=FLOOR):
     if groups is None:
         return None
     vec = pre["vec"]; d = 0.0
@@ -246,11 +246,15 @@ ESTIMATORS = {
                  "identity": "v2.tv(class_prior)"},
     "occupancy_abs": {"precompute": _occ_pre, "recompute": _occ_re, "map_carrying": False,
                       "identity": "v2.abs(mean_occupancy)"},
-    "S5_abs": {"precompute": _s5_pre, "recompute": _map_re_scalar, "map_carrying": True,
-               "identity": "v2.cond_maxbin.mean(occupancy)@LENGTH_BINS[ref_coarsen]"},
-    "S6_tv": {"precompute": _s6_pre, "recompute": _map_re_vector, "map_carrying": True,
-              "identity": "v2.maxabs_tv(class_prior)@LENGTH_BINS[ref_coarsen]"},
-    "S7_abs": {"precompute": _s7_pre, "recompute": (lambda pre, m, g, floor=FLOOR: _map_re_scalar(pre, m, g, extra_key="cc", floor=floor)),
+    # RC1 (Pi rev-9): uniform keyword-only wrappers — `floor` is routed to the floor gate, never into `extra_key`.
+    "S5_abs": {"precompute": _s5_pre,
+               "recompute": (lambda pre, m, *, groups=None, floor=FLOOR: _map_re_scalar(pre, m, groups=groups, floor=floor)),
+               "map_carrying": True, "identity": "v2.cond_maxbin.mean(occupancy)@LENGTH_BINS[ref_coarsen]"},
+    "S6_tv": {"precompute": _s6_pre,
+              "recompute": (lambda pre, m, *, groups=None, floor=FLOOR: _map_re_vector(pre, m, groups=groups, floor=floor)),
+              "map_carrying": True, "identity": "v2.maxabs_tv(class_prior)@LENGTH_BINS[ref_coarsen]"},
+    "S7_abs": {"precompute": _s7_pre,
+               "recompute": (lambda pre, m, *, groups=None, floor=FLOOR: _map_re_scalar(pre, m, groups=groups, extra_key="cc", floor=floor)),
                "map_carrying": True, "identity": "v2.cond_maxbin.mean(distinct_class_frac)@CLUSTER_BINS[ref_coarsen]"},
 }
 
@@ -310,8 +314,11 @@ def _validate(spec):
             raise RefusalError(f"RNG identity mismatch for experiment {e}")
 
 
-def gate_group(spec):
-    """spec: {cells:[{cell_id,exp,check,pre,[map_art]}], experiments:{e:{strata,source,replicate_seed,coupled_component}},
+def _gate_group(spec):
+    """PRIVATE / test-only low-level kernel (Pi rev-9 RC5): production callers use `gate_group_dev` (development)
+    or `gate_group_registered` (registered, currently a blocked stub). It accepts a fully-formed trusted spec and
+    is NOT a public entry point.
+    spec: {cells:[{cell_id,exp,check,pre,[map_art]}], experiments:{e:{strata,source,replicate_seed,coupled_component}},
     registered:{cell_ids,map_hashes,rng_identities,alpha_group,floor_policy}, B, seed}. Fail-closed."""
     _validate(spec)                                                 # BEFORE any statistic
     reg = spec["registered"]; B = spec["B"]; floor = spec.get("floor", FLOOR)   # floor is a PARAM, not a global
@@ -323,7 +330,7 @@ def gate_group(spec):
     def d_of(c, m):
         est = ESTIMATORS[c["check"]]
         groups = c["map_art"]["groups"] if est["map_carrying"] else None
-        return est["recompute"](c["pre"], m, groups, floor)
+        return est["recompute"](c["pre"], m, groups=groups, floor=floor)
     for c in spec["cells"]:                                          # observed NE (or non-finite) -> group NE
         d0 = d_of(c, masks[c["exp"]][0])
         if d0 is None or not np.isfinite(d0):
@@ -333,7 +340,7 @@ def gate_group(spec):
         est = ESTIMATORS[c["check"]]; groups = c["map_art"]["groups"] if est["map_carrying"] else None
         ej = np.empty(B + 1)
         for j, m in enumerate(masks[c["exp"]]):
-            d = est["recompute"](c["pre"], m, groups, floor)
+            d = est["recompute"](c["pre"], m, groups=groups, floor=floor)
             # NaN/Inf discrepancy is a support/precompute failure -> maximally extreme NE, NEVER zero-fill (Pi #4)
             ej[j] = np.inf if (d is None or not np.isfinite(d)) else max(0.0, d - c["delta"])
         E.append(ej)
@@ -344,10 +351,11 @@ def gate_group(spec):
 
 
 # ======================================================================================================
-# TRUSTED boundary (Pi rev-7 #4): caller passes ONLY a group id + raw experiment pools + trusted seed/B
-# (+ dev map artifacts). The engine loads cell order / check / Delta / strata / map-carrying from the
-# canonical registry, computes precompute ITSELF from the raw pools, and refuses / NEs any non-finite
-# precompute or discrepancy. No caller-supplied check / Delta / registered / precompute is trusted.
+# DEVELOPMENT dispatcher boundary (Pi rev-7 #4; framing corrected rev-9 RC2): caller passes ONLY a group id
+# + raw experiment pools + seed/B (+ dev map artifacts). The engine loads cell order / check / Delta / strata /
+# map-carrying from the canonical registry, computes precompute ITSELF from the raw pools, and refuses / NEs any
+# non-finite precompute or discrepancy. No caller-supplied check / Delta / registered / precompute is trusted.
+# This is a DEV dispatcher — NOT a registered trusted execution boundary; registered mode is a blocked stub below.
 # ======================================================================================================
 def _build_canonical_groups():
     sd = REG.build_sd_cells(apply_uncalibratable_exemption=True)
@@ -451,7 +459,7 @@ def _gate_core(group_id, experiments, *, floor, B, seed, alpha_group, map_for_ce
                                           for c in cells},
                            "rng_identities": {e: rng_identity(m["source"], m["replicate_seed"], m["coupled_component"])
                                               for e, m in experiments.items()}}}
-    return gate_group(spec)
+    return _gate_group(spec)
 
 
 def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_config_hash):
@@ -461,14 +469,24 @@ def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_
     (profile,regime,check) is enforced (Pi rev-8 #3)."""
     if group_id not in CANONICAL_GROUPS:
         raise RefusalError(f"unknown/unwired canonical group {group_id}")
-    if isinstance(B, bool) or not isinstance(B, int) or B <= 0 or seed is None:
-        raise RefusalError("dev B must be a positive int and seed present")
+    canon = CANONICAL_GROUPS[group_id]
+    # RC5 (Pi rev-9): positive non-bool B/floor and a non-bool integer seed
+    if isinstance(B, bool) or not isinstance(B, int) or B <= 0:
+        raise RefusalError("dev B must be a positive non-bool int")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise RefusalError("dev seed must be a non-bool int")
+    if isinstance(floor, bool) or not isinstance(floor, int) or floor <= 0:
+        raise RefusalError("dev floor must be a positive non-bool int")
     if dev_config_hash != canonical_hash({"mode": "dev", "floor": floor, "B": B, "group": group_id}):
         raise RefusalError("dev_config_hash does not bind (floor,B,group)")
-    canon = CANONICAL_GROUPS[group_id]
+    # RC5: reject EXTRA map artifacts (only the group's map-carrying cells may be supplied; no silent ignores)
+    expected_map_cells = {cc["cell_id"] for cc in canon["cells"] if cc["map_carrying"]}
+    extra = set(map_artifacts or {}) - expected_map_cells
+    if extra:
+        raise RefusalError(f"unexpected extra map artifacts {sorted(extra)}")
     experiments = _assemble_arms(arms_by_exp, canon, exact_counts=False)
     # CONTEXT-bind maps: one shared identity per (profile,regime,check); dev floor must match; profile/regime match
-    per_ctx = {}
+    per_ctx = {}; bound = {}
     def map_for_cell(cc):
         art = (map_artifacts or {}).get(cc["cell_id"])
         if art is None:
@@ -482,17 +500,37 @@ def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_
         mid = map_identity(art)
         if per_ctx.setdefault(ctx, mid) != mid:
             raise RefusalError(f"cells sharing {ctx} received different maps")
+        bound[cc["cell_id"]] = (mid, art["namespace"])
         return art
-    return _gate_core(group_id, experiments, floor=floor, B=B, seed=seed, alpha_group=ALPHA_GROUP_EXACT,
-                      map_for_cell=map_for_cell)
+    res = _gate_core(group_id, experiments, floor=floor, B=B, seed=seed, alpha_group=ALPHA_GROUP_EXACT,
+                     map_for_cell=map_for_cell)
+    # RC5: persist a FULL dev-config reproducibility record — per-stratum counts, map identities/set identity,
+    # code/registry identity, namespace, seed law — not merely (floor,B,group). A stable identity omits the seed.
+    map_ids = {cid: mid for cid, (mid, _ns) in bound.items()}
+    nss = sorted({ns for _mid, ns in bound.values()})
+    if len(nss) > 1:
+        raise RefusalError(f"dev maps span multiple namespaces {nss}")
+    stable = {"mode": "dev", "group": group_id, "floor": floor, "B": B,
+              "per_stratum_counts": {e: [list(s) for s in ex["strata"]] for e, ex in experiments.items()},
+              "map_identities": map_ids,
+              "map_set_identity": canonical_hash([map_ids[k] for k in sorted(map_ids)]),
+              "registry_identity": CANONICAL_REGISTRY_HASH,
+              "namespace": (nss[0] if nss else None),
+              "seed_law": "caller-supplied dev seed; assignments = numpy default_rng(seed) per-stratum permutation"}
+    res["dev_config"] = {**stable, "seed": seed}
+    res["dev_config_stable_identity"] = canonical_hash(stable)
+    res["dev_config_identity"] = canonical_hash(res["dev_config"])
+    return res
 
 
 def gate_group_registered(group_id, arms_by_exp, *, seed, registry_identity, map_set_identity, rng_manifest_identity):
-    """REGISTERED entry point (Pi rev-8 #2): enforces the EXACT registered N/arm, B=20000, floor 500, exact
-    alpha=0.04/6, exact per-stratum quotas, the full registry identity, and the approved map-set + RNG manifest
-    identities — refusing ANY deviation. The reserved map-set/RNG manifests are NOT yet drawn, so a real registered
-    run is BLOCKED here; the enforcement + structured-strata assembly (no divisibility refusal) are exercised by the
-    registered adversarial preflight."""
+    """REGISTERED entry point — a BLOCKED STUB, not yet an executable evaluator (Pi rev-9 RC2). The registered
+    invariants are DECLARED and the structured assembly + identity refusals are TESTED (registry identity, exact
+    per-stratum quotas incl. the (2667,2667,2666) structural-zero, candidate N==8000, placeholder map-set / RNG
+    identities), but the registered STATISTIC path is UNIMPLEMENTED: this function never calls `_gate_core`, never
+    consumes a map set, never validates an RNG manifest, and never runs at B=20000/floor 500 — B/floor/alpha are not
+    even call arguments here. It validates what it can, then UNCONDITIONALLY raises. Because the reserved map-set and
+    RNG manifests are not drawn/bound, a real registered run is blocked; activation is a later reviewed change."""
     if group_id not in CANONICAL_GROUPS:
         raise RefusalError(f"unknown/unwired canonical group {group_id}")
     if seed is None:
@@ -540,7 +578,7 @@ def selftest():
              {"cell_id": "SD|e0|positive_gap_ks", "exp": "e0", "check": "positive_gap_ks",
               "pre": _gap_pre(pool), "delta": 0.05}]
 
-    r = gate_group(_mk_spec(cells, exps))
+    r = _gate_group(_mk_spec(cells, exps))
     if r["verdict"] not in (PASS, FAIL):
         errs.append(f"heterogeneous gate produced {r['verdict']}")
 
@@ -548,7 +586,7 @@ def selftest():
         spec = _mk_spec([dict(c) for c in cells], {e: dict(v) for e, v in exps.items()})
         mut(spec)
         try:
-            gate_group(spec); return False
+            _gate_group(spec); return False
         except RefusalError:
             return True
     checks = {
@@ -585,7 +623,7 @@ def selftest():
         art = build_frozen_map(r2, "S3_loggap", profile=prof, regime="full", seed=100 + t, N=400)
         cl = [{"cell_id": "SD|e0|S3_loggap", "exp": "e0", "check": "S3_loggap", "pre": _loggap_pre(p2),
                "delta": 0.09531, "map_art": art}]
-        res = gate_group(_mk_spec(cl, e2, B=99, seed=100 + t))
+        res = _gate_group(_mk_spec(cl, e2, B=99, seed=100 + t))
         if res["verdict"] == FAIL:
             rej += 1
     if rej / T > 0.1:                                               # conservative under null despite +inf NE perms
@@ -602,16 +640,45 @@ def selftest():
                 "S3_loggap", "S5_abs", "S6_tv", "S7_abs"):
         est = ESTIMATORS[chk]; pre = est["precompute"](poolc)
         g = build_frozen_map(rr, chk, profile=prof, regime="full", seed=13, N=6000)["groups"] if est["map_carrying"] else None
-        got, want = est["recompute"](pre, obs, g), v2[chk].value
+        got, want = est["recompute"](pre, obs, groups=g, floor=FLOOR), v2[chk].value
         ok = (got is None and want is None) or (got is not None and want is not None and abs(got - want) < 1e-9)
         if not ok:
             errs.append(f"engine estimand != v2 for {chk}: {got} vs {want}")
+
+    # RC1 (Pi rev-9): uniform keyword-only estimator protocol — `floor` must reach the floor gate for EVERY
+    # binding (the rev-9 S5 bug routed the dev floor into `extra_key`, FAKING the class-mark NOT_EVALUABLE).
+    # Controlled precomputes with EXACTLY 100 present per arm: each floor-gated estimator EVALUATES at floor 60 and
+    # REFUSES (None) at floor 500; each floor-insensitive estimator returns the identical value at both floors.
+    m2 = np.array([True] * 100 + [False] * 100)
+    sm100 = np.concatenate([np.ones(100), np.full(100, 2.0)])          # 100 present/arm, distinct means
+    occ100 = np.concatenate([np.full(100, 0.3), np.full(100, 0.1)])
+    s4_100 = np.column_stack([occ100, np.ones(200), np.ones(200)])     # [contrast, same_pairs, adj_pairs]
+    oh0 = np.zeros(C); oh0[0] = 1.0; oh1 = np.zeros(C); oh1[1] = 1.0
+    s6_100 = np.concatenate([np.tile(oh0, (100, 1)), np.tile(oh1, (100, 1))])
+    floor_pre = {"occupancy_abs": (occ100, None), "S4_abs": (s4_100, None),
+                 "S3_loggap": ({"sm": [sm100], "sp": [np.ones(200)]}, [[0]]),
+                 "S5_abs": ({"sm": [sm100]}, [[0]]),
+                 "S6_tv": ({"vec": [s6_100]}, [[0]]),
+                 "S7_abs": ({"sm": [sm100], "cc": [np.ones(200)]}, [[0]])}
+    for chk, (fpre, fg) in floor_pre.items():
+        rc = ESTIMATORS[chk]["recompute"]
+        lo = rc(fpre, m2, groups=fg, floor=60); hi = rc(fpre, m2, groups=fg, floor=500)
+        if lo is None:
+            errs.append(f"RC1 {chk}: floor-60 (100 present/arm) should evaluate, got None (floor not routed to gate)")
+        if hi is not None:
+            errs.append(f"RC1 {chk}: floor-500 (100<500 present) should refuse (None), got {hi}")
+    obs_pool = np.array([True] * len(cand) + [False] * len(ref))
+    for chk in ("S3_tau", "delta_t_zero_abs", "positive_gap_ks", "class_tv"):
+        rc = ESTIMATORS[chk]["recompute"]; fpre = ESTIMATORS[chk]["precompute"](pool)
+        a = rc(fpre, obs_pool, groups=None, floor=60); b = rc(fpre, obs_pool, groups=None, floor=500)
+        if not ((a is None and b is None) or (a is not None and b is not None and abs(a - b) < 1e-12)):
+            errs.append(f"RC1 {chk}: floor-insensitive estimator differs across floors: {a} vs {b}")
 
     # ADVERSARIAL: Pi rev-7 #4 fail-open cases now REFUSE / NE (were PASS p_g=1.0)
     # (a) all-NaN precompute -> observed discrepancy non-finite -> group NOT_EVALUABLE, NOT a zero-filled PASS
     nan_cells = [{"cell_id": "SD|e0|occupancy_abs", "exp": "e0", "check": "occupancy_abs",
                   "pre": np.full(len(cand) + len(ref), np.nan), "delta": 0.03}]
-    if gate_group(_mk_spec(nan_cells, exps))["verdict"] != NOT_EVALUABLE:
+    if _gate_group(_mk_spec(nan_cells, exps))["verdict"] != NOT_EVALUABLE:
         errs.append("all-NaN precompute did not NE (fail-open persists)")
     # (b) DEV + REGISTERED entry points close caller injection + validate inputs (Pi rev-8 #2)
     def _refused(fn):
@@ -619,13 +686,20 @@ def selftest():
             fn(); return False
         except RefusalError:
             return True
+    _dch_burst = canonical_hash({"mode": "dev", "floor": 60, "B": 99, "group": "G_full_burst_timing"})
     ref = {
         "dev_unknown_group": lambda: gate_group_dev("NOT_A_GROUP", {}, seed=1, B=99, floor=60,
                                                     map_artifacts={}, dev_config_hash="x"),
         "dev_bad_B": lambda: gate_group_dev("G_full_burst_timing", {}, seed=1, B=0, floor=60,
                                             map_artifacts={}, dev_config_hash="x"),
+        "dev_bool_seed": lambda: gate_group_dev("G_full_burst_timing", {}, seed=True, B=99, floor=60,
+                                                map_artifacts={}, dev_config_hash="x"),          # RC5: non-bool int seed
+        "dev_bad_floor": lambda: gate_group_dev("G_full_burst_timing", {}, seed=1, B=99, floor=0,
+                                                map_artifacts={}, dev_config_hash="x"),          # RC5: positive floor
         "dev_bad_config_hash": lambda: gate_group_dev("G_full_burst_timing", {}, seed=1, B=99, floor=60,
                                                       map_artifacts={}, dev_config_hash="WRONG"),
+        "dev_extra_map": lambda: gate_group_dev("G_full_burst_timing", {}, seed=1, B=99, floor=60,   # RC5: no extras
+                                                map_artifacts={"BOGUS_CELL": {}}, dev_config_hash=_dch_burst),
         "inf_precompute": lambda: _validate_precompute(np.array([1.0, np.inf, 2.0]), "x"),
     }
     for name, fn in ref.items():
@@ -688,7 +762,7 @@ def refused_map(mcells, exps, *, drop_art=False, tamper_hash=False):
                 reg["map_hashes"][cid] = "TAMPERED"
     spec = {"cells": cells, "experiments": exps, "registered": reg, "B": 99, "seed": 1}
     try:
-        gate_group(spec); return False
+        _gate_group(spec); return False
     except RefusalError:
         return True
 

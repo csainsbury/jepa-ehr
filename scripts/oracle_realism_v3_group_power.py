@@ -117,6 +117,7 @@ def component_demo(component, T):
     gid = COMPONENT_GROUP[component]; arts = build_map_artifacts(gid)
     dch = canonical_hash({"mode": "dev", "floor": DEV_FLOOR, "B": B_MECH, "group": gid})
     trials, unchanged_ok, target_changed_ok = [], True, True
+    dev_cfg_id = None
     for t in range(1, T + 1):
         base = build_arms(gid, trial=t)
         pert = build_arms(gid, trial=t, perturb_exp_id=PERTURB_EXP, perturb_component=component)
@@ -129,16 +130,18 @@ def component_demo(component, T):
         seed = int(dseed("pair", component, t))                     # PAIRED: same permutation seed for base + perturbed
         rb = gate_group_dev(gid, base, seed=seed, B=B_MECH, floor=DEV_FLOOR, map_artifacts=arts, dev_config_hash=dch)
         rp = gate_group_dev(gid, pert, seed=seed, B=B_MECH, floor=DEV_FLOOR, map_artifacts=arts, dev_config_hash=dch)
+        dev_cfg_id = rb.get("dev_config_stable_identity")           # RC5: stable across trials (seed-invariant)
         am = rp.get("argmin_cell")
         trials.append({"p_g_base": rb.get("p_g"), "p_g_perturbed": rp.get("p_g"),
                        "base_verdict": rb["verdict"], "perturbed_verdict": rp["verdict"], "argmin": am,
                        "argmin_attributes_to_perturbed_primary":
                            bool(am and f"|{PERTURB_EXP}|" in am and any(am.endswith(p) for p in PRIMARY[component])),
                        "paired_direction_ok": rb.get("p_g") is not None and rp.get("p_g") is not None
-                       and rp["p_g"] <= rb["p_g"]})
+                       and rp["p_g"] < rb["p_g"]})            # RC4 (Pi rev-9): STRICT < (a tie is no direction evidence)
     evald = [x for x in trials if x["perturbed_verdict"] != "NOT_EVALUABLE"]
     return {"group": gid, "component": component, "perturbed_exp_id": PERTURB_EXP, "primary_cells": PRIMARY[component],
             "T": T, "sparse_nontarget_unchanged": unchanged_ok, "sparse_target_changed": target_changed_ok,
+            "dev_config_stable_identity": dev_cfg_id,               # RC5: full dev-config reproducibility identity
             "trials": trials, "evaluated": len(evald),
             "argmin_attribution_rate": round(sum(x["argmin_attributes_to_perturbed_primary"] for x in evald)
                                              / len(evald), 3) if evald else None,
