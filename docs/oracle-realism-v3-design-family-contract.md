@@ -1,12 +1,30 @@
-# Oracle Realism Verifier — Design Family v3 (rev-17, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-18, fresh-draw conditional randomization)
 
-**Status:** DRAFT for Pi review. Supersedes rev-16. The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
+**Status:** DRAFT for Pi review. Supersedes rev-17. The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
 build, reserved map-design draw, audit/evaluation seed, policy population, or run. There is **no production/trusted
 readiness claim.** Registered mode is a **BLOCKED STUB**: its invariants are DECLARED and its structured assembly +
 identity refusals are TESTED, but the registered STATISTIC path is UNIMPLEMENTED — it never runs a statistic, never
 consumes a map set, never validates an RNG manifest; `B`/floor/`α` are not yet call arguments. It validates what it
 can, then unconditionally blocks (reserved map-set + RNG manifest not drawn). Activation is a later reviewed change.
+
+**Rev-18 changes (Pi rev-13 authorized — DRAFT-ONLY reserved-manifest schemas):**
+1. **New module `scripts/oracle_realism_v3_manifest.py`** defines the STRUCTURE + fail-closed VALIDATORS for the two
+   reserved manifests, each binding the FIVE identity layers, and STRICTLY draft-only (nothing drawn/populated/frozen):
+   - **RNG manifest** — enumerated from the canonical registry (9 experiments / 11 strata): real per-stratum
+     registered quotas, canonical arm order, executable `rng_identity`, count hash; RESERVED (a later authorized
+     draw): per-role seeds, drawn-sequence content hash, generator/coupling code identities. Composed identity stays
+     `RESERVED_RNG_MANIFEST_NOT_BOUND`.
+   - **Map-set manifest** — the 15 required `(profile, regime, check)` triples (5 map-carrying checks × 3 sources):
+     registered N/floor + map-builder source identity; RESERVED: reserved-namespace seed, namespace, output path,
+     per-map `map_identity`. Composed identity stays `RESERVED_MAP_SET_NOT_DRAWN`.
+2. **Validators refuse every corruption** (missing/extra/duplicate, tampered identity layer, wrong quota/rng-identity/
+   N/builder-identity, a draft pretending to be populated, a bound-when-reserved identity, a non-DRAFT status); the
+   self-test validates a well-formed draft and refuses the battery. Draft schema hashes: RNG `b35f9173…`, map-set
+   `4ba9cf1f…`.
+3. **Nothing is unblocked:** the reserved identities are unchanged, so `gate_group_registered` stays unconditionally
+   BLOCKED. FREEZING/populating the manifests remains a separately-authorized later review. Remaining authorized
+   dev-only work: boundary-short canonicalization; the full per-group `B=20000` benchmark/cap/checkpoint plan.
 
 **Rev-17 changes (Pi rev-12/rev-13 authorized wiring — LAST group: phase_seam; ALL groups now wired):**
 1. **Five estimators wired** reproducing v2 to `< 1e-9` (v2-consistency self-test): **`S8_density`**/**`S8_class`** —
@@ -463,7 +481,7 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-17, Pi rev-9/rev-10/rev-12/rev-13 authorized dev-only scope — all tested)
+## Delivered (rev-18, Pi rev-9/rev-10/rev-12/rev-13 authorized dev-only scope — all tested)
 - **Registry (identities re-minted, Pi #5)** — `scripts/oracle_realism_v3_registry.py`: full per-cell identity +
   strict refusal; `Δ` bound to LIVE thresholds (Δ-hash **`ec6f4dff…`**). S3_tau identity DECOUPLED from the
   fragile whole-pilot aggregate hash to a stable frozen-estimator descriptor; S6 estimator text → LENGTH_BINS;
@@ -499,6 +517,13 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   reproduces the EXACT v2 estimand to `<1e-9`. The low-level kernel is `_gate_group` (private/test-only). 20
   estimators wired across ALL FIVE full-support groups (burst-timing + class-mark + run_size + length_density +
   phase_seam/`S8_density,S8_class,S9_zero,S9_class,S9_gap`). Estimator wiring is COMPLETE.
+- **DRAFT-ONLY reserved-manifest schemas (Pi rev-13; rev-18)** — `scripts/oracle_realism_v3_manifest.py`:
+  fail-closed schema + validator + self-test for the RNG manifest (9 experiments / 11 strata; real quotas + arm order
+  + `rng_identity` + count hash; reserved seeds/content/generator identities) and the map-set manifest (15 required
+  `(profile,regime,check)` triples; registered N/floor + map-builder source identity; reserved seed/namespace/path/
+  `map_identity`), EACH binding the five identity layers. Draft schema hashes RNG `b35f9173…`, map-set `4ba9cf1f…`.
+  NOTHING drawn/populated/frozen; the reserved manifest identities are unchanged so `gate_group_registered` stays
+  BLOCKED. Freezing is a separately-authorized later review.
 - **Fail-closed input schemas — DERIVE-NOT-TRUST + exact (Pi rev-8 #5 / rev-10 #3 / rev-12 #1–#4; rev-13)** —
   `_canonicalize_pool` runs ONCE per experiment in `_gate_core` and REBUILDS each record via the repository's
   `derive_record(source, class_ids, timestamps)` boundary (discarding caller-supplied `cluster_ids`/`L_total`/`K`/
@@ -556,8 +581,8 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   cap margin** (not merely <8h). Honest: SD-main ≈ 10.3 h does NOT fit one 8 h job → separately-gated per-group SD
   jobs. (Full per-group wired benchmark + re-mint follows as each remaining group's estimators are wired.)
 
-## Still open (Pi-authorized next scope; NOT yet done in rev-17)
-- **Reserved map-set + RNG-manifest generation** (generate, do NOT execute) — `gate_group_registered` binds to
+## Still open (Pi-authorized next scope; NOT yet done in rev-18)
+- **Reserved map-set + RNG-manifest FREEZE/POPULATION** (the DRAFT SCHEMAS are done — rev-18; freezing needs a separately-authorized draw) — `gate_group_registered` binds to
   `RESERVED_MAP_SET_NOT_DRAWN` / `RESERVED_RNG_MANIFEST_NOT_BOUND`, so a real registered run is BLOCKED. The RNG
   manifest must bind exact per-role/stratum seeds + generator/coupling CODE identities + profile identity +
   content/count hashes + canonical arm order (Pi rev-8 #5/#6, rev-7 #5); the map-set manifest enumerates every
