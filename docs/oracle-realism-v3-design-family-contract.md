@@ -1,4 +1,4 @@
-# Oracle Realism Verifier — Design Family v3 (rev-23, fresh-draw conditional randomization)
+# Oracle Realism Verifier — Design Family v3 (rev-25, fresh-draw conditional randomization)
 
 **Status:** DRAFT for Pi review. Supersedes rev-22 (Pi rev-22 = GO-WITH-CHANGES for dev work, NOT PASS for schema/compute freeze; ruling 1 + the band correction are folded here, rulings 2-4 and the benchmark rebuild are still open). The NORMATIVE design is §0–§9 + Delivered/Still-open below; the
 **Changelog** records how each Pi ruling was folded. All work is development-only, synthetic-only; no calibration
@@ -15,10 +15,12 @@ three schema IDs; stop line unchanged). Folded here: **ruling 1** — `width_pro
 the registered design, boundary quotas re-minted to (2286,2286,3428), structural-zero unchanged (§8.1/§8.2) —
 and the **fail-closed band correction**, a real defect in the rev-22 constructor that let shifted bands admit
 `L=8` while still asserting the S9-NE guarantee. Also folded: the **canonical-constructor benchmark rebuild** (the other blocking correction) and **ruling 3**
-(whole checkpoint blocks + exact `1..B` partition proof + integrity-gated shard semantics) — see §9.1. Still
-open: **ruling 2** (assignment RNG law with an issued root seed and a separate assignment manifest), **ruling 4**
-(streamed masks + sorted ranks moved into the trusted modules), and the remaining manifest items. See
-"Still open".
+(whole checkpoint blocks + exact `1..B` partition proof + integrity-gated shard semantics) — see §9.1 — and, at
+rev-25, **rulings 2 and 4** (§9.2): the counter-addressable assignment law with an issued root seed and its own
+separate manifest, streamed assignment iteration, and the sorted upper-tail rank moved into the trusted
+randomization module. **ALL FOUR RULINGS AND BOTH BLOCKING CORRECTIONS ARE NOW FOLDED.** Still open: the
+final-assembly validator and the remaining manifest items (structural-zero multiscale binding, executable content
+canonicalizer / union hash payload, frozen-vs-draft schemas, issuer path checks). See "Still open".
 
 **Rev-22 — the last three authorized dev-only items (Pi rev-19/20 "authorized next scope" 2, 3 and 4):**
 
@@ -101,7 +103,7 @@ untouched; `gate_group_registered` stays BLOCKED.
    `(boundary_short, bounded, S7_abs)` map. The remaining Pi rev-18 items — carrying BOTH exemption variants,
    role-specific RNG provenance, strict unknown-field-refusing schemas, full-registry + manifest-source identities,
    and a deterministic schema identity separated from the env-dependent instance hash (the reported-hash fix) — are
-   the NEXT increment (the manifest rework). Benchmark `09f413c9…` → `b1f97d1a…`.
+   the NEXT increment (the manifest rework). Benchmark `09f413c9…` → `9c86d6cc…`.
 
 **Rev-18 changes (Pi rev-13 authorized — DRAFT-ONLY reserved-manifest schemas):**
 1. **New module `scripts/oracle_realism_v3_manifest.py`** defines the STRUCTURE + fail-closed VALIDATORS for the two
@@ -546,8 +548,8 @@ marginal distortion. Consequences folded at rev-23:
   evidence stays reproducible. *(It was named `registered_alloc` at rev-22; after the ruling that name asserted
   the opposite of the truth, so it is renamed.)*
 - registry identities re-mint to **`4d99e8aa…` / `26693ca5…`**, canonical-registry `8338a2cf…`, boundary
-  `profile_config_identity` `039d4dd9…`, and the manifest schema identities to `cff03811…` / `ff0beb08…` /
-  `23972811…`.
+  `profile_config_identity` `039d4dd9…`, and the manifest schema identities to `875a85f0…` / `6aff0396…` /
+  `85a797df…`.
 
 **Fail-closed band validation (Pi rev-22 #1 — a real defect in the rev-22 constructor).** The rev-22 validator
 derived its "structural bound" from the CALLER's bands (`max(band)`), so shifted bands `((2,3),(4,5),(6,8))`
@@ -649,9 +651,50 @@ than MIMIC (the rev-5 "one MIMIC cost × M0" understated SCID). The **distributi
 pairs, strata, cells, B, statistic recomputation route, wall time, peak RAM, checkpoint size`; aggregate-only
 (per-cell/group permutation summaries + hashes; no sequence arrays).
 
+### 9.2 Counter-addressable assignment law, streaming, sorted ranks (rev-25 — Pi rev-22 rulings 2 and 4)
+
+**Assignment law (ruling 2)** — `scripts/oracle_realism_v3_assignment.py`, self-tests pass. The rev-22 engine drew
+every mask from ONE sequential `default_rng(seed)` stream, so replicate `j` could not be regenerated without
+replaying `1..j-1` — which is why the whole-block split/checkpoint/resume plan of §9.1 was not implementable. The
+benchmark's first proposal `sha256(namespace|group|experiment|replicate_index)` was rejected for omitting the
+issued assignment ROOT SEED (issuance would not have selected the stream) and for hashing an ambiguous string
+concatenation. The adopted law derives each mask from a CANONICAL STRUCTURED, domain-separated payload —
+`{law_version, assignment_root_seed_identity, registry_variant_identity, group_id, experiment_id,
+replicate_index}` — consumed at the FULL digest width, no truncation. `j = 0` is the deterministic observed split
+and consumes **no random draw**; for each `(experiment, j)` exactly ONE mask is generated and reused by every cell
+of that experiment, experiments being addressed independently under the shared MC index; IID-with-replacement is
+unchanged so **duplicate assignments stay VALID and are never refused**.
+
+All eight required tests pass: deterministic replay; monolithic == arbitrary block order == split execution ==
+resume, bit-for-bit; exact index coverage of `1..B`; domain separation on root / registry variant / group /
+experiment / index (each independently changes the mask); per-stratum quota preservation on every replicate;
+`j=0` consuming no draw; duplicates occurring and accepted on a small support; and refusal of negative,
+beyond-`B`, bool, float, blank-identifier and inverted-range inputs. Deriving against the **RESERVED (unissued)
+registered root seed REFUSES** — the registered assignment stream cannot be selected while seed issuance is
+blocked.
+
+**Separate assignment manifest (ruling 2)** — the draft RNG manifest covers fixture/coupling generation only;
+conflating it with assignment provenance would let fixture provenance stand in for the assignment stream. A
+distinct `build_draft_assignment_manifest` / `validate_assignment_manifest` pair carries the law version, root
+seed (RESERVED), law identity (RESERVED), payload field list, digest rule, observed-index / per-experiment /
+replacement / stratum rules, and the per-group block structure (20 blocks of 1000 tiling `1..B` exactly). Eight
+adversarial tampers refuse, and a self-test asserts the fixture RNG manifest carries **no** assignment field.
+
+**Streaming assignments (ruling 4)** — `_gate_group` now walks the MC index, builds one mask per experiment,
+fills the whole `E[:, j]` column across every cell, then releases the masks. The rev-22 path materialised
+`(B+1)·M` masks per experiment up front (320,016,000 bytes each; ≈2.88 GB for a nine-experiment group).
+
+**Sorted upper-tail ranks (ruling 4)** — the differential proof now lives in the trusted randomization module,
+not in the benchmark that first measured it. `cell_upper_p` is the sort/`searchsorted` form; the quadratic
+`A × A` version is retained as `_cell_upper_p_quadratic`, the differential oracle. 600 adversarial cases are
+bit-identical (heavy ties, all-constant, one `+inf` NE sentinel, mixed NE, and all-NE vectors). Input validation
+fails closed: NaN is REFUSED (the frozen NE policy encodes an undefined statistic as `+inf`, never NaN, so NaN
+here means a broken precompute reached the ranking stage), as are `-inf`, non-1-D and empty vectors, while a
+legal all-`+inf` vector is still accepted with `p = 1.0`.
+
 ### 9.1 FULL per-group registered-scale benchmark at `B = 20000` (rev-23, MEASURED on CANONICAL constructors)
 
-`scripts/oracle_realism_v3_registered_benchmark.py` (deterministic `config_identity` **`465e17f7…`**; self-tests
+`scripts/oracle_realism_v3_registered_benchmark.py` (deterministic `config_identity` **`2e68817d…`**; self-tests
 pass). Every in-scope cell is priced by measuring **its own engine estimator** at registered scale
 (`N=8000`/arm, `M=16000`), and — since rev-23 — on arms assembled through **that experiment's canonical
 constructor route** in the engine's canonical pool order.
@@ -786,7 +829,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
 ## Delivered (rev-23, Pi rev-9/rev-10/rev-12/rev-13/rev-18/rev-19-20/rev-22 authorized dev-only scope — all tested)
 - **FULL per-group registered-scale benchmark + cap/checkpoint/persistence plan (rev-22, REBUILT rev-23 on
   canonical constructors, §9.1)** — `scripts/oracle_realism_v3_registered_benchmark.py`, deterministic
-  `config_identity` **`465e17f7…`**, self-tests pass. **194** measured `(experiment, statistic)` costs at
+  `config_identity` **`2e68817d…`**, self-tests pass. **194** measured `(experiment, statistic)` costs at
   `N=8000`/arm on canonically assembled arms in `_assemble_arms` pool order; per-group forecast at `B=20000` for
   BOTH variants; measured ranking / assignment / persistence stages; whole-block split with an exact `1..B`
   partition proof, checkpoint and aggregate-only persistence plans; explicit MARGINAL status below 10 % cap
@@ -794,7 +837,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   `G_full_phase_seam` **14.01 h** is over cap (recommend 4 shards `[5,5,5,5]`) and `G_full_length_density`
   **5.08 h** is MARGINAL at 1.0 % headroom (recommend `[10,10]`, vindicating Pi's provisional allocation). Binds
   the exact constructor/profile payloads and the benchmark's own source identity. The surrogate benchmark is
-  unchanged and still reproduces its own `config_identity` **`b1f97d1a…`** — it binds cell routing and measured
+  unchanged and still reproduces its own `config_identity` **`9c86d6cc…`** — it binds cell routing and measured
   volumes, not the registry quotas, so the boundary re-mint does not move it.
 - **Canonical boundary-short constructor (rev-22, §8.1)** — `scripts/oracle_realism_v3_constructors.py`,
   self-tests pass. Makes the declared `bounded_length_control` route executable (three disjoint length bands over
@@ -900,7 +943,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   7 refusals; strict `p_g > α_group` (Pi #7).
 - **Per-profile + wired-engine benchmark (Pi #6; rev-11 repair, rev-12/rev-13 provenance/identity)** —
   `scripts/oracle_realism_v3_benchmark.py`: per-profile `Σ_experiment Σ_cell cost(route, profile volume)·B_main`,
-  DETERMINISTIC `config_identity` **`b1f97d1a…`** (re-minted through `…→ 09f413c9 → b1f97d1a`; it now
+  DETERMINISTIC `config_identity` **`9c86d6cc…`** (re-minted through `…→ 09f413c9 → 9c86d6cc`; it now
   binds the FOUR deterministic SOURCE identity layers (`SOURCE_IDENTITY_BUNDLE`: semantic + impl-source +
   engine-canon/schema/gate + map-source) and is no longer version-bearing; the env-dependent
   `ESTIMATOR_DEPENDENCY_IDENTITY` lives in the timing artifact, Pi rev-12/rev-13 #3). The wired timing map records the EXACT `Bs` fixture seed (`236460273103544`) and is labelled TIMING-ONLY
@@ -918,9 +961,9 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   missing/extra/duplicate failing closed (Pi rev-7 #6). The final Δ-aligned exemption then needs a separately-
   authorized calibration/power battery using the frozen map (Pi rev-7 #7). *(This single bullet consolidates the
   previously duplicated RNG-manifest and map-set bullets — Pi rev-9 contract change.)*
-- **Pi rev-22 rulings 2 and 4 (NOT yet folded — the next dev increment; rulings 1/3 and the benchmark
-  rebuild are DONE at rev-23):**
-  1. **Ruling 2 — assignment RNG law.** Counter-addressable per-replicate derivation is adopted in principle, but
+- **Pi rev-22 rulings — ALL FOUR now folded (1/3 + benchmark rebuild at rev-23/24; 2 and 4 at rev-25).**
+  Retained here for the record, with the one open sub-item called out:
+  1. **[DONE at rev-25] Ruling 2 — assignment RNG law** (§9.2). Counter-addressable per-replicate derivation, but
      the proposed `sha256(namespace|group|experiment|replicate_index)` **omits the issued assignment root seed**,
      so issuance would not select the stream. Needs a structured, domain-separated canonical payload
      (`law_version`, issued root seed / its manifest-bound identity, registry variant identity, `group_id`,
@@ -938,7 +981,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
      code identities and per-block content/assignment digests; refuse missing/overlapping/duplicated/foreign
      blocks; keep checkpoint `E` ephemeral) is specified but NOT yet implemented — it needs ruling 2's
      assignment-law identity to bind against.
-  3. **Ruling 4 — streaming + sorted ranks (wanted).** Iterate by MC index, one mask per experiment, fill the
+  3. **[DONE at rev-25] Ruling 4 — streaming + sorted ranks** (§9.2). Iterate by MC index, one mask per experiment, fill the
      whole `E[:,j]` column across cells, release; do not regenerate masks per cell. Move the differential proof
      into the trusted randomization module, refuse NaN/malformed/non-1D input, retain finite/`+inf`/tie/constant/
      all-NE semantics. Both re-mint engine/randomization source identities.

@@ -19,12 +19,46 @@ import numpy as np
 # --------------------------------------------------------------------------------------------------
 # exact p-value construction (all A assignments treated symmetrically; each includes itself)
 # --------------------------------------------------------------------------------------------------
-def cell_upper_p(e):
-    """e: (A,) discrepancies over all A assignments (index 0 = observed). Upper-tail p per assignment:
-    p^(j) = #{b : e[b] >= e[j]} / A   (includes self => conservative (1 + #{others>=})/A)."""
+def _cell_upper_p_quadratic(e):
+    """REFERENCE implementation, retained as the differential oracle for the sorted form below.
+
+    Forms the explicit A x A comparison matrix. At the registered A = B+1 = 20001 that is an exact 400.0 MB
+    transient allocation per cell, which is why it is no longer the production path (Pi rev-22 #4)."""
     e = np.asarray(e, float)
     ge = (e[:, None] <= e[None, :])            # ge[j,b] = e[b] >= e[j]
     return ge.sum(1) / len(e)
+
+
+def _validate_e_vector(e):
+    """Fail-closed input validation for the rank stage (Pi rev-22 #4).
+
+    NaN is REFUSED: it is not a legal discrepancy. The frozen NE policy encodes an undefined statistic as +inf
+    (maximally extreme), never as NaN, so a NaN here means a broken precompute reached the ranking stage."""
+    a = np.asarray(e, float)
+    if a.ndim != 1:
+        raise RefusalError(f"discrepancy vector must be 1-D, got shape {a.shape}")
+    if a.size == 0:
+        raise RefusalError("empty discrepancy vector")
+    if np.isnan(a).any():
+        raise RefusalError("NaN in discrepancy vector (NE is encoded as +inf, never NaN)")
+    if (a == -np.inf).any():
+        raise RefusalError("-inf in discrepancy vector (discrepancies are non-negative after the deadband)")
+    return a
+
+
+def cell_upper_p(e):
+    """e: (A,) discrepancies over all A assignments (index 0 = observed). Upper-tail p per assignment:
+    p^(j) = #{b : e[b] >= e[j]} / A   (includes self => conservative (1 + #{others>=})/A).
+
+    Computed by sorting rather than by an A x A comparison matrix (Pi rev-22 #4):
+    #{b : e[b] >= e[j]} = A - #{b : e[b] < e[j]}, and `searchsorted(sorted_e, e, "left")` is exactly
+    #{b : e[b] < e[j]}. BIT-IDENTICAL to the quadratic reference — ties, constants, the +inf NE sentinel and
+    all-NE vectors are handled by construction — in O(A log A) time and O(A) memory instead of O(A^2)/O(A^2).
+    The equality is proven against `_cell_upper_p_quadratic` in this module's self-tests."""
+    a = _validate_e_vector(e)
+    A = a.shape[0]
+    lt = np.searchsorted(np.sort(a), a, side="left")
+    return (A - lt) / A
 
 
 def group_p(cell_e_list):
@@ -314,6 +348,61 @@ def main():
     valid_ok = not _refused()
     ok = ok and valid_ok
     print(f"  valid spec accepted (not refused): {valid_ok}")
+
+    # ----------------------------------------------------------------------------------------------
+    # RANK STAGE (Pi rev-22 #4): the sorted upper-tail rank must be BIT-IDENTICAL to the quadratic
+    # reference, and the input contract must fail closed. The differential proof lives HERE, in the
+    # trusted module, not in the benchmark that first measured it.
+    # ----------------------------------------------------------------------------------------------
+    print("\n[rank stage] sorted vs quadratic differential + input refusals")
+    rng_r = np.random.default_rng(20260725)
+    diff_ok, cases = True, 0
+    for t in range(600):
+        n = int(rng_r.integers(1, 60))
+        kind = t % 6
+        if kind == 0:
+            e = rng_r.normal(size=n)
+        elif kind == 1:
+            e = rng_r.integers(0, 3, size=n).astype(float)          # heavy ties
+        elif kind == 2:
+            e = np.full(n, 1.25)                                     # all constant
+        elif kind == 3:
+            e = rng_r.integers(0, 4, size=n).astype(float)
+            e[rng_r.integers(0, n)] = np.inf                         # one NE sentinel
+        elif kind == 4:
+            e = np.where(rng_r.random(n) < 0.5, 0.0, np.inf)         # mixed all-or-nothing NE
+        else:
+            e = np.full(n, np.inf)                                   # EVERY assignment NE
+        e = np.abs(e) if kind == 0 else e                            # discrepancies are non-negative
+        if not np.array_equal(cell_upper_p(e), _cell_upper_p_quadratic(e)):
+            diff_ok = False
+            print(f"    MISMATCH on {e!r}")
+            break
+        cases += 1
+    print(f"  differential cases bit-identical: {cases} ({diff_ok})")
+    ok = ok and diff_ok
+
+    def _rank_refused(bad):
+        try:
+            cell_upper_p(bad)
+            return False
+        except RefusalError:
+            return True
+
+    rank_refusals = {
+        "nan_present": _rank_refused(np.array([0.0, np.nan, 1.0])),
+        "negative_infinity": _rank_refused(np.array([0.0, -np.inf, 1.0])),
+        "two_dimensional": _rank_refused(np.zeros((3, 3))),
+        "empty_vector": _rank_refused(np.array([])),
+    }
+    rank_refuse_ok = all(rank_refusals.values())
+    ok = ok and rank_refuse_ok
+    for k, v in rank_refusals.items():
+        print(f"  {k:22s} refused: {v}")
+    # legal NE semantics must still be ACCEPTED (a +inf vector is a valid all-NE cell)
+    all_ne_ok = float(cell_upper_p(np.array([np.inf, np.inf, np.inf]))[0]) == 1.0
+    ok = ok and all_ne_ok
+    print(f"  all-NE (+inf) vector accepted, p=1.0: {all_ne_ok}")
 
     print(f"\nALL CHECKS PASS: {ok}")
     assert ok, "randomization p-value validation FAILED"

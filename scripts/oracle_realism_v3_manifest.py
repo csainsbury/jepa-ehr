@@ -33,6 +33,7 @@ from clinical_jepa.eval.oracle_realism_v2_verifier_design import PROFILES
 from scripts.oracle_realism_v3_randomization import RefusalError
 import scripts.oracle_realism_v3_engine as ENG
 import scripts.oracle_realism_v3_registry as REG
+import scripts.oracle_realism_v3_assignment as ASG
 
 RESERVED = "RESERVED_NOT_DRAWN"
 NONE_COUPLING = "NONE"
@@ -48,6 +49,8 @@ _SET_HASH_RULE = ("variant_set_identity = canonical_hash({variant, registry_iden
 _OUTPUT_PATH_GRAMMAR = "relative POSIX under the reserved map-design root; no '..'/absolute/symlink (traversal refused)"
 _REFUSED_ARTIFACT_RULE = ("an issued REFUSED_reference_coarsening map neither satisfies an entry nor grants a "
                           "provisional exemption; it is parked for exemption review; no set identity is issued")
+_CHECKPOINT_BLOCK = 1000                          # permutation replicates per checkpoint block
+RESERVED_ASSIGNMENT_MANIFEST = "RESERVED_ASSIGNMENT_MANIFEST_NOT_BOUND"
 RNG_SCHEMA_VERSION = "v3-rng-manifest-draft-3"
 MAPSET_SCHEMA_VERSION = "v3-map-set-manifest-draft-3"
 
@@ -122,7 +125,9 @@ def _profile_config_identity(source, regime):
     }
     if source == "boundary_short":
         payload["constructor_route_identities"] = _boundary_constructor_identities()
-        payload["constructor_allocation_variant"] = RESERVED       # the variant choice is not yet decided
+        # Pi rev-22 ruling 1 SELECTED the variant; bind it (it is no longer an undecided reserved field).
+        import scripts.oracle_realism_v3_constructors as _CON
+        payload["constructor_allocation_variant"] = _CON.REGISTERED_BOUNDED_VARIANT
     return canonical_hash(payload)
 
 
@@ -392,6 +397,96 @@ def validate_map_set_manifest(m):
 
 
 # --- identities (Pi rev-19/20 #5): SEPARATE per-manifest schema identities + a combined bundle; DETERMINISTIC ----
+# =================================================================================================================
+# DRAFT ASSIGNMENT manifest (Pi rev-22 #2) — SEPARATE from the fixture/coupling RNG manifest.
+# The RNG manifest above binds how FIXTURES and COUPLINGS are generated. The permutation-assignment stream is a
+# different provenance object: it is counter-addressable per (group, experiment, replicate_index) off an ISSUED
+# assignment ROOT SEED. Conflating the two would let fixture provenance stand in for assignment provenance.
+# The root seed is NOT issued (seed issuance is blocked), so it stays RESERVED and the identity stays RESERVED.
+# =================================================================================================================
+ASSIGNMENT_SCHEMA_VERSION = "v3-assignment-manifest-draft-1"
+
+_ASSIGNMENT_TOP = {"schema_version": str, "status": str, "law_version": str, "identity_layers": dict,
+                   "registry_variant_identities": dict, "manifest_source_identity": str,
+                   "schema_definition_identity": str, "assignment_root_seed": str,
+                   "assignment_root_seed_identity": str, "assignment_law_identity": str,
+                   "payload_fields": list, "digest_rule": str, "observed_index_rule": str,
+                   "per_experiment_rule": str, "replacement_rule": str, "stratum_rule": str,
+                   "checkpoint_block": int, "B": int, "groups": dict, "assignment_manifest_identity": str}
+_ASSIGNMENT_GROUP = {"group_id": str, "experiments": list, "replicate_range": list, "block_size": int,
+                     "n_blocks": int, "per_block_assignment_digest": str}
+
+
+def build_draft_assignment_manifest():
+    """DRAFT-ONLY assignment-provenance schema. Nothing is issued: the root seed and every per-block digest are
+    RESERVED, so the composed identity stays RESERVED and no registered assignment stream is selected."""
+    groups = {}
+    for gid, canon in ENG.CANONICAL_GROUPS.items():
+        groups[gid] = {
+            "group_id": gid,
+            "experiments": sorted(canon["experiments"]),
+            "replicate_range": [1, int(ENG.REGISTERED["B"])],       # j=0 is the observed split, not a replicate
+            "block_size": _CHECKPOINT_BLOCK,
+            "n_blocks": int(ENG.REGISTERED["B"] // _CHECKPOINT_BLOCK),
+            "per_block_assignment_digest": RESERVED,
+        }
+    return {
+        "schema_version": ASSIGNMENT_SCHEMA_VERSION, "status": DRAFT,
+        "law_version": ASG.ASSIGNMENT_LAW_VERSION,
+        "identity_layers": _identity_layers(),
+        "registry_variant_identities": dict(ENG.REGISTERED["registry_identity"]),
+        "manifest_source_identity": _manifest_source_identity(),
+        "schema_definition_identity": SCHEMA_DEFINITION_IDENTITY,
+        "assignment_root_seed": ASG.RESERVED_ASSIGNMENT_ROOT,
+        "assignment_root_seed_identity": ASG.RESERVED_ASSIGNMENT_ROOT,
+        "assignment_law_identity": RESERVED,                        # binds only once a root seed is issued
+        "payload_fields": ["law_version", "assignment_root_seed_identity", "registry_variant_identity",
+                           "group_id", "experiment_id", "replicate_index"],
+        "digest_rule": "full canonical_hash digest width, no truncation",
+        "observed_index_rule": "j=0 is the deterministic canonical split and consumes no random draw",
+        "per_experiment_rule": ("one mask per (experiment, j) reused by every cell of that experiment; "
+                                "experiments addressed independently under the shared MC index j"),
+        "replacement_rule": "IID with replacement; duplicate assignments are VALID and never refused",
+        "stratum_rule": "within-stratum label permutation preserving each stratum's (n_candidate, n_reference)",
+        "checkpoint_block": _CHECKPOINT_BLOCK, "B": int(ENG.REGISTERED["B"]),
+        "groups": groups,
+        "assignment_manifest_identity": RESERVED_ASSIGNMENT_MANIFEST,
+    }
+
+
+def validate_assignment_manifest(m):
+    """Strict fail-closed validation with CANONICAL-VALUE comparison of every design-bearing field."""
+    _strict(m, _ASSIGNMENT_TOP, "assignment manifest")
+    _eq(m, "schema_version", ASSIGNMENT_SCHEMA_VERSION, "assignment manifest")
+    _eq(m, "status", DRAFT, "assignment manifest")
+    _eq(m, "law_version", ASG.ASSIGNMENT_LAW_VERSION, "assignment manifest")
+    _eq(m, "identity_layers", _identity_layers(), "assignment manifest")
+    _eq(m, "registry_variant_identities", dict(ENG.REGISTERED["registry_identity"]), "assignment manifest")
+    _eq(m, "schema_definition_identity", SCHEMA_DEFINITION_IDENTITY, "assignment manifest")
+    _eq(m, "assignment_root_seed", ASG.RESERVED_ASSIGNMENT_ROOT, "assignment manifest")
+    _eq(m, "assignment_root_seed_identity", ASG.RESERVED_ASSIGNMENT_ROOT, "assignment manifest")
+    _eq(m, "assignment_law_identity", RESERVED, "assignment manifest")
+    _eq(m, "payload_fields", ["law_version", "assignment_root_seed_identity", "registry_variant_identity",
+                              "group_id", "experiment_id", "replicate_index"], "assignment manifest")
+    _eq(m, "digest_rule", "full canonical_hash digest width, no truncation", "assignment manifest")
+    _eq(m, "checkpoint_block", _CHECKPOINT_BLOCK, "assignment manifest")
+    _eq(m, "B", int(ENG.REGISTERED["B"]), "assignment manifest")
+    _eq(m, "assignment_manifest_identity", RESERVED_ASSIGNMENT_MANIFEST, "assignment manifest")
+    if set(m["groups"]) != set(ENG.CANONICAL_GROUPS):
+        raise RefusalError("assignment manifest groups != canonical groups (missing/extra)")
+    for gid, g in m["groups"].items():
+        _strict(g, _ASSIGNMENT_GROUP, f"assignment group {gid}")
+        _eq(g, "group_id", gid, f"assignment group {gid}")
+        _eq(g, "experiments", sorted(ENG.CANONICAL_GROUPS[gid]["experiments"]), f"assignment group {gid}")
+        _eq(g, "replicate_range", [1, int(ENG.REGISTERED["B"])], f"assignment group {gid}")
+        _eq(g, "block_size", _CHECKPOINT_BLOCK, f"assignment group {gid}")
+        _eq(g, "n_blocks", int(ENG.REGISTERED["B"] // _CHECKPOINT_BLOCK), f"assignment group {gid}")
+        _eq(g, "per_block_assignment_digest", RESERVED, f"assignment group {gid}")
+        if g["block_size"] * g["n_blocks"] != int(ENG.REGISTERED["B"]):
+            raise RefusalError(f"assignment group {gid}: blocks do not tile 1..B exactly")
+    return True
+
+
 def _deterministic_payload():
     """The exact env-INDEPENDENT payload hashed into the schema identities. Provably free of the dependency layer:
     only the four SOURCE layers + registry variants + field definitions + manifest source."""
@@ -436,6 +531,38 @@ SCHEMA_DEFINITION_IDENTITY = canonical_hash({
 def selftest():
     errs = []
     rng = build_draft_rng_manifest(); mapset = build_draft_map_set_manifest()
+    asgm = build_draft_assignment_manifest()
+    try:
+        validate_assignment_manifest(asgm)
+    except RefusalError as ex:
+        errs.append(f"assignment: valid DRAFT wrongly refused: {ex}")
+    # Pi rev-22 #2: assignment provenance must be SEPARATE from fixture provenance, and stay RESERVED.
+    if asgm["assignment_root_seed"] != ASG.RESERVED_ASSIGNMENT_ROOT:
+        errs.append("assignment root seed is not RESERVED")
+    if asgm["assignment_manifest_identity"] != RESERVED_ASSIGNMENT_MANIFEST:
+        errs.append("assignment manifest identity is not RESERVED")
+    if set(asgm) & set(rng) - {"schema_version", "status", "identity_layers", "registry_variant_identities",
+                               "manifest_source_identity", "schema_definition_identity"}:
+        pass  # shared framing fields are fine; the point is the LAW fields must not come from the fixture manifest
+    for f in ("payload_fields", "digest_rule", "assignment_root_seed", "assignment_law_identity"):
+        if f in rng:
+            errs.append(f"fixture RNG manifest leaks assignment field {f!r} — provenance is conflated")
+    for tname, tf in (
+        ("law_version", lambda m: m.__setitem__("law_version", "other")),
+        ("root_issued", lambda m: m.__setitem__("assignment_root_seed", "ISSUED")),
+        ("digest_rule", lambda m: m.__setitem__("digest_rule", "truncated")),
+        ("B", lambda m: m.__setitem__("B", 19999)),
+        ("block_size", lambda m: m["groups"]["G_full_run_size"].__setitem__("block_size", 999)),
+        ("unknown_field", lambda m: m.__setitem__("extra", "y")),
+        ("missing_group", lambda m: m["groups"].pop("G_full_run_size")),
+        ("law_identity_bound", lambda m: m.__setitem__("assignment_law_identity", "abc")),
+    ):
+        mm = copy.deepcopy(asgm); tf(mm)
+        try:
+            validate_assignment_manifest(mm)
+            errs.append(f"assignment manifest did NOT refuse tamper {tname}")
+        except RefusalError:
+            pass
     for label, (mm, vv) in (("rng", (rng, validate_rng_manifest)), ("map-set", (mapset, validate_map_set_manifest))):
         try:
             vv(mm)
@@ -569,11 +696,11 @@ def selftest():
     except ImportError as ex:                                   # pragma: no cover
         errs.append(f"cannot import the constructor module to bind the boundary route: {ex}")
 
-    return errs, rng, mapset
+    return errs, rng, mapset, asgm
 
 
 def main():
-    errs, rng, mapset = selftest()
+    errs, rng, mapset, asgm = selftest()
     out = {
         "purpose": "DRAFT-ONLY reserved-manifest schemas with CANONICAL-VALUE strict validators, full-registry "
                    "universes, both exemption variants, role-specific provenance, union/variant map-identity model. "
@@ -581,6 +708,11 @@ def main():
         "rng_manifest": {"experiments": len(rng["experiments"]),
                          "strata_total": sum(len(v["strata"]) for v in rng["experiments"].values()),
                          "identity": rng["rng_manifest_identity"]},
+        "assignment_manifest": {"law_version": asgm["law_version"], "groups": len(asgm["groups"]),
+                                "B": asgm["B"], "block_size": asgm["checkpoint_block"],
+                                "root_seed": asgm["assignment_root_seed"],
+                                "identity": asgm["assignment_manifest_identity"],
+                                "separate_from_fixture_rng_manifest": True},
         "map_set_manifest": {"union_entries": len(mapset["union_entries"]),
                              "variants": {k: len(v["triples"]) for k, v in mapset["variants"].items()},
                              "identity": mapset["map_set_identity"]},

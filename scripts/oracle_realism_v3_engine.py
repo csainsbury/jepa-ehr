@@ -35,6 +35,9 @@ from clinical_jepa.eval.oracle_realism_v2_verifier import (
 )
 from clinical_jepa.eval.oracle_realism_v2_fixture import derive_record, MalformedRecord, REQUIRED_SOURCES
 from scripts.oracle_realism_v3_randomization import cell_upper_p, RefusalError
+from scripts.oracle_realism_v3_assignment import (
+    assignment_mask, assignment_law_identity, DEV_ASSIGNMENT_ROOT,
+)
 from scripts.oracle_realism_v3_phase0_pilot import _seq_components
 from scripts.oracle_realism_v3_map import validate_map_artifact, map_identity, FLOOR
 import scripts.oracle_realism_v3_registry as REG
@@ -541,6 +544,13 @@ def _perm_mask(rng, strata):
 
 def _validate(spec):
     reg = spec["registered"]
+    # Pi rev-22 #2: the assignment law block is mandatory and must be complete BEFORE any statistic runs.
+    asg = spec.get("assignment")
+    if not isinstance(asg, dict):
+        raise RefusalError("missing assignment law block")
+    for k in ("root_seed_identity", "registry_variant_identity", "group_id"):
+        if not isinstance(asg.get(k), str) or not asg[k].strip():
+            raise RefusalError(f"assignment law field {k!r} must be a non-empty string")
     a = reg.get("alpha_group")
     if not isinstance(a, float) or not (0.0 < a < 1.0):
         raise RefusalError(f"alpha_group {a!r} not in (0,1)")
@@ -582,28 +592,39 @@ def _gate_group(spec):
     registered:{cell_ids,map_hashes,rng_identities,alpha_group,floor_policy}, B, seed}. Fail-closed."""
     _validate(spec)                                                 # BEFORE any statistic
     reg = spec["registered"]; B = spec["B"]; floor = spec.get("floor", FLOOR)   # floor is a PARAM, not a global
-    rng = np.random.default_rng(spec["seed"])
     exps = spec["experiments"]
-    # ONE trusted assignment path (IID-with-replacement MC; duplicates VALID + bound)
-    masks = {e: [_canonical_mask(exps[e]["strata"])] + [_perm_mask(rng, exps[e]["strata"]) for _ in range(B)]
-             for e in exps}
+    asg = spec["assignment"]                                         # counter-addressable law (Pi rev-22 #2)
+    cells = spec["cells"]
+
+    def mask_for(e, j):
+        """ONE mask per (experiment, replicate) — reused by every cell of that experiment; experiments are
+        addressed independently under the shared MC index j. j=0 is the deterministic observed split."""
+        return assignment_mask(exps[e]["strata"], root_seed_identity=asg["root_seed_identity"],
+                               registry_variant_identity=asg["registry_variant_identity"],
+                               group_id=asg["group_id"], experiment_id=e, replicate_index=j, b_total=B)
+
     def d_of(c, m):
         est = ESTIMATORS[c["check"]]
         groups = c["map_art"]["groups"] if est["map_carrying"] else None
         return est["recompute"](c["pre"], m, groups=groups, floor=floor)
-    for c in spec["cells"]:                                          # observed NE (or non-finite) -> group NE
-        d0 = d_of(c, masks[c["exp"]][0])
+
+    obs_masks = {e: mask_for(e, 0) for e in exps}
+    for c in cells:                                                  # observed NE (or non-finite) -> group NE
+        d0 = d_of(c, obs_masks[c["exp"]])
         if d0 is None or not np.isfinite(d0):
             return {"verdict": NOT_EVALUABLE, "p_g": None, "reason": f"observed NE at {c['cell_id']}"}
-    E = []
-    for c in spec["cells"]:
-        est = ESTIMATORS[c["check"]]; groups = c["map_art"]["groups"] if est["map_carrying"] else None
-        ej = np.empty(B + 1)
-        for j, m in enumerate(masks[c["exp"]]):
-            d = est["recompute"](c["pre"], m, groups=groups, floor=floor)
+
+    # STREAMING assignment iteration (Pi rev-22 #4): walk the MC index, build one mask per experiment, fill the
+    # WHOLE E[:, j] column across every cell, then release the masks. The rev-22 path materialised (B+1)*M masks
+    # for every experiment up front — 320 MB per experiment, ~2.88 GB for a nine-experiment group.
+    E = np.empty((len(cells), B + 1))
+    for j in range(B + 1):
+        mj = obs_masks if j == 0 else {e: mask_for(e, j) for e in exps}
+        for ci, c in enumerate(cells):
+            d = d_of(c, mj[c["exp"]])
             # NaN/Inf discrepancy is a support/precompute failure -> maximally extreme NE, NEVER zero-fill (Pi #4)
-            ej[j] = np.inf if (d is None or not np.isfinite(d)) else max(0.0, d - c["delta"])
-        E.append(ej)
+            E[ci, j] = np.inf if (d is None or not np.isfinite(d)) else max(0.0, d - c["delta"])
+        del mj
     P = np.stack([cell_upper_p(e) for e in E], 0); S = P.min(0)
     p_g = float((S <= S[0]).sum() / len(S))
     return {"verdict": PASS if p_g > reg["alpha_group"] else FAIL, "p_g": p_g,
@@ -986,6 +1007,11 @@ def _gate_core(group_id, experiments, *, floor, B, seed, alpha_group, map_for_ce
             cell["map_art"] = map_for_cell(cc)                        # bound + validated by the caller's mode
         cells.append(cell)
     spec = {"cells": cells, "experiments": experiments, "B": B, "seed": seed, "floor": floor,
+            # Pi rev-22 #2: the counter-addressable assignment law. Dev callers derive an explicitly
+            # DEV-LABELLED root from their dev seed; the registered root stays RESERVED / not issued.
+            "assignment": {"root_seed_identity": f"{DEV_ASSIGNMENT_ROOT}|dev_seed={int(seed)}",
+                           "registry_variant_identity": CANONICAL_REGISTRY_HASH,
+                           "group_id": group_id},
             "registered": {"cell_ids": [c["cell_id"] for c in cells], "alpha_group": alpha_group,
                            "floor_policy": f"floor_{floor}",
                            "map_hashes": {c["cell_id"]: (map_identity(c["map_art"]) if c.get("map_art") else None)
@@ -1054,7 +1080,13 @@ def gate_group_dev(group_id, arms_by_exp, *, seed, B, floor, map_artifacts, dev_
               # only; the environment-dependent dependency identity is recorded in the full dev_config, not the hash.
               "source_identities": SOURCE_IDENTITY_BUNDLE,
               "namespace": (nss[0] if nss else None),
-              "seed_law": "caller-supplied dev seed; assignments = numpy default_rng(seed) per-stratum permutation"}
+              # Pi rev-22 #2: bind the ASSIGNMENT LAW identity, not a prose description of a sequential stream.
+              "assignment_law_identity": assignment_law_identity(
+                  root_seed_identity=f"{DEV_ASSIGNMENT_ROOT}|dev_seed={int(seed)}",
+                  registry_variant_identity=CANONICAL_REGISTRY_HASH),
+              "seed_law": ("caller-supplied dev seed -> DEV-labelled assignment root; assignments are "
+                           "COUNTER-ADDRESSABLE per (group, experiment, replicate_index), not a sequential "
+                           "default_rng stream")}
     res["dev_config"] = {**stable, "seed": seed, "estimator_dependency_identity": ESTIMATOR_DEPENDENCY_IDENTITY}
     res["dev_config_stable_identity"] = canonical_hash(stable)     # deterministic (env-independent)
     res["dev_config_identity"] = canonical_hash(res["dev_config"])
@@ -1093,7 +1125,9 @@ def _mk_spec(cells, exps, B=199, seed=1, alpha=0.00667):
            "map_hashes": {c["cell_id"]: (map_identity(c["map_art"]) if c.get("map_art") else None) for c in cells},
            "rng_identities": {e: rng_identity(m["source"], m["replicate_seed"], m["coupled_component"])
                               for e, m in exps.items()}}
-    return {"cells": cells, "experiments": exps, "registered": reg, "B": B, "seed": seed}
+    return {"cells": cells, "experiments": exps, "registered": reg, "B": B, "seed": seed,
+            "assignment": {"root_seed_identity": f"{DEV_ASSIGNMENT_ROOT}|selftest_seed={int(seed)}",
+                           "registry_variant_identity": "SELFTEST", "group_id": "SELFTEST_GROUP"}}
 
 
 def selftest():
