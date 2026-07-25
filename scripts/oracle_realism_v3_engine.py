@@ -492,7 +492,8 @@ def _modsrc(mod):
 
 _MODULE_SRC = {name: _modsrc(mod) for name, mod in (
     ("engine", _sys.modules[__name__]), ("v2_verifier", _v2ver_mod), ("phase0_pilot", _pilot_mod),
-    ("map", _map_mod), ("randomization", _rand_mod))}
+    ("map", _map_mod), ("randomization", _rand_mod),
+    ("assignment", _sys.modules["scripts.oracle_realism_v3_assignment"]))}
 
 # (1) SEMANTIC — calling convention + declared estimand identity STRINGS (catches a protocol/estimand re-declaration,
 #     not an implementation change).
@@ -509,7 +510,11 @@ ENGINE_CANON_SCHEMA_GATE_IDENTITY = canonical_hash({m: _MODULE_SRC[m] for m in (
 # (4) MAP BUILDER / APPLY source — the map-builder + reducer modules. A map artifact's `map_identity` binds its
 #     OUTPUT + semantic fields, NOT the builder implementation (rev-13 #3); the builder source is bound HERE.
 MAP_SOURCE_IDENTITY = canonical_hash({m: _MODULE_SRC[m] for m in ("map", "v2_verifier")})
-# (5) DEPENDENCY / ENVIRONMENT — interpreter + library versions + estimand constants. The ONLY version-bearing layer;
+# (5) ASSIGNMENT LAW source (Pi rev-25) — the counter-addressable permutation-assignment derivation. Previously
+#     ABSENT from the trust root, so an assignment-only change would NOT have re-minted the gate trust root even
+#     though it changes which permutations every SD cell is scored against.
+ASSIGNMENT_SOURCE_IDENTITY = canonical_hash({m: _MODULE_SRC[m] for m in ("assignment",)})
+# (6) DEPENDENCY / ENVIRONMENT — interpreter + library versions + estimand constants. The ONLY version-bearing layer;
 #     never enters a deterministic hash — it lives in environment-dependent artifacts.
 ESTIMATOR_DEPENDENCY_IDENTITY = canonical_hash({
     "python": platform.python_version(), "numpy": np.__version__,
@@ -519,7 +524,8 @@ ESTIMATOR_DEPENDENCY_IDENTITY = canonical_hash({
 SOURCE_IDENTITY_BUNDLE = {"estimator_semantic": ESTIMATOR_PROTOCOL_SEMANTIC_IDENTITY,
                           "estimator_impl_source": ESTIMATOR_IMPL_SOURCE_IDENTITY,
                           "engine_canon_schema_gate": ENGINE_CANON_SCHEMA_GATE_IDENTITY,
-                          "map_source": MAP_SOURCE_IDENTITY}
+                          "map_source": MAP_SOURCE_IDENTITY,
+                          "assignment_source": ASSIGNMENT_SOURCE_IDENTITY}
 
 
 # --- executable per-experiment RNG identity (a hash of the seed-derivation, not a string; Pi #4/#7) ------

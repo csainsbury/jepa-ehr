@@ -15,11 +15,12 @@ below B~5400 and each is a hard blocker or a large constant at B=20000:
   * ASSIGNMENT MATERIALISATION. `_gate_group` builds `[canonical] + [perm]*B` boolean masks for EVERY experiment
     before any statistic. At M=16000 and B=20000 that is (B+1)*M = 320 MB per experiment and 2.88 GB for a
     nine-experiment full-support group, held live across the whole recompute phase.
-  * MIN-P RANKING. `cell_upper_p` forms an A x A boolean comparison matrix (A = B+1). At A=20001 that is an
-    exact 400.0 MB transient allocation and ~4.0e8 comparisons PER CELL; the deepest group has K=54 cells.
-    A sort/`searchsorted` formulation returns BIT-IDENTICAL ranks in O(A log A) time and O(A) memory; the
-    equality is proven here over an adversarial battery (ties, +inf NE sentinels, all-constant vectors) and
-    both costs are reported.
+  * MIN-P RANKING. The ORIGINAL rank stage formed an A x A boolean comparison matrix (A = B+1). At A=20001
+    that is an exact 400.0 MB transient allocation and ~4.0e8 comparisons PER CELL; the deepest group has
+    K=54 cells. `cell_upper_p` is now the sort/`searchsorted` form (adopted under Pi rev-22 ruling 4), which
+    returns BIT-IDENTICAL ranks in O(A log A) time and O(A) memory. The benchmark times the retained
+    quadratic oracle `_cell_upper_p_quadratic` against the PRODUCTION `cell_upper_p`, so the reported
+    speedup is a real comparison rather than the function against itself.
   * PER-REPLICATE ASSIGNMENT DERIVATION. The current law draws every mask from ONE sequential
     `default_rng(seed)` stream, so permutation block k cannot be regenerated without replaying blocks 0..k-1.
     That makes a checkpoint/resume job plan impossible as written. The cost of a per-replicate seed-derived law
@@ -66,7 +67,9 @@ from scripts.oracle_realism_v3_engine import (
     RefusalError,
 )
 from scripts.oracle_realism_v3_map import build_frozen_map, FLOOR
-from scripts.oracle_realism_v3_randomization import cell_upper_p, _canonical_mask, _perm_mask
+from scripts.oracle_realism_v3_randomization import (
+    cell_upper_p, _cell_upper_p_quadratic, _canonical_mask, _perm_mask,
+)
 
 # ---------------------------------------------------------------------------------------------------
 # fixed benchmark configuration
@@ -405,11 +408,17 @@ def measure_ranking(rng, log):
     ladder = {}
     for A in (2001, 5401, 10001, A_reg):
         e = rng.normal(size=A)
-        ref_secs, ref_reps = timed(lambda: cell_upper_p(e), target=0.3, min_reps=3, max_reps=20)
-        fast_secs, fast_reps = timed(lambda: cell_upper_p_sorted(e), target=0.3, min_reps=5, max_reps=200)
+        # Pi rev-25: this previously timed `cell_upper_p` as the "reference". Once ruling 4 made
+        # `cell_upper_p` the SORTED form, that compared the production function to itself and still
+        # labelled one side quadratic/400 MB. Time the real quadratic oracle, and the PRODUCTION
+        # function as the fast side, so the comparison means what it says.
+        ref_secs, ref_reps = timed(lambda: _cell_upper_p_quadratic(e), target=0.3, min_reps=3, max_reps=20)
+        fast_secs, fast_reps = timed(lambda: cell_upper_p(e), target=0.3, min_reps=5, max_reps=200)
         ladder[A] = {"reference_secs": ref_secs, "reference_reps": ref_reps,
                      "reference_transient_bytes_exact": A * A,          # numpy bool comparison matrix, 1 byte/elem
+                     "reference_impl": "_cell_upper_p_quadratic (A x A comparison matrix)",
                      "sorted_secs": fast_secs, "sorted_reps": fast_reps,
+                     "sorted_impl": "cell_upper_p (PRODUCTION sort/searchsorted form)",
                      "sorted_transient_bytes_exact": A * 8 * 2,
                      "speedup": round(ref_secs / max(fast_secs, 1e-12), 1)}
         log(f"[rank] A={A:6d}  reference {ref_secs*1e3:9.2f} ms / {A*A/1e6:7.1f} MB transient   "

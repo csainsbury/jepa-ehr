@@ -103,7 +103,7 @@ untouched; `gate_group_registered` stays BLOCKED.
    `(boundary_short, bounded, S7_abs)` map. The remaining Pi rev-18 items — carrying BOTH exemption variants,
    role-specific RNG provenance, strict unknown-field-refusing schemas, full-registry + manifest-source identities,
    and a deterministic schema identity separated from the env-dependent instance hash (the reported-hash fix) — are
-   the NEXT increment (the manifest rework). Benchmark `09f413c9…` → `9c86d6cc…`.
+   the NEXT increment (the manifest rework). Benchmark `09f413c9…` → `2215f339…`.
 
 **Rev-18 changes (Pi rev-13 authorized — DRAFT-ONLY reserved-manifest schemas):**
 1. **New module `scripts/oracle_realism_v3_manifest.py`** defines the STRUCTURE + fail-closed VALIDATORS for the two
@@ -548,8 +548,8 @@ marginal distortion. Consequences folded at rev-23:
   evidence stays reproducible. *(It was named `registered_alloc` at rev-22; after the ruling that name asserted
   the opposite of the truth, so it is renamed.)*
 - registry identities re-mint to **`4d99e8aa…` / `26693ca5…`**, canonical-registry `8338a2cf…`, boundary
-  `profile_config_identity` `039d4dd9…`, and the manifest schema identities to `875a85f0…` / `6aff0396…` /
-  `85a797df…`.
+  `profile_config_identity` `039d4dd9…`, and the manifest schema identities to `c575ced4…` / `6b0f6ce0…` /
+  `e0e8d397…`.
 
 **Fail-closed band validation (Pi rev-22 #1 — a real defect in the rev-22 constructor).** The rev-22 validator
 derived its "structural bound" from the CALLER's bands (`max(band)`), so shifted bands `((2,3),(4,5),(6,8))`
@@ -684,6 +684,20 @@ adversarial tampers refuse, and a self-test asserts the fixture RNG manifest car
 fills the whole `E[:, j]` column across every cell, then releases the masks. The rev-22 path materialised
 `(B+1)·M` masks per experiment up front (320,016,000 bytes each; ≈2.88 GB for a nine-experiment group).
 
+**Rank-benchmark accounting corrected (rev-26, Pi rev-25).** Once ruling 4 made `cell_upper_p` the sorted
+form, the benchmark's "reference" arm was timing the PRODUCTION function against itself while still labelling
+one side quadratic / 400 MB — the run behind identity `2e68817d…` reported `speedup 1.0x` beside
+`400.0 MB transient`, a self-contradiction that shipped because the rank ladder went unread. The benchmark now
+times the retained quadratic oracle `_cell_upper_p_quadratic` against the production `cell_upper_p`, restoring
+a real comparison (**156.3×** at `A=20001`), and a regression test pins the invariant: the two sides must be
+distinct functions, agree exactly, differ ~10× in peak allocation, and show a speedup that GROWS with `A` —
+a flat ~1.0× ratio being the exact signature of the bug.
+
+**Assignment source added to the trust root (rev-26, Pi rev-25).** `SOURCE_IDENTITY_BUNDLE` gained an
+`assignment_source` layer. Without it an assignment-only change would not have re-minted the gate trust root,
+even though it changes which permutations every SD cell is scored against. Verified by construction: a
+synthetic edit to the assignment module moves the bundle hash, and reverting restores it exactly.
+
 **Sorted upper-tail ranks (ruling 4)** — the differential proof now lives in the trusted randomization module,
 not in the benchmark that first measured it. `cell_upper_p` is the sort/`searchsorted` form; the quadratic
 `A × A` version is retained as `_cell_upper_p_quadratic`, the differential oracle. 600 adversarial cases are
@@ -694,7 +708,7 @@ legal all-`+inf` vector is still accepted with `p = 1.0`.
 
 ### 9.1 FULL per-group registered-scale benchmark at `B = 20000` (rev-23, MEASURED on CANONICAL constructors)
 
-`scripts/oracle_realism_v3_registered_benchmark.py` (deterministic `config_identity` **`2e68817d…`**; self-tests
+`scripts/oracle_realism_v3_registered_benchmark.py` (deterministic `config_identity` **`e441472e…`**; self-tests
 pass). Every in-scope cell is priced by measuring **its own engine estimator** at registered scale
 (`N=8000`/arm, `M=16000`), and — since rev-23 — on arms assembled through **that experiment's canonical
 constructor route** in the engine's canonical pool order.
@@ -794,9 +808,9 @@ precompute payloads.
    (`G_full_length_density` remains 2.81 GB because its `length_ks`/`count_ks` precompute indicator matrices are
    266 MB and 176 MB per SCID experiment — that part is irreducible without changing the estimator).
 2. **Min-p ranking — RAM, not time.** `cell_upper_p` forms an `A × A` boolean matrix (`A = B+1`): at `A = 20001`
-   that is an exact **400.0 MB transient per cell**, 213 ms/cell measured. A `sort`/`searchsorted` formulation is
+   that is an exact **400.0 MB transient per cell**, 216.9 ms/cell measured. A `sort`/`searchsorted` formulation is
    **bit-identical** (proven here over 400 adversarial cases spanning heavy ties, `+inf` NE sentinels, all-constant
-   and all-NE vectors) at 1.36 ms and `O(A)` memory — 156×. **Honest scale: ranking is ~10 s per group, so this is
+   and all-NE vectors) at 1.39 ms and `O(A)` memory — 156×. **Honest scale: ranking is ~10 s per group, so this is
    a memory and hygiene fix, NOT a feasibility blocker.**
 3. **Block-addressable assignments — a genuine blocker for the checkpoint plan.** The current law draws every mask
    from ONE sequential `default_rng(seed)` stream, so block *k* cannot be regenerated without replaying blocks
@@ -829,7 +843,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
 ## Delivered (rev-23, Pi rev-9/rev-10/rev-12/rev-13/rev-18/rev-19-20/rev-22 authorized dev-only scope — all tested)
 - **FULL per-group registered-scale benchmark + cap/checkpoint/persistence plan (rev-22, REBUILT rev-23 on
   canonical constructors, §9.1)** — `scripts/oracle_realism_v3_registered_benchmark.py`, deterministic
-  `config_identity` **`2e68817d…`**, self-tests pass. **194** measured `(experiment, statistic)` costs at
+  `config_identity` **`e441472e…`**, self-tests pass. **194** measured `(experiment, statistic)` costs at
   `N=8000`/arm on canonically assembled arms in `_assemble_arms` pool order; per-group forecast at `B=20000` for
   BOTH variants; measured ranking / assignment / persistence stages; whole-block split with an exact `1..B`
   partition proof, checkpoint and aggregate-only persistence plans; explicit MARGINAL status below 10 % cap
@@ -837,7 +851,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   `G_full_phase_seam` **14.01 h** is over cap (recommend 4 shards `[5,5,5,5]`) and `G_full_length_density`
   **5.08 h** is MARGINAL at 1.0 % headroom (recommend `[10,10]`, vindicating Pi's provisional allocation). Binds
   the exact constructor/profile payloads and the benchmark's own source identity. The surrogate benchmark is
-  unchanged and still reproduces its own `config_identity` **`9c86d6cc…`** — it binds cell routing and measured
+  unchanged and still reproduces its own `config_identity` **`2215f339…`** — it binds cell routing and measured
   volumes, not the registry quotas, so the boundary re-mint does not move it.
 - **Canonical boundary-short constructor (rev-22, §8.1)** — `scripts/oracle_realism_v3_constructors.py`,
   self-tests pass. Makes the declared `bounded_length_control` route executable (three disjoint length bands over
@@ -943,7 +957,7 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   7 refusals; strict `p_g > α_group` (Pi #7).
 - **Per-profile + wired-engine benchmark (Pi #6; rev-11 repair, rev-12/rev-13 provenance/identity)** —
   `scripts/oracle_realism_v3_benchmark.py`: per-profile `Σ_experiment Σ_cell cost(route, profile volume)·B_main`,
-  DETERMINISTIC `config_identity` **`9c86d6cc…`** (re-minted through `…→ 09f413c9 → 9c86d6cc`; it now
+  DETERMINISTIC `config_identity` **`2215f339…`** (re-minted through `…→ 09f413c9 → 2215f339`; it now
   binds the FOUR deterministic SOURCE identity layers (`SOURCE_IDENTITY_BUNDLE`: semantic + impl-source +
   engine-canon/schema/gate + map-source) and is no longer version-bearing; the env-dependent
   `ESTIMATOR_DEPENDENCY_IDENTITY` lives in the timing artifact, Pi rev-12/rev-13 #3). The wired timing map records the EXACT `Bs` fixture seed (`236460273103544`) and is labelled TIMING-ONLY

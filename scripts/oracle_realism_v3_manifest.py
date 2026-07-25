@@ -55,8 +55,11 @@ RNG_SCHEMA_VERSION = "v3-rng-manifest-draft-3"
 MAPSET_SCHEMA_VERSION = "v3-map-set-manifest-draft-3"
 
 _MAP_CARRYING = frozenset(k for k, v in ENG.ESTIMATORS.items() if v["map_carrying"])
-_LAYER_KEYS = ("estimator_semantic", "estimator_impl_source", "engine_canon_schema_gate", "map_source", "dependency")
-_SOURCE_LAYER_KEYS = ("estimator_semantic", "estimator_impl_source", "engine_canon_schema_gate", "map_source")
+# Pi rev-25: `assignment_source` joined the trust root, so the exact field set grows with it.
+_LAYER_KEYS = ("estimator_semantic", "estimator_impl_source", "engine_canon_schema_gate", "map_source",
+               "assignment_source", "dependency")
+_SOURCE_LAYER_KEYS = ("estimator_semantic", "estimator_impl_source", "engine_canon_schema_gate",
+                      "map_source", "assignment_source")
 
 
 def _identity_layers():
