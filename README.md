@@ -54,6 +54,20 @@ bash scripts/run_schema_validation_checks.sh
 python -m unittest tests/test_synthetic_pipeline.py tests/test_validation.py tests/test_scenario_feasibility.py tests/test_pseudo_rendering.py
 ```
 
+### Dependencies for real-data runs
+
+`pip install -e .` installs the CORE dependencies only (numpy, pyyaml) — enough for the synthetic
+scaffold, the contracts and the numpy-only scoring layers, which are deliberately cheap to import.
+Anything that reads the tokenised substrate or runs a model needs the extras:
+
+```bash
+python -m pip install -e ".[data,torch]"     # h5py + torch
+```
+
+`h5py` is REQUIRED by every HDF5-backed path — target-block extraction and both rollout exporters
+(`export_mean_token_rollouts`, `export_transformer_autoreg_rollouts`). Without it those steps fail at
+run time, AFTER training has already succeeded. Install the extras before any governed run.
+
 Real-data runs require an approved de-identified/tokenised local bundle and must keep outputs aggregate-only unless separately governed.
 
 ## Horizon-spec scaffold

@@ -144,7 +144,14 @@ def export_mean_token_rollouts(
     if horizon_stride_events <= 0:
         raise ValueError("horizon_stride_events must be positive")
 
-    import h5py
+    try:
+        import h5py
+    except ImportError as exc:                      # pragma: no cover - environment guard
+        raise ImportError(
+            "h5py is required to read the tokenised substrate but is not installed. It is an OPTIONAL "
+            "extra, so `pip install -e .` does not provide it. Install the extras BEFORE a governed run "
+            '(`pip install -e ".[data,torch]"`) — otherwise training succeeds and the export fails here.'
+        ) from exc
     import torch
 
     from clinical_jepa.arms.v0b.mean_token_model import build_mean_token_jepa_from_checkpoint, checkpoint_autoregression_config
