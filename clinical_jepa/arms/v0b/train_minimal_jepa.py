@@ -10,6 +10,9 @@ from typing import Any
 
 import numpy as np
 
+from clinical_jepa.eval.rung2_contract import (
+    TRANSITION_META_KEY, is_fixed_width_transition_training,
+)
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json
 from clinical_jepa.validation import validate_artifact
 
@@ -84,6 +87,8 @@ def _dry_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str, 
             "horizon_count_trained": int(args.horizon_count),
             "horizon_stride_tokens": int(args.horizon_stride_tokens or args.max_target_tokens),
             "max_horizons": int(args.max_horizons or args.horizon_count),
+            "max_target_tokens": int(args.max_target_tokens),
+            TRANSITION_META_KEY: _transition_flag(args, encode_empty=False),
         },
         "n_synthetic_examples": n,
         "trained_steps": 0,
@@ -272,6 +277,8 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
     architecture = model.architecture_metadata()
     architecture["horizon_count_trained"] = int(args.horizon_count)
     architecture["horizon_stride_tokens"] = int(args.horizon_stride_tokens or args.max_target_tokens)
+    architecture["max_target_tokens"] = int(args.max_target_tokens)
+    architecture[TRANSITION_META_KEY] = _transition_flag(args, encode_empty=False)
     torch.save({
         "model_state_dict": model.state_dict(),
         "vocab_size": vocab_size,
@@ -282,6 +289,8 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
         "horizon_count_trained": int(args.horizon_count),
         "horizon_stride_tokens": int(args.horizon_stride_tokens or args.max_target_tokens),
         "max_horizons": int(max_horizons),
+        "max_target_tokens": int(args.max_target_tokens),
+        TRANSITION_META_KEY: _transition_flag(args, encode_empty=False),
     }, ckpt_path)
 
     train_manifest = {
@@ -313,6 +322,20 @@ def _real_run(args: argparse.Namespace, arms: dict[str, Any], dataset: dict[str,
     (outdir / "summary.md").write_text(f"# v0B minimal JEPA real run\n\nSteps: {args.real_steps}\n\nTrain examples: {len(train)}\n\nDev cosine: {dev_eval['cosine']:.4f}\n\nDev loss: {dev_eval['loss']:.4f}\n\nEffective rank(dev preds): {dev_eval['effective_rank']:.2f}\n")
     print(json.dumps({"train_manifest": str(outdir / "train-manifest.json"), "dev_cosine": dev_eval["cosine"], "checkpoint": str(ckpt_path)}, indent=2))
     return 0
+
+
+def _transition_flag(args, *, encode_empty: bool) -> bool:
+    """DERIVED fixed-width-non-overlapping-transition flag (Rung-2 sub-gate 1 recursive path).
+
+    Without this on the checkpoint, `recursive_path_evaluable` returns False and the recursive-transition
+    diagnostics are NOT_EVALUABLE — so a run that IS in the right regime would still be unusable. Derived,
+    never asserted."""
+    return is_fixed_width_transition_training(
+        autoregression_mode=args.autoregression_mode,
+        horizon_count=args.horizon_count,
+        horizon_stride_tokens=int(args.horizon_stride_tokens or args.max_target_tokens),
+        max_target_tokens=int(args.max_target_tokens),
+        encode_empty=encode_empty)
 
 
 def _read_encode_empty_examples(blocks, max_blocks, max_context, max_target, seed, *, source=None):
@@ -471,6 +494,10 @@ def _encode_empty_run(args, arms, dataset, targets, outdir):
         "model_state_dict": model.state_dict(), "vocab_size": vocab_size, "embedding_dim": dim,
         "created_utc": now_utc(), "architecture": architecture, "autoregression_mode": args.autoregression_mode,
         "encode_empty": True, "max_horizons": 1,
+        # encode-empty pins horizon_count to 1, so it can never be a fixed-width TRANSITION regime.
+        # Stamped explicitly so the recursive path refuses on substance, not on a missing field.
+        "horizon_count_trained": 1, "max_target_tokens": int(args.max_target_tokens),
+        TRANSITION_META_KEY: _transition_flag(args, encode_empty=True),
     }, ckpt_path)
 
     n_train_empty = len(emp_idx)
@@ -478,7 +505,9 @@ def _encode_empty_run(args, arms, dataset, targets, outdir):
         "schema_version": "clinical-jepa-v0b-train-manifest-v0",
         "created_utc": now_utc(),
         "dry_run": False,
-        "architecture": {**architecture, "encode_empty": True, "empty_fraction_cap": cap},
+        "architecture": {**architecture, "encode_empty": True, "empty_fraction_cap": cap,
+                         "horizon_count_trained": 1, "max_target_tokens": int(args.max_target_tokens),
+                         TRANSITION_META_KEY: _transition_flag(args, encode_empty=True)},
         "n_synthetic_examples": 0,
         "n_real_examples_loaded": len(examples),
         "n_train_examples": len(train),

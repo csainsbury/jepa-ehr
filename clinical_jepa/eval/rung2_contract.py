@@ -127,12 +127,57 @@ def is_oracle_assisted_stratum(var: str) -> bool:
     return var in OBSERVED_FUTURE_STRATA
 
 
+def is_fixed_width_transition_training(*, autoregression_mode: str | None, horizon_count: Any,
+                                       horizon_stride_tokens: Any, max_target_tokens: Any,
+                                       encode_empty: bool = False) -> bool:
+    """DERIVE whether a training configuration produces fixed-width NON-OVERLAPPING transition states.
+
+    This is the single source of truth for the `fixed_width_transition_trained` flag, kept next to the gate
+    that consumes it so the writer and the reader cannot drift apart. It is DERIVED from the training config,
+    never caller-asserted.
+
+    Requires ALL of:
+      * `autoregression_mode == "recursive"` — horizon-conditioned heads are a different estimand entirely;
+      * `horizon_count >= 2` — one window is a single prediction, not a transition sequence, so there is
+        nothing recursive to diagnose (this is why every existing v0B / encode-empty checkpoint fails: they
+        train at the default horizon_count=1, and `--encode-empty` pins it to 1);
+      * `stride == max_target_tokens` — equal-width windows tiled contiguously. A stride below the width
+        OVERLAPS (states share events, so drift is not attributable to the transition); a stride above it
+        leaves GAPS (the states are not a contiguous delta-tiling).
+    """
+    if encode_empty:
+        return False                                   # encode-empty pins horizon_count to 1 by construction
+    if autoregression_mode != "recursive":
+        return False
+    try:
+        k = int(horizon_count); stride = int(horizon_stride_tokens); width = int(max_target_tokens)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(horizon_count, bool) or isinstance(horizon_stride_tokens, bool):
+        return False
+    return k >= 2 and width > 0 and stride == width
+
+
 def recursive_path_evaluable(checkpoint_meta: dict[str, Any] | None) -> bool:
     """The recursive-transition path is NOT_EVALUABLE unless the checkpoint's metadata proves it
-    was trained on fixed-width non-overlapping transition states (Pi #2). No pseudo-rollouts."""
+    was trained on fixed-width non-overlapping transition states (Pi #2). No pseudo-rollouts.
+
+    Accepts the flag if present; otherwise DERIVES it from the training config the checkpoint already
+    records, so a checkpoint written before the flag existed is judged on its actual regime rather than on
+    the absence of a field. A checkpoint carrying neither the flag nor the config stays NOT_EVALUABLE."""
     if not REQUIRE_TRANSITION_TRAINED_CHECKPOINT:
         return True
-    return bool((checkpoint_meta or {}).get(TRANSITION_META_KEY, False))
+    meta = checkpoint_meta or {}
+    if TRANSITION_META_KEY in meta:
+        return bool(meta[TRANSITION_META_KEY])
+    if "autoregression_mode" not in meta:
+        return False                                   # nothing to derive from -> fail closed
+    return is_fixed_width_transition_training(
+        autoregression_mode=meta.get("autoregression_mode"),
+        horizon_count=meta.get("horizon_count_trained", 0),
+        horizon_stride_tokens=meta.get("horizon_stride_tokens", 0),
+        max_target_tokens=meta.get("max_target_tokens", meta.get("horizon_stride_tokens", 0)),
+        encode_empty=bool(meta.get("encode_empty", False)))
 
 
 # ============================ fail-hard independence + stop-line (Pi #6) ============================
