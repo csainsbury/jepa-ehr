@@ -12,6 +12,9 @@ import numpy as np
 from clinical_jepa.arms.v0b.train_minimal_jepa import effective_rank
 from clinical_jepa.arms.v0e.transformer_autoreg import TARGET_ENCODER_MODES, TransformerAutoregConfig, TransformerHorizonAutoregressor, checkpoint_metadata
 from clinical_jepa.targets.block_spans import is_censored, is_empty_target
+from clinical_jepa.eval.rung2_contract import (
+    TRANSITION_META_KEY, is_fixed_width_transition_training,
+)
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json
 
 
@@ -229,6 +232,15 @@ def _real_run(args: argparse.Namespace, dataset: dict[str, Any], targets: dict[s
         "target_encoder_mode": args.target_encoder_mode,
         "target_window_events": int(args.target_window_events),
         "horizon_stride_events": int(args.horizon_stride_events),
+        # Rung-2 sub-gate 1: stamped EXPLICITLY so the recursive-transition path refuses on substance.
+        # This arm is architecturally direct multi-horizon (horizon-specific MLP heads), NOT recursive,
+        # so it can never be a fixed-width TRANSITION regime — the derivation returns False here by
+        # construction, and recording that is clearer than leaving the field absent.
+        TRANSITION_META_KEY: is_fixed_width_transition_training(
+            autoregression_mode="direct_multi_horizon_transformer_heads",
+            horizon_count=args.horizon_count,
+            horizon_stride_tokens=int(args.horizon_stride_events),
+            max_target_tokens=int(args.target_window_events)),
     }, ckpt_path)
     report = {
         "schema_version": "clinical-jepa-transformer-autoreg-train-v0",
