@@ -14,10 +14,11 @@ qualification** (reviewed `e06d346`; reproduced all self-tests, the 400/400 rank
 three schema IDs; stop line unchanged). Folded here: **ruling 1** — `width_proportional` selected and bound as
 the registered design, boundary quotas re-minted to (2286,2286,3428), structural-zero unchanged (§8.1/§8.2) —
 and the **fail-closed band correction**, a real defect in the rev-22 constructor that let shifted bands admit
-`L=8` while still asserting the S9-NE guarantee. Still open: ruling 2 (assignment RNG law with an issued root
-seed), ruling 3 (whole-block splits 7+7+6 / 10+10 with an exact `1..B` partition proof), ruling 4 (streamed masks
-+ sorted ranks in the trusted modules), the canonical-constructor benchmark rebuild, and the remaining manifest
-items. See "Still open".
+`L=8` while still asserting the S9-NE guarantee. Also folded: the **canonical-constructor benchmark rebuild** (the other blocking correction) and **ruling 3**
+(whole checkpoint blocks + exact `1..B` partition proof + integrity-gated shard semantics) — see §9.1. Still
+open: **ruling 2** (assignment RNG law with an issued root seed and a separate assignment manifest), **ruling 4**
+(streamed masks + sorted ranks moved into the trusted modules), and the remaining manifest items. See
+"Still open".
 
 **Rev-22 — the last three authorized dev-only items (Pi rev-19/20 "authorized next scope" 2, 3 and 4):**
 
@@ -648,24 +649,38 @@ than MIMIC (the rev-5 "one MIMIC cost × M0" understated SCID). The **distributi
 pairs, strata, cells, B, statistic recomputation route, wall time, peak RAM, checkpoint size`; aggregate-only
 (per-cell/group permutation summaries + hashes; no sequence arrays).
 
-### 9.1 FULL per-group registered-scale benchmark at `B = 20000` (rev-22, MEASURED — supersedes the surrogate)
+### 9.1 FULL per-group registered-scale benchmark at `B = 20000` (rev-23, MEASURED on CANONICAL constructors)
 
-`scripts/oracle_realism_v3_registered_benchmark.py` (deterministic `config_identity`
-**`0f147205…`**; self-tests pass). With all twenty estimators wired, every in-scope cell is priced by measuring
-**its own engine estimator** on a registered-scale pooled draw (`N=8000`/arm, `M=16000`) of **its own
-experiment's profile** — 74 `(profile, statistic)` measurements — rather than through a route surrogate. Maps used
-for timing are TIMING-ONLY artifacts in a distinct namespace carrying the exact fixture seed of the reference arm
-they were built from; no reserved draw, calibration/evaluation seed, manifest population or persisted run.
+`scripts/oracle_realism_v3_registered_benchmark.py` (deterministic `config_identity` **`465e17f7…`**; self-tests
+pass). Every in-scope cell is priced by measuring **its own engine estimator** at registered scale
+(`N=8000`/arm, `M=16000`), and — since rev-23 — on arms assembled through **that experiment's canonical
+constructor route** in the engine's canonical pool order.
+
+**rev-23 rebuild (Pi rev-22 blocking correction).** rev-22 drew every arm through the generic
+`draw_arm(profile)` and concatenated `cand + ref`. That was wrong twice over: it ran neither the structural-zero
+`_multiscale` constructor nor the bounded-length constructor, and the flat concatenation does not match the
+engine's canonical pool order `[cand_s0, ref_s0, cand_s1, ref_s1, …]` for the two STRATIFIED experiments.
+Measurement is now keyed by **experiment**, not profile — 194 `(experiment, statistic)` measurements — because
+repeatability experiments carry a coupling on both roles and the two stratified experiments are built by their
+own constructors, all of which move event volume and support cardinality. The effect is large and in both
+directions: structural-zero `S9_gap` **179.6 → 64.3 ms** under the true multiscale constructor, while coupling
+raises `repeat_burst_timing_scid` `S9_gap` to **569 ms** against `null_scid`'s **463 ms** — a 23 % spread that
+per-profile measurement could not see. A self-test proves the benchmark's pool order equals
+`_assemble_arms`, and that the two stratified experiments do not run the generic route. The exact constructor and
+profile payloads and this module's own source identity are now bound into the deterministic configuration.
+
+Maps used for timing are TIMING-ONLY artifacts in a distinct namespace built from the canonical pool's reference
+positions; no reserved draw, calibration/evaluation seed, manifest population or persisted run.
 
 **The surrogate per-group hours are WITHDRAWN.** Measured against surrogate (`with_exemption`, hours):
 
 | group | K | surrogate | MEASURED | error |
 |---|---|---|---|---|
-| `G_full_phase_seam` | 45 | 6.68 | **13.82** | understated 2.1× |
-| `G_full_length_density` | 36 | 0.105 | **5.50** | understated **52×** |
-| `G_full_burst_timing` | 36 | 1.70 | **2.60** | understated 1.5× |
-| `G_full_class_mark` | 54 | 0.12 | **0.24** | understated 2× |
-| `G_full_run_size` | 9 | 1.66 | **0.04** | **overstated 41×** |
+| `G_full_phase_seam` | 45 | 6.68 | **14.01** | understated 2.1× |
+| `G_full_length_density` | 36 | 0.105 | **5.08** | understated **48×** |
+| `G_full_burst_timing` | 36 | 1.70 | **2.59** | understated 1.5× |
+| `G_full_class_mark` | 54 | 0.12 | **0.25** | understated 2× |
+| `G_full_run_size` | 9 | 1.66 | **0.06** | **overstated 28×** |
 | `G_bounded_support` | 12 | 0.03 | **0.04** | ≈ |
 
 The surrogate erred in BOTH directions because its per-item KS route mis-modelled the real estimators: `count_ks`
@@ -673,27 +688,47 @@ The surrogate erred in BOTH directions because its per-item KS route mis-modelle
 **support cardinality**, not with the sequence or cluster count. This is exactly the rebuild Pi rev-5 #6 required
 (`Σ_experiment Σ_cell measured_cost`), and it is why a surrogate forecast must not gate a job plan.
 
-**PROVISIONAL (Pi rev-22 blocking correction).** The benchmark drew every arm through the GENERIC
-`draw_arm(profile)` rather than the canonical `_multiscale` (structural-zero) and bounded-length (boundary)
-structured constructors, so it has not yet delivered the per-**stratum-constructor** measurement that was asked
-for. Event volume and support cardinality drive the expensive estimators, so the exact hours and job counts below
-must be remeasured on canonically assembled arms before any compute freeze. The QUALITATIVE findings stand
-(surrogate routing is invalid; streaming and rank hygiene are needed); the precise 13.82 h / 5.50 h and the 3/2
-job counts are **provisional**.
+**ONE group busts the cap; a second is MARGINAL.** At the 8 h cap with the required 1.5× margin,
+`G_full_phase_seam` needs **21.02 h** — over by 2.6× — so the rev-6 "per-group jobs each fit" claim stays
+**WITHDRAWN**. `G_full_length_density` now lands at **7.62 h**, i.e. it nominally fits but with only **1.0 %
+headroom**. Because these hours are environment-dependent and have moved ~5 % between reruns on this machine, a
+"fits" verdict inside that variance is not a safe classification: the benchmark therefore reports an explicit
+**MARGINAL** status for any group with less than 10 % cap headroom, and both `length_density` and the ratified
+3-shard `phase_seam` split fall into it. Cost is overwhelmingly permutation recompute (phase_seam: 99.9 %),
+concentrated in a few cells — SCID `S9_gap` is 2.6–3.2 h **per cell** and phase_seam contains four of them.
 
-**Two groups bust the cap.** At the 8 h cap with the required 1.5× margin
-(`G_full_phase_seam` 20.73 h, `G_full_length_density` 8.26 h), so a single per-group job is NOT sufficient and the
-rev-6 "per-group jobs each fit" claim is **WITHDRAWN**. Cost is overwhelmingly permutation recompute (phase_seam:
-49 676 s of 49 742 s = 99.9 %), concentrated in a few cells — SCID `S9_gap` at **473 ms/permutation** is 2.63 h
-**per cell**, and phase_seam contains four of them.
+**Split rule (normative; amended per Pi rev-22 #3).** The divisible unit is a **WHOLE CHECKPOINT BLOCK** (20
+blocks at `B=20000`), never `ceil(B/jobs)` replicates. A group whose single-job forecast exceeds `cap/margin` is
+split into the smallest number of **sequentially gated shards** such that
+`fixed_overhead + divisible·⌈n_blocks/jobs⌉/n_blocks` fits the budget, plus one final ranking/aggregation job.
+Pricing the worst shard at `⌈n_blocks/jobs⌉/n_blocks` rather than an equal fraction matters: the rev-22 equal-third
+figure of 6.92 h understated the executable 7/20-block maximum, exactly as Pi said. Fixed overhead (assemble +
+canonicalise + precompute) is repaid by every shard; the min-p ranking runs ONCE at the end over the assembled
+`E` matrix. `B=20000` still satisfies `B ≥ K_max/α_group = 8100`.
 
-**Split rule (normative).** A group whose single-job forecast exceeds `cap/margin` is split into the smallest
-number of **sequentially gated permutation-replicate jobs** such that `fixed_overhead + divisible/jobs` fits that
-budget, plus one final ranking/aggregation job. Fixed overhead (draw + canonicalise + precompute) is repaid by
-every split job; the min-p ranking runs ONCE at the end over the assembled `E` matrix. Stop-on-failure applies
-across a split exactly as it does across groups. Measured: `G_full_phase_seam` → **3 jobs @ 6.92 h** (with margin),
-`G_full_length_density` → **2 jobs @ 4.14 h**; the other four groups stay single-job. `B=20000` still satisfies the
-`B ≥ K_max/α_group = 8100` resolution rule.
+Every plan and self-test **proves an exact partition of `1..B`** — explicit inclusive per-shard replicate ranges,
+no gap, overlap, duplicate or extra replicate. The rev-22 check only asserted `jobs × ⌈B/jobs⌉ ≥ B`, which permits
+an extra replicate; `verify_block_partition` now rejects both an over-covering and an overlapping partition, and
+those rejections are themselves self-tested.
+
+A shard is an **integrity-gated block stage, not a scientific gate**: no within-group PASS/FAIL exists until final
+assembly, so "stop-on-failure" within a split means execution / identity / checkpoint failure only. Scientific
+stop-on-failure resumes at the complete group verdict.
+
+Measured allocations (`with_exemption`), reporting BOTH the ratified rule and a headroom-safe recommendation:
+
+| group | status | ratified (smallest that fits) | recommended (≥10 % headroom) |
+|---|---|---|---|
+| `G_full_phase_seam` | OVER cap | `[7,7,6]` @ **7.38 h** (5.6 % headroom) | **`[5,5,5,5]` @ 5.29 h (33.9 %)** |
+| `G_full_length_density` | MARGINAL | `[20]` @ **7.62 h** (1.0 % headroom) | **`[10,10]` @ 3.83 h (52.1 %)** |
+| `G_full_burst_timing` | fits | `[20]` @ 3.89 h (51.4 %) | `[20]` |
+| `G_full_class_mark` / `G_full_run_size` / `G_bounded_support` | fits | `[20]` @ ≤0.38 h | `[20]` |
+
+Pi's provisional `length/density 10+10` is **vindicated** — not because the raw forecast demands it (one shard
+nominally fits) but because one shard leaves 1 % headroom. Pi's provisional `phase/seam 7+7+6` is **not enough**:
+at three shards the worst shard retains only 5.6 % headroom, so **4 shards `[5,5,5,5]` is recommended**. The
+solver still implements the rule as ratified; the headroom-safe allocation is reported alongside it as a proposed
+amendment rather than substituted for it.
 
 **Checkpoint / persistence (normative).** Checkpoint unit = permutation-replicate block (1000 replicates, 20
 blocks/group). Block state = that block's columns of the per-cell discrepancy matrix `E[K, block]` ONLY (432 KB;
@@ -748,15 +783,19 @@ pooled-tau CONCEPT + exact ties +
 label-permutation-only + explicit equal-sequence replacement; stratum-preserving + independent product permutations;
 "exact registry/Δ/property artifacts must precede implementation."
 
-## Delivered (rev-22, Pi rev-9/rev-10/rev-12/rev-13/rev-18/rev-19-20 authorized dev-only scope — all tested)
-- **FULL per-group registered-scale benchmark + cap/checkpoint/persistence plan (rev-22, §9.1)** —
-  `scripts/oracle_realism_v3_registered_benchmark.py`, deterministic `config_identity` **`0f147205…`**, self-tests
-  pass. 74 measured `(profile, statistic)` costs at `N=8000`/arm; per-group forecast at `B=20000` for BOTH
-  variants; measured ranking / assignment / persistence stages; normative split, checkpoint and aggregate-only
-  persistence plans. Withdraws the surrogate per-group hours and the rev-6 "per-group jobs each fit" claim:
-  `G_full_phase_seam` 13.82 h and `G_full_length_density` 5.50 h exceed the 8 h cap with margin and need 3 and 2
-  sequentially gated jobs. The surrogate benchmark is unchanged and still reproduces its own
-  `config_identity` **`b1f97d1a…`**. No reviewed module modified; nothing drawn, populated or frozen.
+## Delivered (rev-23, Pi rev-9/rev-10/rev-12/rev-13/rev-18/rev-19-20/rev-22 authorized dev-only scope — all tested)
+- **FULL per-group registered-scale benchmark + cap/checkpoint/persistence plan (rev-22, REBUILT rev-23 on
+  canonical constructors, §9.1)** — `scripts/oracle_realism_v3_registered_benchmark.py`, deterministic
+  `config_identity` **`465e17f7…`**, self-tests pass. **194** measured `(experiment, statistic)` costs at
+  `N=8000`/arm on canonically assembled arms in `_assemble_arms` pool order; per-group forecast at `B=20000` for
+  BOTH variants; measured ranking / assignment / persistence stages; whole-block split with an exact `1..B`
+  partition proof, checkpoint and aggregate-only persistence plans; explicit MARGINAL status below 10 % cap
+  headroom. Withdraws the surrogate per-group hours and the rev-6 "per-group jobs each fit" claim:
+  `G_full_phase_seam` **14.01 h** is over cap (recommend 4 shards `[5,5,5,5]`) and `G_full_length_density`
+  **5.08 h** is MARGINAL at 1.0 % headroom (recommend `[10,10]`, vindicating Pi's provisional allocation). Binds
+  the exact constructor/profile payloads and the benchmark's own source identity. The surrogate benchmark is
+  unchanged and still reproduces its own `config_identity` **`b1f97d1a…`** — it binds cell routing and measured
+  volumes, not the registry quotas, so the boundary re-mint does not move it.
 - **Canonical boundary-short constructor (rev-22, §8.1)** — `scripts/oracle_realism_v3_constructors.py`,
   self-tests pass. Makes the declared `bounded_length_control` route executable (three disjoint length bands over
   `L∈[1,7]`), proves the `L≤7` structural bound and the S9 NE guarantee, makes `G_bounded_support` assemblable for
@@ -879,7 +918,8 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
   missing/extra/duplicate failing closed (Pi rev-7 #6). The final Δ-aligned exemption then needs a separately-
   authorized calibration/power battery using the frozen map (Pi rev-7 #7). *(This single bullet consolidates the
   previously duplicated RNG-manifest and map-set bullets — Pi rev-9 contract change.)*
-- **Pi rev-22 rulings 2–4 + the benchmark rebuild (NOT yet folded — the next dev increment):**
+- **Pi rev-22 rulings 2 and 4 (NOT yet folded — the next dev increment; rulings 1/3 and the benchmark
+  rebuild are DONE at rev-23):**
   1. **Ruling 2 — assignment RNG law.** Counter-addressable per-replicate derivation is adopted in principle, but
      the proposed `sha256(namespace|group|experiment|replicate_index)` **omits the issued assignment root seed**,
      so issuance would not select the stream. Needs a structured, domain-separated canonical payload
@@ -891,23 +931,21 @@ label-permutation-only + explicit equal-sequence replacement; stratum-preserving
      monolithic == arbitrary block order == split == resume bit-for-bit; exact index coverage; root/group/
      experiment/index domain separation; quota preservation; deterministic replay; duplicates accepted;
      malformed/out-of-range indices refused.
-  2. **Ruling 3 — whole-block splits.** Split by whole checkpoint blocks (20 at `B=20000`), provisionally
-     phase/seam `7+7+6` and length/density `10+10`; re-price the worst shard as `ceil(n_blocks/jobs)/n_blocks`
-     (the reported equal-third 6.92 h is not the executable 7/20 maximum). Every plan/self-test must prove an
-     EXACT partition of `1..B` — the current check only proves `jobs × ceil(B/jobs) ≥ B`, which permits an extra
-     replicate. A split shard is an **integrity-gated block stage, not a scientific gate**: stop-on-failure within
-     a split means execution/identity/checkpoint failure; scientific stop-on-failure resumes only after the
-     complete group verdict. Final assembly must bind/verify cell order, block range, assignment-law/root
-     identity, registry variant, map set, RNG fixture manifest, floor, `B`, `α`, group, code identities and
-     per-block content/assignment digests, refusing missing/overlapping/duplicated/foreign blocks; checkpoint `E`
-     is ephemeral and must never be synced as a result artifact.
+  2. **[DONE at rev-23] Ruling 3 — whole-block splits** (§9.1): whole checkpoint blocks, worst shard priced at
+     `⌈n_blocks/jobs⌉/n_blocks`, exact `1..B` partition proved and its violations self-tested, integrity-gated
+     shard semantics recorded. **Open sub-item:** the FINAL ASSEMBLY validator (bind/verify cell order, block
+     range, assignment-law/root identity, registry variant, map set, RNG fixture manifest, floor, `B`, `α`, group,
+     code identities and per-block content/assignment digests; refuse missing/overlapping/duplicated/foreign
+     blocks; keep checkpoint `E` ephemeral) is specified but NOT yet implemented — it needs ruling 2's
+     assignment-law identity to bind against.
   3. **Ruling 4 — streaming + sorted ranks (wanted).** Iterate by MC index, one mask per experiment, fill the
      whole `E[:,j]` column across cells, release; do not regenerate masks per cell. Move the differential proof
      into the trusted randomization module, refuse NaN/malformed/non-1D input, retain finite/`+inf`/tie/constant/
      all-NE semantics. Both re-mint engine/randomization source identities.
-  4. **Benchmark rebuild (blocks compute freeze).** Rebuild inputs through the exact canonical constructors and
-     `_assemble_arms` order, remeasure, reissue the environment-dependent forecast, and bind the exact
-     constructor/profile payloads and benchmark source identity into the deterministic configuration.
+  4. **[DONE at rev-23] Benchmark rebuild** — inputs now run through the exact canonical constructors in
+     `_assemble_arms` order, remeasured per EXPERIMENT (194 pairs), forecast reissued, and the exact
+     constructor/profile payloads plus the benchmark source identity bound into the deterministic configuration
+     (§9.1).
 - **Remaining manifest items before freeze review** — `profile_config_identity` must additionally bind the
   structural-zero **multiscale means / executable constructor + source identity / exact seed derivation** (it
   currently binds the base `PROFILES`, a route label and quotas); `_CONTENT_HASH_ALGO` and the union-set hash must
