@@ -175,6 +175,10 @@ def export_mean_token_rollouts(
 
     predicted: list[np.ndarray] = []
     observed: list[np.ndarray] = []
+    teacher_forced: list[np.ndarray] = []
+    # Teacher forcing is only meaningful for the RECURSIVE arm (a horizon-conditioned head takes the
+    # context latent, not the previous step). Without it the exposure gap is ABSENT, not zero.
+    teacher_forcing_available = str(autoreg_config["autoregression_mode"]) == "recursive"
     rows: list[dict[str, Any]] = []
     skipped_short_future = 0
     skipped_read_error = 0
@@ -233,11 +237,30 @@ def export_mean_token_rollouts(
                 if not kept:
                     continue
                 ctx_tensor = _pad(ctxs, device)
-                pred_batch = model.predict_rollout_from_context_ids(ctx_tensor, horizon_count).detach().cpu().numpy().astype(np.float16)
+                pred_t = model.predict_rollout_from_context_ids(ctx_tensor, horizon_count)   # FREE-RUNNING
+                pred_batch = pred_t.detach().cpu().numpy().astype(np.float16)
                 obs_steps = []
                 for h in range(horizon_count):
                     obs_steps.append(model.mean_embed(_pad(targets_by_h[h], device)))
-                obs_batch = torch.stack(obs_steps, dim=1).detach().cpu().numpy().astype(np.float16)
+                obs_t = torch.stack(obs_steps, dim=1)                                        # TRUE latents
+                obs_batch = obs_t.detach().cpu().numpy().astype(np.float16)
+
+                # TEACHER-FORCED rollout (Rung-2 sub-gate 1): step h is predicted from the TRUE latent at
+                # h-1 rather than from the model's own h-1 output, so the exposure gap
+                # g_h = d_self_free(h) - d_self_tf(h) isolates compounding self-conditioning error from
+                # one-step predictor error. Step 0 is predicted from the true CONTEXT latent in both arms,
+                # so g_0 is identically 0 by construction — asserted below as a harness invariant.
+                # Only defined for the recursive arm: a horizon-conditioned head does not consume a
+                # previous-step latent, so there is nothing to teacher-force.
+                if teacher_forcing_available:
+                    tf_steps = [pred_t[:, 0, :]]                                  # h=0 == free-running
+                    for h in range(1, horizon_count):
+                        tf_steps.append(model.predict_rollout_from_latent(obs_t[:, h - 1, :], 1)[:, 0, :])
+                    tf_t = torch.stack(tf_steps, dim=1)
+                    if not torch.allclose(tf_t[:, 0, :], pred_t[:, 0, :]):
+                        raise RuntimeError("teacher-forced step 0 must equal free-running step 0 "
+                                           "(both start from the true context latent)")
+                    teacher_forced.append(tf_t.detach().cpu().numpy().astype(np.float16))
                 row_start = len(rows)
                 predicted.append(pred_batch)
                 observed.append(obs_batch)
@@ -253,12 +276,17 @@ def export_mean_token_rollouts(
     else:
         pred_arr = np.zeros((0, horizon_count, dim), dtype=np.float16)
         obs_arr = np.zeros((0, horizon_count, dim), dtype=np.float16)
+    tf_arr = (np.concatenate(teacher_forced, axis=0) if teacher_forced
+              else np.zeros((0, horizon_count, dim), dtype=np.float16))
 
     pred_path = outdir / "predicted-rollout.fp16.npy"
     obs_path = outdir / "observed-rollout.fp16.npy"
     index_path = outdir / "rollout-index.local.jsonl"
     np.save(pred_path, pred_arr)
     np.save(obs_path, obs_arr)
+    tf_path = outdir / "teacher-forced-rollout.fp16.npy"
+    if teacher_forcing_available:
+        np.save(tf_path, tf_arr)
     index_path.write_text("".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows))
 
     splits_out: dict[str, int] = {}
@@ -279,6 +307,14 @@ def export_mean_token_rollouts(
         "splits": splits_out,
         "target_types": target_types_out,
         "embedding_dim": int(dim),
+        # Downstream MUST be able to tell "gap is zero" from "gap was never produced".
+        "teacher_forcing_available": bool(teacher_forcing_available),
+        "teacher_forced_rows": int(tf_arr.shape[0]),
+        "teacher_forcing_note": ("free-running vs teacher-forced enables the exposure gap; step 0 is "
+                                 "identical in both arms by construction"
+                                 if teacher_forcing_available else
+                                 "NOT produced: teacher forcing is undefined for a non-recursive arm, so "
+                                 "the exposure gap is ABSENT and the recursive signature is NOT_EVALUABLE"),
         "autoregression_mode": autoreg_config["autoregression_mode"],
         "horizon_conditioning": autoreg_config["horizon_conditioning"],
         "horizon_count_trained": int(autoreg_config["horizon_count_trained"]),

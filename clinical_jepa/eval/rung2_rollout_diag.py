@@ -97,14 +97,24 @@ def perturbation_top_singular(context_latents: np.ndarray, rolled: np.ndarray) -
 
 
 def classify_signature(*, dself_over_nn_point: float, exposure_gap_slope_lo: float,
-                       dself_slope_hi: float, transition_evaluable: bool) -> str:
+                       dself_slope_hi: float, transition_evaluable: bool,
+                       exposure_gap_available: bool = True) -> str:
     """Frozen-margin categorical signature (Pi #2: only emitted WITH the frozen numbers).
-    Returns a continuous-only sentinel if the recursive path is NOT_EVALUABLE."""
+    Returns a continuous-only sentinel if the recursive path is NOT_EVALUABLE.
+
+    `exposure_gap_available` guards a SILENT FAILURE MODE. `DRIFT_DOMINANT` is the only branch that
+    consumes the exposure gap, so a caller with no teacher-forced rollouts passes
+    `exposure_gap_slope_lo = 0.0`, that branch can never fire, and the classifier falls through to
+    `HEALTHY` — reporting a healthy rollout on a genuinely drifting one, with nothing raised. An absent
+    input must not be scored as evidence of absence: with the gap unavailable, only the COLLAPSE branch
+    (which does not depend on it) may still be asserted; otherwise the signature is NOT_EVALUABLE."""
     from clinical_jepa.eval.rung2_contract import NOT_EVALUABLE
     if not transition_evaluable:
         return NOT_EVALUABLE                                     # no recursive semantics -> no signature
     if dself_over_nn_point >= SIG_COLLAPSE_DSELF_OVER_DNN:
         return "COLLAPSE_DOMINANT"                               # own truth no better than nearest wrong
+    if not exposure_gap_available:
+        return NOT_EVALUABLE                                     # cannot distinguish DRIFT from HEALTHY
     if exposure_gap_slope_lo > EXPOSURE_GAP_MARGIN and dself_slope_hi > DRIFT_SLOPE_TAU:
         return "DRIFT_DOMINANT"
     return "HEALTHY"

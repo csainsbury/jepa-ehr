@@ -56,9 +56,18 @@ def recursive_transition_metrics(checkpoint_meta: dict[str, Any] | None, *,
         return {"path": "recursive", "source": source, "window_days": float(window_days),
                 "status": NOT_EVALUABLE,
                 "reason": "checkpoint metadata does not prove fixed-width-transition training"}
-    gap = RD.exposure_gap(dself_free, dself_tf) if (dself_free is not None and dself_tf is not None) else None
+    # The exposure gap needs BOTH free-running and teacher-forced same-instance drift. Without the
+    # teacher-forced arm the gap is not "zero", it is ABSENT — and absent must not be scored as absence
+    # of drift (that silently reports HEALTHY on a drifting rollout).
+    have_gap = dself_free is not None and dself_tf is not None
+    gap = RD.exposure_gap(dself_free, dself_tf) if have_gap else None
     sig = RD.classify_signature(dself_over_nn_point=float(dself_over_nn_point or 0.0),
                                 exposure_gap_slope_lo=exposure_gap_slope_lo, dself_slope_hi=dself_slope_hi,
-                                transition_evaluable=True)
-    return {"path": "recursive", "source": source, "window_days": float(window_days), "status": "evaluable",
-            "exposure_gap_mean": (float(np.mean(gap)) if gap is not None else None), "signature": sig}
+                                transition_evaluable=True, exposure_gap_available=have_gap)
+    out = {"path": "recursive", "source": source, "window_days": float(window_days), "status": "evaluable",
+           "exposure_gap_available": bool(have_gap),
+           "exposure_gap_mean": (float(np.mean(gap)) if gap is not None else None), "signature": sig}
+    if not have_gap:
+        out["reason"] = ("no teacher-forced rollout: the exposure gap is unavailable, so DRIFT_DOMINANT "
+                         "cannot be distinguished from HEALTHY")
+    return out
