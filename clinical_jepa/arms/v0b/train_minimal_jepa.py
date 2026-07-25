@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from clinical_jepa.eval.rung2_contract import (
+from clinical_jepa.eval.rung2_transition_regime import (
     TRANSITION_META_KEY, is_fixed_width_transition_training,
 )
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json

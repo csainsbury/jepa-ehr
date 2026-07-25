@@ -19,8 +19,10 @@ from clinical_jepa.eval import rung2_rollout_diag as RD
 from clinical_jepa.eval import rung2_rollout_export as RE
 from clinical_jepa.eval.rung2_contract import NOT_EVALUABLE, TRANSITION_META_KEY
 
-RECURSIVE_META = {"autoregression_mode": "recursive", "horizon_count_trained": 3,
-                  "horizon_stride_tokens": 8, "max_target_tokens": 8}
+# `recursive_path_evaluable` is FLAG-ONLY by design (it lives in the frozen contract); the flag itself is
+# DERIVED at write time by the trainer via rung2_transition_regime.
+RECURSIVE_META = {TRANSITION_META_KEY: True, "autoregression_mode": "recursive",
+                  "horizon_count_trained": 3, "horizon_stride_tokens": 8, "max_target_tokens": 8}
 
 
 class TestAbsentExposureGapRefuses(unittest.TestCase):

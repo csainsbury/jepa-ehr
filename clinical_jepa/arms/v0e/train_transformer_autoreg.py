@@ -12,7 +12,7 @@ import numpy as np
 from clinical_jepa.arms.v0b.train_minimal_jepa import effective_rank
 from clinical_jepa.arms.v0e.transformer_autoreg import TARGET_ENCODER_MODES, TransformerAutoregConfig, TransformerHorizonAutoregressor, checkpoint_metadata
 from clinical_jepa.targets.block_spans import is_censored, is_empty_target
-from clinical_jepa.eval.rung2_contract import (
+from clinical_jepa.eval.rung2_transition_regime import (
     TRANSITION_META_KEY, is_fixed_width_transition_training,
 )
 from clinical_jepa.utils import ensure_dir, load_yaml, now_utc, read_json, require_pass_leakage, write_json

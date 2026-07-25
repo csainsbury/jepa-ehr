@@ -32,6 +32,7 @@ from clinical_jepa.eval import rung2_rollout_export as RE
 from clinical_jepa.eval.rung2_contract import (
     NOT_EVALUABLE, SIG_COLLAPSE_DSELF_OVER_DNN, TRANSITION_META_KEY, validate_direct_path_row,
 )
+from clinical_jepa.eval.rung2_transition_regime import is_fixed_width_transition_training
 
 SEED = 20260725
 N_PATIENTS, D = 240, 64
@@ -53,30 +54,38 @@ def synth_rollouts(rng):
 
 def check_path_gating():
     """Existing checkpoints must NOT unlock the recursive path; a real transition config must."""
-    cases = {
+    # TWO separate questions, deliberately kept apart:
+    #  * does the DERIVATION qualify this training config?  (rung2_transition_regime, at write time)
+    #  * does the frozen CONTRACT gate open?                (flag-only, at read time)
+    configs = {
         "v0B default (horizon_count=1)": (
-            {"autoregression_mode": "recursive", "horizon_count_trained": 1,
-             "horizon_stride_tokens": 32, "max_target_tokens": 32}, False),
+            dict(autoregression_mode="recursive", horizon_count=1,
+                 horizon_stride_tokens=32, max_target_tokens=32), False),
         "encode-empty (pinned to 1)": (
-            {"autoregression_mode": "recursive", "encode_empty": True, "horizon_count_trained": 1,
-             "horizon_stride_tokens": 32, "max_target_tokens": 32}, False),
+            dict(autoregression_mode="recursive", horizon_count=1, horizon_stride_tokens=32,
+                 max_target_tokens=32, encode_empty=True), False),
         "horizon-conditioned mode": (
-            {"autoregression_mode": "horizon_conditioned", "horizon_count_trained": 4,
-             "horizon_stride_tokens": 32, "max_target_tokens": 32}, False),
+            dict(autoregression_mode="horizon_conditioned", horizon_count=4,
+                 horizon_stride_tokens=32, max_target_tokens=32), False),
         "OVERLAPPING windows (stride<width)": (
-            {"autoregression_mode": "recursive", "horizon_count_trained": 4,
-             "horizon_stride_tokens": 16, "max_target_tokens": 32}, False),
+            dict(autoregression_mode="recursive", horizon_count=4,
+                 horizon_stride_tokens=16, max_target_tokens=32), False),
         "GAPPED windows (stride>width)": (
-            {"autoregression_mode": "recursive", "horizon_count_trained": 4,
-             "horizon_stride_tokens": 64, "max_target_tokens": 32}, False),
-        "no metadata at all": ({}, False),
-        "qualifying, DERIVED from config": (
-            {"autoregression_mode": "recursive", "horizon_count_trained": 4,
-             "horizon_stride_tokens": 32, "max_target_tokens": 32}, True),
-        "qualifying, flag STAMPED": ({TRANSITION_META_KEY: True}, True),
+            dict(autoregression_mode="recursive", horizon_count=4,
+                 horizon_stride_tokens=64, max_target_tokens=32), False),
+        "QUALIFYING recursive transition": (
+            dict(autoregression_mode="recursive", horizon_count=4,
+                 horizon_stride_tokens=32, max_target_tokens=32), True),
     }
     rows, ok = [], True
-    for label, (meta, want) in cases.items():
+    for label, (cfg, want) in configs.items():
+        got = is_fixed_width_transition_training(**cfg)
+        ok &= (got == want)
+        rows.append((f"derive: {label}", want, got, got == want))
+    # the frozen contract gate is FLAG-ONLY and fails closed without it
+    for label, meta, want in (("gate: flag stamped True", {TRANSITION_META_KEY: True}, True),
+                              ("gate: flag stamped False", {TRANSITION_META_KEY: False}, False),
+                              ("gate: no flag at all", {}, False)):
         got = RE.plan_paths(meta)["recursive"]
         ok &= (got == want)
         rows.append((label, want, got, got == want))
@@ -102,7 +111,8 @@ def check_fail_hard(rows):
 
 def check_recursive(rng):
     """The recursive path emits the exposure gap + signature, and the signature tracks planted regimes."""
-    meta = {"autoregression_mode": "recursive", "horizon_count_trained": 4,
+    # flag-only gate: a qualifying checkpoint carries the flag the TRAINER derived at write time
+    meta = {TRANSITION_META_KEY: True, "autoregression_mode": "recursive", "horizon_count_trained": 4,
             "horizon_stride_tokens": 32, "max_target_tokens": 32}
     n = N_PATIENTS
     regimes = {
@@ -127,8 +137,9 @@ def check_recursive(rng):
         ok &= (got == want)
         out.append((want, got, float(np.mean(RD.exposure_gap(r["free"], r["tf"]))), got == want))
     # and a NON-qualifying checkpoint must return NOT_EVALUABLE with a reason, never a signature
-    ne = RE.recursive_transition_metrics({"autoregression_mode": "recursive", "horizon_count_trained": 1,
-                                          "horizon_stride_tokens": 32, "max_target_tokens": 32},
+    ne = RE.recursive_transition_metrics({TRANSITION_META_KEY: False, "autoregression_mode": "recursive",
+                                          "horizon_count_trained": 1, "horizon_stride_tokens": 32,
+                                          "max_target_tokens": 32},
                                          source="synthetic", window_days=1.0)
     ne_ok = ne.get("status") == NOT_EVALUABLE and "signature" not in ne
     return out, ok, ne_ok
@@ -139,9 +150,9 @@ def main():
     pred_by_W, true_by_W, pats_by_W = synth_rollouts(rng)
 
     gate_rows, gate_ok = check_path_gating()
-    print("1. PATH GATING — which checkpoints unlock the recursive-transition path")
+    print("1. PATH GATING — derivation (write time) and the frozen flag-only gate (read time)")
     for label, want, got, good in gate_rows:
-        print(f"   {label:<38} expect={str(want):<5} got={str(got):<5} {'ok' if good else 'MISMATCH'}")
+        print(f"   {label:<45} expect={str(want):<5} got={str(got):<5} {'ok' if good else 'MISMATCH'}")
 
     direct_rows, monotone = check_direct_path(pred_by_W, true_by_W, pats_by_W)
     print("\n2. DIRECT-HORIZON PATH — real numbers, planted decay must be recovered")
