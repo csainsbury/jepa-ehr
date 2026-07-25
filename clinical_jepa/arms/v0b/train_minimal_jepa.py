@@ -330,11 +330,15 @@ def _transition_flag(args, *, encode_empty: bool) -> bool:
     Without this on the checkpoint, `recursive_path_evaluable` returns False and the recursive-transition
     diagnostics are NOT_EVALUABLE — so a run that IS in the right regime would still be unusable. Derived,
     never asserted."""
+    # The encode-empty entry point is called with a partial Namespace (it pins horizon_count to 1 and
+    # never takes the arg), so every field is read defensively — a metadata stamp must not be able to
+    # crash a training run.
+    max_target = int(getattr(args, "max_target_tokens", 0) or 0)
     return is_fixed_width_transition_training(
-        autoregression_mode=args.autoregression_mode,
-        horizon_count=args.horizon_count,
-        horizon_stride_tokens=int(args.horizon_stride_tokens or args.max_target_tokens),
-        max_target_tokens=int(args.max_target_tokens),
+        autoregression_mode=getattr(args, "autoregression_mode", None),
+        horizon_count=getattr(args, "horizon_count", 1),
+        horizon_stride_tokens=int(getattr(args, "horizon_stride_tokens", 0) or max_target),
+        max_target_tokens=max_target,
         encode_empty=encode_empty)
 
 
@@ -496,7 +500,7 @@ def _encode_empty_run(args, arms, dataset, targets, outdir):
         "encode_empty": True, "max_horizons": 1,
         # encode-empty pins horizon_count to 1, so it can never be a fixed-width TRANSITION regime.
         # Stamped explicitly so the recursive path refuses on substance, not on a missing field.
-        "horizon_count_trained": 1, "max_target_tokens": int(args.max_target_tokens),
+        "horizon_count_trained": 1, "max_target_tokens": int(getattr(args, "max_target_tokens", 0) or 0),
         TRANSITION_META_KEY: _transition_flag(args, encode_empty=True),
     }, ckpt_path)
 
@@ -506,7 +510,8 @@ def _encode_empty_run(args, arms, dataset, targets, outdir):
         "created_utc": now_utc(),
         "dry_run": False,
         "architecture": {**architecture, "encode_empty": True, "empty_fraction_cap": cap,
-                         "horizon_count_trained": 1, "max_target_tokens": int(args.max_target_tokens),
+                         "horizon_count_trained": 1,
+                         "max_target_tokens": int(getattr(args, "max_target_tokens", 0) or 0),
                          TRANSITION_META_KEY: _transition_flag(args, encode_empty=True)},
         "n_synthetic_examples": 0,
         "n_real_examples_loaded": len(examples),
