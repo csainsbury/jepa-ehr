@@ -19,6 +19,26 @@ sub-1.0 ceiling means anything:
   * CHANCE — a shuffled pairing, the floor.
 
 DEV only, TEST untouched, aggregate-only. Run: PYTHONPATH=<repo> /usr/bin/python3 scripts/rung2_honest_ceiling.py --help
+
+CONFOUNDER — READ BEFORE REUSING THE 'SCID HAS NO OUT-OF-SAMPLE HEADROOM' READING (MODEL 1.148 VS CEILING 1.134) (added after the target-definition probe).
+
+Every result here was computed with an eligibility rule of "the row must have >= 32 future tokens". That
+rule is a SELECTION on how much sequence remains, and it dominates the outcome. A later control varied only
+that rule, holding the target definition, model, and metric identical:
+
+    rows needing >=  32 future tokens : SCID n=1722, latent_next32 ceiling 1.134  (fails the <1.0 bar)
+    rows needing >= 256 future tokens : SCID n=3775, latent_next32 ceiling 0.824  (clears it)
+
+The ambient normaliser FELL (0.212 -> 0.165) across those samples, so the denominator got harder and the
+ratio still improved — the gain is real, not a normalisation artefact.
+
+Consequence: this script's internal logic is sound (it varies one component while holding the rest fixed),
+and its WITHIN-RUN comparisons remain valid, because all arms share one sample. But its absolute SCID
+numbers, and any "hypothesis ruled out for SCID" reading built on them, are SAMPLE-SPECIFIC — they describe
+the short-future subset, where prediction is genuinely harder. They are NOT evidence that the component
+under test is irrelevant in general.
+
+Re-running under a matched, longer-future eligibility rule is the proper fix and HAS NOT been done.
 """
 from __future__ import annotations
 
