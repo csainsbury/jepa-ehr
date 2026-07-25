@@ -41,8 +41,14 @@ def _ridge(X, Y, lam, Xe):
     return _norm(Xe @ np.linalg.solve(A, X.T @ Y))
 
 
-def held_out_ceiling(ctx, tgt, rng, *, rff_dim=256, lam=1e-3, folds=4):
-    """K-fold held-out fit for every family, plus persistence and chance. All ratios are vs ambient NN."""
+def held_out_ceiling(ctx, tgt, rng, *, rff_dim=256, lam=1e-3, folds=4, persistence_pred=None):
+    """K-fold held-out fit for every family, plus persistence and chance. All ratios are vs ambient NN.
+
+    `persistence_pred` must live in the TARGET space. When context and target share a space (mean pooling)
+    the context itself is the natural persistence prediction and is used by default. When they do not — the
+    order targets are 280/4096/4224-dim against a 256-dim context — persistence is undefined across spaces
+    and the caller must supply a same-space analogue (e.g. the order target built from the context's
+    trailing tokens), or it is reported as not-applicable rather than silently skipped."""
     c, t = _norm(ctx), _norm(tgt)
     n, d = c.shape
     amb = ambient_true_nn_distance(tgt, np.arange(n))
@@ -63,13 +69,33 @@ def held_out_ceiling(ctx, tgt, rng, *, rff_dim=256, lam=1e-3, folds=4):
         nb = np.argsort(-sims, axis=1)[:, :5]
         acc["knn5_held_out"].append(cos_dist(_norm(t[tr][nb].mean(axis=1)), t[te]))
     out = {k: float(np.mean(np.concatenate(v))) for k, v in acc.items()}
-    out["persistence_no_fit"] = float(np.mean(cos_dist(c, t)))   # predict target = context, unfitted
+    if persistence_pred is not None:
+        out["persistence_no_fit"] = float(np.mean(cos_dist(_norm(persistence_pred), t)))
+    elif c.shape[1] == t.shape[1]:
+        out["persistence_no_fit"] = float(np.mean(cos_dist(c, t)))   # same space: target = context
+    # else: omitted — undefined across differing spaces; surfaced as persistence_ratio=None below
     out["chance_shuffled"] = float(np.mean(cos_dist(t[rng.permutation(n)], t)))
+    # DEGENERACY GUARD. The ratio is only comparable across target spaces if no space is dominated by a
+    # component shared by every instance. T3 concatenates a DETERMINISTIC rank code identical for all
+    # sequences; with near-orthogonal random token embeddings that constant dominates the cosine geometry,
+    # the ambient NN distance collapses (0.65 -> 0.13) and the ratio stops measuring predictability. Two
+    # symptoms are recorded so a degenerate space cannot be read as a good one.
+    shared = float(np.linalg.norm(t.mean(axis=0)))               # 0 = no common direction, 1 = all identical
     ratios = {k: round(v / max(amb, 1e-9), 4) for k, v in out.items()}
+    chance_r = ratios["chance_shuffled"]
+    degenerate = bool(shared > 0.80 or chance_r < 2.0 and amb < 0.20)
     best = min(("linear_held_out", "rff_held_out", "knn5_held_out"), key=lambda k: ratios[k])
     return {"ambient_nn": round(float(amb), 4), "n": int(n), "rff_features": int(rff_dim),
             "ratios": ratios, "best_fitted_family": best, "best_fitted_ratio": ratios[best],
-            "persistence_ratio": ratios["persistence_no_fit"], "chance_ratio": ratios["chance_shuffled"]}
+            "persistence_ratio": ratios.get("persistence_no_fit"),
+            "persistence_applicable": bool("persistence_no_fit" in ratios),
+            "chance_ratio": ratios["chance_shuffled"],
+            "shared_component_norm": round(shared, 4),
+            "degenerate_geometry": degenerate,
+            "degeneracy_note": ("OK" if not degenerate else
+                                "DEGENERATE — a component shared by all instances dominates this target "
+                                "space (ambient NN collapsed and/or chance range collapsed); the ratio is "
+                                "NOT comparable with other representations and must not be read as skill")}
 
 
 def main() -> int:
