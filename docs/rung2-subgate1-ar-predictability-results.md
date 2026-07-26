@@ -26,9 +26,24 @@ between them is **autoregressive**.
    the events needed are already inside the block that is predictable. **The entire remaining difficulty is
    the cut point**, which is a timing problem — sub-gate 4's continuous-time head, not a bigger encoder.
 
-The single most important mechanical finding: **mean pooling cannot express a temporal prefix.** Retaining
-per-event identity and relative time moves SCID from 1.433 (fails) to 0.944 (clears) on identical
-information.
+4. **The cut point is now built and measured.** A distributional timing head — per-event
+   *P(inside the horizon)* rather than a boundary index — composes with the true event block to reach
+   **0.269 (MIMIC)** and **0.717 (SCID)**, beating the contract's required rate-only baseline in both cases.
+   The cut, not the content, is the binding constraint.
+
+Two mechanical findings carry the most weight:
+
+- **Mean pooling cannot express a temporal prefix.** Retaining per-event identity and relative time moves
+  SCID from 1.433 (fails) to 0.944 (clears) on identical information.
+- **The cut should be a probability per event, not a boundary index.** Soft weighting beats a hard cut
+  0.970 → **0.717** for SCID — the largest single improvement in this work. With only ~4 events in a 30-day
+  window a hard cut off by one is a 25 % content error, whereas soft weighting degrades gracefully.
+
+**What is still missing is architectural, not a matter of tuning.** Every content arm below uses the **true
+token block**. Cutting at an event boundary requires event-level predictions, and a JEPA emitting a pooled
+latent *cannot be cut that way*. So the validated route needs a **token-level generator plus a timing
+head** — not latent rollout followed by a cut. Rung 1 already rejected frozen per-instance count/order/timing
+fidelity for the mean-pooled latent, so that generator does not exist here yet.
 
 Every number below is `d_self / ambient_NN`: the prediction's cosine distance to its own target, divided by
 the distance to the nearest *other* sequence's target. **< 1.0 clears the bar** — the prediction is closer to
@@ -230,6 +245,43 @@ excludes multi-step compounding (SCID's exposure gap grew 0.049 → 0.099 over f
 timing-preserved arm caps at 32 events, so K = 64/128 rows are truncated and the flatness partly reflects that
 cap. SCID's 0.944 only just clears.
 
+## The cut-point head
+
+The decomposition's missing component, built in two forms.
+
+**Point estimate** (ridge on log-cumulative-days → boundary index). Cutting the true block at the *true*
+boundary reproduces the target exactly (0.000), so all degradation is cut error:
+
+| | MIMIC (1 d, K=32) | SCID (30 d, K=32) |
+|---|---|---|
+| true cut, median events in horizon | 30 of 32 | 4 of 32 |
+| composed — head cut | 0.316 | 0.974 |
+| composed — rate-only | 0.304 | 1.094 |
+| beats rate-only | ✗ | ✓ |
+
+MIMIC's failure there was **a flaw in the probe, not the head**: at K=32 a 1-day horizon swallows 30 of 32
+events, so "take almost everything" is already correct and the head could add nothing.
+
+**Distributional** — per-position `P(event j inside [t_query, t_query+H))`, with K chosen per source so the
+cut falls *inside* the block (MIMIC K=128, cut at 28 % of the block; SCID K=32, cut at 12 %):
+
+| | MIMIC (1 d, K=128) | SCID (30 d, K=32) |
+|---|---|---|
+| composed — true cut | 0.000 | 0.000 |
+| composed — **head soft** | **0.269** | **0.717** |
+| composed — head hard | 0.348 | 0.970 |
+| composed — rate-only soft | 0.279 | 0.766 |
+| beats rate-only | ✓ | ✓ |
+| ECE: head / rate-only | 0.0065 / 0.0029 | 0.0186 / 0.0218 |
+
+Both sources now beat the contract's required baseline, and **soft weighting is the material gain**
+(SCID 0.970 → 0.717).
+
+Honest limits: the margins over rate-only are **thin** (0.269 vs 0.279; 0.717 vs 0.766) — real but modest
+skill. Calibration is mixed: SCID's head is better calibrated than rate-only and better on count error
+(2.24 vs 2.74 events), but MIMIC's is *worse* calibrated (0.0065 vs 0.0029) while still winning on content —
+right shape, slightly overconfident. Gate 4A would require that fixed.
+
 ## Scope and limits
 
 - **DEV only; TEST sealed.** NOMINATE-only: on real dev the ceiling of any decision is nomination, never
@@ -240,8 +292,11 @@ cap. SCID's 0.944 only just clears.
 - Ratio > 1.0 does not mean "no information": SCID's chance arm is 3.994 against a model at 0.817.
 - Wall-clock results are for **T0 event-count-extracted blocks re-cut by time**; clinically-derived endpoints
   (MACE and similar) remain untested.
-- The AR decomposition is validated as a **route**, not as a working 30-day predictor: no probe here composes
-  event-block prediction with a learned cut, and none includes multi-step compounding.
+- The AR decomposition is validated as a **route**, not a working 30-day predictor. Every content arm uses the
+  **true token block**, so nothing here composes *predicted* content with the learned cut, and nothing
+  includes multi-step compounding (SCID's exposure gap grew 0.049 → 0.099 over four steps).
+- The route requires a **token-level generator**. A pooled-latent JEPA cannot be cut at an event boundary, and
+  Rung 1 rejected per-instance count/order/timing fidelity for that latent. This is the principal open gap.
 - The envelope grid uses a ≥384-token eligibility rule, which re-selects the longest sequences; its absolute
   values are comparable *within* the grid only, not against the ≥256 runs above.
 - The sweep uses linear ridge, justified because RFF beat it by only 0.001–0.004 in the validated
@@ -254,6 +309,8 @@ scripts/rung2_train_fitted_ceiling.py        # the headline ceiling (all guards 
 scripts/rung2_horizon_granularity_sweep.py   # the envelope grid + the fine offset sweep (--windows/--offsets)
 scripts/rung2_wallclock_target_ceiling.py    # direct wall-clock targets (per-source Rung-0 horizons)
 scripts/rung2_ar_decomposition_probe.py      # span / coverage / oracle-content, incl. the timing-preserved arm
+scripts/rung2_cut_point_head.py              # point-estimate cut (boundary index) + rate-only baseline
+scripts/rung2_distributional_cut_head.py     # distributional cut: per-event P(inside), soft vs hard, ECE
 scripts/rung2_target_definition_ceiling.py   # horizon / granularity effects + the confounder control
 scripts/rung2_order_target_ceiling.py        # order targets (carries a confounder banner)
 scripts/rung2_context_encoder_ceiling.py     # encoder arms (carries a confounder banner)
