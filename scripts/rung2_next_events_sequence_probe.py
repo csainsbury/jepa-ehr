@@ -49,6 +49,10 @@ from scripts.rung2_train_fitted_ceiling import _norm
 # groups. Predicting position 1 and position 30 are different problems and pooling them hides the decay.
 BUCKETS = ((0, 1), (1, 2), (2, 3), (3, 4), (4, 8), (8, 16), (16, 32))
 
+# Minimum interval log-score gain (nats per interval) that counts as predicting the intervals at all. The
+# first K=32 run produced "beats_marginal" at 0.004 nats, which is a sign test on noise, not timing skill.
+MATERIAL_INTERVAL_NATS = 0.05
+
 
 def _read_rows(target_blocks, split, *, K, min_future, max_ctx, max_rows, seed):
     """Context ids + the next K (type, inter-arrival) pairs, with END marks past the sequence end."""
@@ -273,7 +277,10 @@ def _interval_arm(Ftr, rtr, Dtr, Fde, rde, Dde, *, ridge):
             "nats_gained_per_interval": float(base_ll - head_ll),
             "head_mae_log1p_days": abs_err(ide, yde, head_de),
             "marginal_mae_log1p_days": abs_err(ide, yde, const),
-            "beats_marginal": bool(head_ll < base_ll)}
+            "beats_marginal": bool(head_ll < base_ll),
+            # Sign alone is too generous: at 4,000 dev rows a 0.004-nat edge is noise dressed as a result.
+            # MATERIAL_INTERVAL_NATS is the threshold the verdict uses.
+            "materially_beats_marginal": bool(base_ll - head_ll >= MATERIAL_INTERVAL_NATS)}
 
 
 def main() -> int:
@@ -419,13 +426,17 @@ def main() -> int:
         unconv = [k for k, v in b.items() if not (v.get("fit") or {}).get("converged")]
         content = [k for k, v in b.items() if v.get("beats_both_baselines")]
         order = [k for k, v in b.items() if v.get("order_information_detected")]
-        timing = [k for k, v in b.items() if (v.get("interval") or {}).get("beats_marginal")]
+        timing = [k for k, v in b.items()
+                  if (v.get("interval") or {}).get("materially_beats_marginal")]
         out["verdict"][src] = {
             "content_beats_both_baselines_at": content,
             "order_information_at": order,
-            "intervals_beat_marginal_at": timing,
-            "all_three_at": sorted(set(content) & set(order) & set(timing)),
+            "intervals_materially_beat_marginal_at": timing,
+            "all_three_at": sorted((set(content) & set(order) & set(timing)) - set(unconv)),
             "UNCONVERGED_not_interpretable_at": unconv,
+            "note": ("content_/order_ lists are raw comparisons; an unconverged fit biases them DOWNWARD "
+                     "and they are excluded from all_three_at. Interval arm is a closed-form ridge and is "
+                     "unaffected by softmax convergence."),
         }
 
     text = json.dumps(out, indent=2, sort_keys=True)
