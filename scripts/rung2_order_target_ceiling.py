@@ -65,6 +65,10 @@ def main() -> int:
     ap.add_argument("--max-blocks", type=int, default=6000)
     ap.add_argument("--max-context-tokens", type=int, default=128)
     ap.add_argument("--target-window-events", type=int, default=32)
+    ap.add_argument("--min-future-tokens", type=int, default=0,
+                    help="require this many future tokens per row (0 = just the target window). Set it to "
+                         "match another probe's eligibility: the rule is a SELECTION on how much sequence "
+                         "remains and it dominates the result (>=32 vs >=256 flips SCID 1.134 -> 0.824).")
     ap.add_argument("--seed", type=int, default=20260725)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
@@ -91,7 +95,8 @@ def main() -> int:
                 ids = cache[p][str(b["sequence_group"])]["token_ids"][:]
                 c0, c1 = max(0, int(b.get("context_start_ref", 0))), int(b["context_end_ref"])
                 t0 = int(b["target_start_ref"])
-                if c1 < c0 or t0 + args.target_window_events > len(ids):
+                need = max(int(args.target_window_events), int(args.min_future_tokens))
+                if c1 < c0 or t0 + need > len(ids):
                     continue
                 ctx = np.asarray(ids[c0:c1 + 1][-args.max_context_tokens:], dtype=np.int64)
                 if len(ctx) == 0:

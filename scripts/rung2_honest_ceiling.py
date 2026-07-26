@@ -126,6 +126,10 @@ def main() -> int:
     ap.add_argument("--max-blocks", type=int, default=6000)
     ap.add_argument("--max-context-tokens", type=int, default=128)
     ap.add_argument("--target-window-events", type=int, default=32)
+    ap.add_argument("--min-future-tokens", type=int, default=0,
+                    help="require this many future tokens per row (0 = just the target window). Set it to "
+                         "match another probe's eligibility: the rule is a SELECTION on how much sequence "
+                         "remains and it dominates the result (>=32 vs >=256 flips SCID 1.134 -> 0.824).")
     ap.add_argument("--seed", type=int, default=20260725)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
@@ -152,7 +156,8 @@ def main() -> int:
                 ids = cache[p][str(b["sequence_group"])]["token_ids"][:]
                 c0, c1 = max(0, int(b.get("context_start_ref", 0))), int(b["context_end_ref"])
                 t0 = int(b["target_start_ref"])
-                if c1 < c0 or t0 + args.target_window_events > len(ids):
+                need = max(int(args.target_window_events), int(args.min_future_tokens))
+                if c1 < c0 or t0 + need > len(ids):
                     continue
                 ctx = np.asarray(ids[c0:c1 + 1][-args.max_context_tokens:], dtype=np.int64)
                 if len(ctx) == 0:
@@ -196,11 +201,25 @@ def main() -> int:
         amb = ambient_true_nn_distance(T, np.arange(len(T)))
         trained = held_out_ceiling(C, T, np.random.default_rng(args.seed))
         random_rep = held_out_ceiling(rand_mean(C_ids), rand_mean(T_ids), np.random.default_rng(args.seed))
+        model_ratio = round(float(np.mean(cos_dist(Pm, T))) / max(amb, 1e-9), 4)
+        bounds = trained["best_fitted_ratio"] <= model_ratio + 1e-9
         out["per_source"][src] = {
             "n": len(items),
-            "model_ratio": round(float(np.mean(cos_dist(Pm, T))) / max(amb, 1e-9), 4),
+            "model_ratio": model_ratio,
             "trained_representation": trained,
             "random_embedding_control": random_rep,
+            # A ceiling the trained model BEATS is not a ceiling. The usual cause is not that the model is
+            # superhuman but that the ceiling is DATA-STARVED: it is fitted k-fold on a few thousand DEV
+            # rows, while the model trained on ~60k blocks. So this construction bounds "what a simple fit
+            # on this many rows achieves", NOT "what is achievable" — a much weaker statement, and it is
+            # only informative while it holds.
+            "ceiling_bounds_model": bool(bounds),
+            "ceiling_usable_as_bound": bool(bounds),
+            "ceiling_caveat": ("OK — ceiling bounds the model" if bounds else
+                               "NOT A BOUND — the model beats it, most likely because the ceiling is fitted "
+                               "on far less data than the model saw; capacity-vs-target cannot be decided "
+                               "from this run. Fit the ceiling on the TRAIN split to match the model's data "
+                               "access before drawing a conclusion."),
         }
     print(json.dumps(out, indent=1))
     if args.out:
