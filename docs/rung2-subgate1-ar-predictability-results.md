@@ -117,6 +117,64 @@ is now **in code**, not in judgement.
 The degeneracy guard also caught `family_mix32` and `presence_binary32` returning ratios of 132 and 13,991
 against near-zero ambient — unguarded, they would have read as spectacular results.
 
+## The operating envelope
+
+Train-fitted linear ridge across a horizon × granularity grid, one eligibility rule (≥384 future tokens) for
+every cell so the grid is internally comparable. Zero degenerate cells.
+
+**SCID** (n_train 15,060 / n_dev 2,267) — ceiling by offset × window:
+
+| offset ↓ / window → | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---|---|---|---|---|---|
+| 0 | 2.149 | 1.170 | 0.846 | 0.675 | **0.609** | 0.634 |
+| 32 | 2.206 | 1.262 | 0.943 | 0.775 | 0.724 | 0.759 |
+| 128 | 2.381 | 1.407 | 1.153 | 1.032 | 1.026 | 1.074 |
+| 256 | 2.474 | 1.581 | 1.362 | 1.318 | 1.325 | 1.354 |
+
+**MIMIC** (n_train 10,082 / n_dev 1,167):
+
+| offset ↓ / window → | 4 | 8 | 16 | 32 | 64 | 128 |
+|---|---|---|---|---|---|---|
+| 0 | 1.723 | 1.244 | 0.942 | 0.760 | 0.691 | **0.674** |
+| 32 | 1.734 | 1.268 | 0.972 | 0.797 | 0.740 | 0.717 |
+| 128 | 1.778 | 1.304 | 1.007 | 0.860 | 0.819 | 0.798 |
+| 256 | 1.834 | 1.329 | 1.044 | 0.895 | 0.855 | 0.844 |
+
+- **Granularity has a hard floor.** A 4-event window is catastrophically unpredictable (2.15 / 1.72); 8 is
+  still unpredictable; **16 events is where it crosses 1.0**. Below ~16 events there is essentially no
+  recoverable instance-specific signal.
+- **Granularity saturates.** 32 → 64 → 128 flattens, and SCID *reverses* (0.675 → 0.609 → 0.634). Sweet spot
+  ≈ **64 events (SCID)**, **128 (MIMIC)**. More averaging stops helping.
+- **Horizon decay differs sharply by source.** MIMIC clears in 14/24 cells, SCID in 8/24. Counter-intuitively
+  MIMIC — the *short*, per-admission source — holds predictability further out than long-trajectory SCID.
+  Plausibly a bounded homogeneous episode versus years of heterogeneous care, but that is an interpretation,
+  not something measured here.
+
+## The usable horizon is COHORT-CONDITIONAL, not a single number
+
+A fine offset sweep (32→128, step 16) at windows 32 and 64, run under two eligibility rules:
+
+| eligibility | window 32 | window 64 |
+|---|---|---|
+| natural (≥192 tok), n_train 21,109 | crosses **~33** | crosses **~33** |
+| matched (≥384 tok), n_train 15,060 | crosses **~110** | crosses **~118** |
+
+Same model, same metric, same offsets — a **3–4× difference in usable horizon** from which rows qualify.
+Requiring more future tokens selects sequences with more future remaining, and those stay predictable
+further out: **eligibility and horizon are entangled.** The crossing *is* stable across window size within
+each rule (33/33, 110/118), so it is genuinely an offset effect rather than window noise.
+
+**MIMIC never crosses under either rule** (0.740–0.876 across all cells) — robust and
+eligibility-insensitive.
+
+Design consequence, deliberately stated conditionally:
+
+- **MIMIC** — predictable across the tested horizon range, eligibility-insensitive; safe to design against.
+- **SCID** — usable horizon between **~33 and ~118 events depending on the cohort conditioned on**.
+  Restricting to patients with substantial remaining record gives the longer figure; an unrestricted cohort
+  the shorter. That is a **cohort-definition question, not a modelling one**, and this data does not settle
+  it. Quoting either figure alone would be confidently misleading.
+
 ## Scope and limits
 
 - **DEV only; TEST sealed.** NOMINATE-only: on real dev the ceiling of any decision is nomination, never
@@ -127,11 +185,16 @@ against near-zero ambient — unguarded, they would have read as spectacular res
 - Ratio > 1.0 does not mean "no information": SCID's chance arm is 3.994 against a model at 0.817.
 - One target family (T0 event-count windows). Wall-clock windows and clinically-derived endpoints are
   untested.
+- The envelope grid uses a ≥384-token eligibility rule, which re-selects the longest sequences; its absolute
+  values are comparable *within* the grid only, not against the ≥256 runs above.
+- The sweep uses linear ridge, justified because RFF beat it by only 0.001–0.004 in the validated
+  train-fitted run — a margin that is untested at the grid extremes.
 
 ## Reproduce
 
 ```
 scripts/rung2_train_fitted_ceiling.py        # the headline ceiling (all guards pass)
+scripts/rung2_horizon_granularity_sweep.py   # the envelope grid + the fine offset sweep (--windows/--offsets)
 scripts/rung2_target_definition_ceiling.py   # horizon / granularity effects + the confounder control
 scripts/rung2_order_target_ceiling.py        # order targets (carries a confounder banner)
 scripts/rung2_context_encoder_ceiling.py     # encoder arms (carries a confounder banner)
