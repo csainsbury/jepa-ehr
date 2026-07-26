@@ -51,6 +51,12 @@ def main() -> int:
     ap.add_argument("--train-rows", type=int, default=40000)
     ap.add_argument("--dev-rows", type=int, default=6000)
     ap.add_argument("--ridge", type=float, default=1e-3)
+    ap.add_argument("--windows", type=int, nargs="+", default=list(WINDOWS))
+    ap.add_argument("--offsets", type=int, nargs="+", default=list(OFFSETS))
+    ap.add_argument("--min-future-tokens", type=int, default=0,
+                    help="override the grid's natural eligibility (max offset+window). Raise it to match "
+                         "another grid: eligibility is a selection on how much sequence remains and it "
+                         "shifts absolute values, so a crossing point should be checked under both rules.")
     ap.add_argument("--seed", type=int, default=20260726)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
@@ -58,7 +64,8 @@ def main() -> int:
     import torch
     from clinical_jepa.arms.v0b.mean_token_model import build_mean_token_jepa_from_checkpoint
 
-    need = max(o + w for o in OFFSETS for w in WINDOWS)      # ONE eligibility rule for the whole grid
+    windows, offsets = tuple(args.windows), tuple(args.offsets)
+    need = max(max(o + w for o in offsets for w in windows), int(args.min_future_tokens))
     tr = _read_rows(args.target_blocks, "train", need=need, max_ctx=args.max_context_tokens,
                     max_blocks=args.train_rows, seed=args.seed)
     de = _read_rows(args.target_blocks, "dev", need=need, max_ctx=args.max_context_tokens,
@@ -78,7 +85,7 @@ def main() -> int:
 
     lin = lambda X: np.hstack([X, np.ones((len(X), 1))])
     out = {"design": "train-fitted LINEAR ridge ceiling; one eligibility rule for the whole grid",
-           "eligibility_future_tokens": need, "windows": list(WINDOWS), "offsets": list(OFFSETS),
+           "eligibility_future_tokens": need, "windows": list(windows), "offsets": list(offsets),
            "aggregate_only": True, "per_source": {}}
 
     for src in sorted(set(tr) & set(de)):
@@ -88,8 +95,8 @@ def main() -> int:
             continue
         Ctr, Cde = ctx(itr), ctx(ide)
         grid, rng = {}, np.random.default_rng(args.seed)
-        for off in OFFSETS:
-            for win in WINDOWS:
+        for off in offsets:
+            for win in windows:
                 Ttr, Tde = tgt(itr, off, win), tgt(ide, off, win)
                 amb = ambient_true_nn_distance(Tde, np.arange(len(Tde)))
                 pred = _chunked_ridge(lin, Ctr, Ttr, args.ridge, Cde)
