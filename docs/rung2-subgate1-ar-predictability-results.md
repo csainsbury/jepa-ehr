@@ -11,10 +11,24 @@ reporting: aggregate-only (per source × arm ratios; no sequence ids, tokens or 
 The first measured answer to the local Clinical-JEPA question — *can latent-state prediction support
 accurate autoregressive futures?* — on the real substrate rather than on synthetic fixtures.
 
-**Headline.** The future **is** predictable from context, for **adjacent** and **sufficiently coarse**
-windows on sequences with enough future remaining, and the trained model sits **0.016–0.029 from the best
-achievable on this representation**. The design levers are **horizon distance** and **window granularity** —
-not predictor size, not target order-awareness, not encoder richness.
+**Headline.** Predictability is real but it lives in **event space**, not in wall-clock time, and the route
+between them is **autoregressive**.
+
+1. **Event-count windows are predictable.** For adjacent, sufficiently coarse windows on sequences with
+   enough future remaining, the trained model sits **0.016–0.029 from the best achievable on this
+   representation**. Levers: horizon distance and window granularity — not predictor size, target
+   order-awareness, or encoder richness.
+2. **Direct wall-clock prediction fails outright** — 0/12 cells for either source (SCID best 1.284, MIMIC
+   1.064). Since the clinical question is always temporal, this matters more than (1).
+3. **The AR decomposition rescues it.** Predicting the next K events and then cutting at the horizon — rather
+   than predicting a time window in one shot — recovers the target for **both** sources (MIMIC 0.385, SCID
+   0.944 from the true event block, versus 0.907 / 2.077 from context alone). Coverage is not the obstacle:
+   the events needed are already inside the block that is predictable. **The entire remaining difficulty is
+   the cut point**, which is a timing problem — sub-gate 4's continuous-time head, not a bigger encoder.
+
+The single most important mechanical finding: **mean pooling cannot express a temporal prefix.** Retaining
+per-event identity and relative time moves SCID from 1.433 (fails) to 0.944 (clears) on identical
+information.
 
 Every number below is `d_self / ambient_NN`: the prediction's cosine distance to its own target, divided by
 the distance to the nearest *other* sequence's target. **< 1.0 clears the bar** — the prediction is closer to
@@ -175,6 +189,47 @@ Design consequence, deliberately stated conditionally:
   the shorter. That is a **cohort-definition question, not a modelling one**, and this data does not settle
   it. Quoting either figure alone would be confidently misleading.
 
+## Wall-clock targets: direct prediction fails, decomposition works
+
+Everything above uses **event-count** windows. The clinical question is temporal, so the translation matters.
+
+**Direct wall-clock prediction: 0/12 cells clear, both sources.** Per-source grids from the frozen Rung-0
+horizons, fully-observed windows only (censoring excluded 25,290 MIMIC and 3,057 SCID train rows; MIMIC kept
+sub-day because it saturates at ≥63 % by W=3 d).
+
+| source | grid | best cell |
+|---|---|---|
+| SCID | 30/90/365 d windows × 0/30/90/365 d offsets | **1.284** |
+| MIMIC | 0.25/0.5/1 d × 0/0.25/0.5/1 d | **1.064** |
+
+This is *consistent* with the event-count envelope, not contradictory: SCID's 30-day window holds a median of
+**4 events** and its 365-day window only **40**, against an established floor of ~16. The temporal framing
+runs into the same granularity wall from the other side.
+
+**The AR decomposition.** The direct probe demanded content *and* timing simultaneously. Splitting them:
+
+| | MIMIC (1 d) | SCID (30 d) |
+|---|---|---|
+| next-64 span, median | 1.96 d | 419 d |
+| coverage of window by next-32 | 0.889 | **1.000** |
+| context only | 0.907 | 2.077 |
+| oracle next-32, mean-pooled | 0.316 | 1.433 ✗ |
+| **oracle next-32, timing-preserved** | **0.385** | **0.944 ✓** |
+
+Coverage is not the obstacle — 32 events contain SCID's entire 30-day window in 99.6 % of cases. What failed
+was the *representation*: a mean-pooled oracle cannot express "the first 14 % of these events". Preserving
+per-event identity and relative time clears the bar for both sources on identical information.
+
+Note the asymmetry in how the arms scale: the timing-preserved arm is **flat across K** (0.385 / 0.944 at
+K = 32, 64, 128) because it can select the relevant events, whereas the mean-pooled arm **degrades** with K
+(0.316 → 0.580, 1.433 → 1.862) as irrelevant events dilute the average.
+
+**Limits of this arm.** The oracle uses the **true** future block, so it bounds the decomposition rather than
+describing a system. Real performance is event-block prediction (~0.609–0.675) *composed with* the cut, and
+excludes multi-step compounding (SCID's exposure gap grew 0.049 → 0.099 over four steps). The
+timing-preserved arm caps at 32 events, so K = 64/128 rows are truncated and the flatness partly reflects that
+cap. SCID's 0.944 only just clears.
+
 ## Scope and limits
 
 - **DEV only; TEST sealed.** NOMINATE-only: on real dev the ceiling of any decision is nomination, never
@@ -183,8 +238,10 @@ Design consequence, deliberately stated conditionally:
   smooth map *on this representation* — **not any model**. A learned encoder could move the representation
   itself, which is outside what this construction can bound.
 - Ratio > 1.0 does not mean "no information": SCID's chance arm is 3.994 against a model at 0.817.
-- One target family (T0 event-count windows). Wall-clock windows and clinically-derived endpoints are
-  untested.
+- Wall-clock results are for **T0 event-count-extracted blocks re-cut by time**; clinically-derived endpoints
+  (MACE and similar) remain untested.
+- The AR decomposition is validated as a **route**, not as a working 30-day predictor: no probe here composes
+  event-block prediction with a learned cut, and none includes multi-step compounding.
 - The envelope grid uses a ≥384-token eligibility rule, which re-selects the longest sequences; its absolute
   values are comparable *within* the grid only, not against the ≥256 runs above.
 - The sweep uses linear ridge, justified because RFF beat it by only 0.001–0.004 in the validated
@@ -195,6 +252,8 @@ Design consequence, deliberately stated conditionally:
 ```
 scripts/rung2_train_fitted_ceiling.py        # the headline ceiling (all guards pass)
 scripts/rung2_horizon_granularity_sweep.py   # the envelope grid + the fine offset sweep (--windows/--offsets)
+scripts/rung2_wallclock_target_ceiling.py    # direct wall-clock targets (per-source Rung-0 horizons)
+scripts/rung2_ar_decomposition_probe.py      # span / coverage / oracle-content, incl. the timing-preserved arm
 scripts/rung2_target_definition_ceiling.py   # horizon / granularity effects + the confounder control
 scripts/rung2_order_target_ceiling.py        # order targets (carries a confounder banner)
 scripts/rung2_context_encoder_ceiling.py     # encoder arms (carries a confounder banner)
