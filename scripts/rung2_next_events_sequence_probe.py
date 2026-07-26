@@ -27,6 +27,19 @@ Three comparisons answer it, and the middle one is the load-bearing one:
      the signature of a representation that knows WHAT comes next but not WHEN in the sequence.
   C. interval head vs per-position marginal lognormal -> are the INTERVALS predictable?
 
+Comparison C is only interpretable under `--time-features`. The base context representation is a mean of
+TIME-FREE token embeddings, so it carries no timing at all, and the first two runs were asking the interval
+head to predict inter-arrivals from features that never contained any. Those runs' null interval result
+(0.004-0.042 nats, no bucket clearing MATERIAL_INTERVAL_NATS) is therefore uninterpretable as stated. With
+`--time-features` the context is augmented with recent-interval summaries, which forks cleanly: intervals
+becoming predictable means the ENCODER discards time and the fix is to time-augment per-element features
+(the DeepSets result says a time-free mean pool provably cannot express interval queries); intervals staying
+flat when handed the timing directly is a much stronger negative about the context itself.
+
+Note the arms are not perfectly isolated: the time features enter the shared feature vector, so they reach
+the TYPE head too. That is informative — it says whether timing helps predict order — but it means type-head
+numbers differ between the two arms in two ways at once.
+
 Baselines are not decoration. Next-event prediction in an event stream is dominated by type frequency and by
 recurrence of types already seen in the context, so a head that beats neither has learned nothing, however
 good its absolute accuracy looks. Both baselines are therefore reported, and skill is stated against the
@@ -93,7 +106,12 @@ def _read_rows(target_blocks, split, *, K, min_future, max_ctx, max_rows, seed):
                 if not np.all(np.isfinite(t)):
                     continue
                 dt = np.diff(t)
-                per_src.setdefault(src, []).append((ctx, fut, dt.astype(np.float64), int(n_avail)))
+                # context arrival times, aligned to `ctx`, for the time-augmented feature arm
+                ctx_t = days[c0:c1 + 1][-max_ctx:]
+                if not np.all(np.isfinite(ctx_t)):
+                    continue
+                per_src.setdefault(src, []).append(
+                    (ctx, fut, dt.astype(np.float64), int(n_avail), ctx_t.astype(np.float64)))
             except (KeyError, OSError, ValueError, IndexError):
                 continue
     finally:
@@ -105,11 +123,34 @@ def _read_rows(target_blocks, split, *, K, min_future, max_ctx, max_rows, seed):
     return per_src
 
 
+def _time_features(items):
+    """Recent-interval summaries of the CONTEXT.
+
+    The base context representation is a mean of time-free token embeddings, so it contains no timing
+    whatsoever — asking the interval arm to predict inter-arrivals from it is asking for timing from features
+    that never carried any. Without this arm a null interval result is uninterpretable. It is also the
+    concrete form of the DeepSets point from the consult: time-augmented per-element features are what make a
+    window/interval query expressible, and time-free mean pooling is provably insufficient for it.
+    """
+    rows = []
+    for _c, _f, _d, _n, ctx_t in items:
+        gaps = np.diff(ctx_t) if len(ctx_t) > 1 else np.zeros(1)
+        lg = np.log1p(np.clip(gaps, 0.0, None))
+        span = float(ctx_t[-1] - ctx_t[0]) if len(ctx_t) > 1 else 0.0
+        rows.append([
+            float(np.mean(lg)), float(np.median(lg)), float(np.std(lg)),
+            float(lg[-1]), float(np.mean(lg[-4:])), float(np.mean(lg[-16:])),
+            float(np.max(lg)), np.log1p(max(span, 0.0)),
+            np.log1p(len(ctx_t)), np.log1p(max(span, 0.0) / max(len(ctx_t) - 1, 1)),
+        ])
+    return np.asarray(rows, dtype=np.float64)
+
+
 def _stack(items, K, end_id):
     """Types (END-padded) and intervals (NaN past the end) as dense K-column arrays."""
     Y = np.full((len(items), K), end_id, dtype=np.int64)
     D = np.full((len(items), K), np.nan, dtype=np.float64)
-    for i, (_, fut, dt, n) in enumerate(items):
+    for i, (_, fut, dt, n, *_rest) in enumerate(items):
         Y[i, :n] = fut
         D[i, :n] = dt
     return Y, D
@@ -298,6 +339,9 @@ def main() -> int:
     ap.add_argument("--softmax-l2", type=float, default=1e-4)
     ap.add_argument("--softmax-iters", type=int, default=150)
     ap.add_argument("--softmax-lr", type=float, default=2.0)
+    ap.add_argument("--time-features", action="store_true",
+                    help="augment the context representation with recent-interval summaries; REQUIRED for "
+                         "the interval arm to be interpretable, since the base representation is time-free")
     ap.add_argument("--seed", type=int, default=20260726)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
@@ -326,6 +370,7 @@ def main() -> int:
            "eligibility_note": ("no --min-future-tokens style filter; positions past the sequence end are the "
                                 "END class, so short sequences are predicted rather than excluded"),
            "no_ambient_denominator": True,
+           "context_time_features": bool(args.time_features),
            "metric_note": ("per-position type log-loss (nats) and interval log-score; both per-instance, "
                            "neither uses a corpus of other targets, so the ratio criterion's "
                            "normaliser-driven failure modes do not apply"),
@@ -343,29 +388,36 @@ def main() -> int:
         Yde, Dde = _stack(ide, K, end_id)
 
         # frozen context representation, exactly the encoder the project already has
-        Ctr = _norm(np.asarray([E[c].mean(axis=0) for c, _, _, _ in itr]))
-        Cde = _norm(np.asarray([E[c].mean(axis=0) for c, _, _, _ in ide]))
+        Ctr = _norm(np.asarray([E[c].mean(axis=0) for c, *_ in itr]))
+        Cde = _norm(np.asarray([E[c].mean(axis=0) for c, *_ in ide]))
         d = Ctr.shape[1]
         W0 = rng.normal(size=(d, args.rff_dim)) / np.sqrt(d)
         b0 = rng.uniform(0, 2 * np.pi, size=args.rff_dim)
         feat = lambda X: np.hstack([X, np.sqrt(2.0 / args.rff_dim) * np.cos(X @ W0 + b0),
                                     np.ones((len(X), 1))])
         Ftr, Fde = feat(Ctr), feat(Cde)
+        if args.time_features:
+            Ttr_f, Tde_f = _time_features(itr), _time_features(ide)
+            mu, sd = Ttr_f.mean(axis=0), np.clip(Ttr_f.std(axis=0), 1e-6, None)
+            Ftr = np.hstack([Ftr, (Ttr_f - mu) / sd])
+            Fde = np.hstack([Fde, (Tde_f - mu) / sd])
+        srec_time_features = bool(args.time_features)
         # float32 for the softmax fits (the dominant cost); the interval ridge keeps float64 for its solve
         Ftr32, Fde32 = Ftr.astype(np.float32), Fde.astype(np.float32)
 
         # context bag-of-types for the recurrence baseline
         def bags(items):
             B = np.zeros((len(items), n_classes))
-            for i, (c, _, _, _) in enumerate(items):
+            for i, (c, *_r) in enumerate(items):
                 np.add.at(B[i], c, 1.0)
                 B[i] /= max(B[i].sum(), 1e-12)
             return B
         Bde = bags(ide)
 
         srec = {"n_train": len(itr), "n_dev": len(ide),
-                "median_available_events": float(np.median([n for _, _, _, n in ide])),
-                "frac_dev_reaching_n": float(np.mean([n >= K for _, _, _, n in ide])),
+                "context_time_features": srec_time_features,
+                "median_available_events": float(np.median([it[3] for it in ide])),
+                "frac_dev_reaching_n": float(np.mean([it[3] >= K for it in ide])),
                 "vocab": V, "buckets": {}}
 
         # ---- position-POOLED head: same weights for every position. If this ties the per-position head,
