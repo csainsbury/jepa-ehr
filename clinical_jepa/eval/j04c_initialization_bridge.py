@@ -82,13 +82,16 @@ def set_identity_gelu_predictor(predictor) -> None:
         predictor.linear2.bias.zero_()
 
 
-def train_l0_decoupled_seeds(
-    train, transform, encoder_seed: int, training_seed: int, *, schedule_seed: int | None = None,
+def train_recipe_decoupled_seeds(
+    train, transform, recipe: str, encoder_seed: int, training_seed: int, *, schedule_seed: int | None = None,
     identity_predictor: bool = False, total_steps: int = 2000,
     student_variance_weight: float = 0.0, student_variance_floor: float = 0.05,
     directional_variance_weight: float = 0.0, directional_variance_floor: float = 0.005,
+    per_identity_directional_hinge: bool = False,
 ) -> TrainedCondition:
-    """Train standard L0 with separately selectable encoder, predictor, and order seeds."""
+    """Train one complete latent recipe with separately selectable component seeds."""
+    if recipe not in ("L0_EMA_POOL", "L1_AVG"):
+        raise ValueError("bridge trainer supports only L0_EMA_POOL or L1_AVG")
     if schedule_seed is None:
         schedule_seed = training_seed
     if total_steps <= 0 or total_steps > 2000:
@@ -113,18 +116,20 @@ def train_l0_decoupled_seeds(
         components.update({"student_variance_penalty": [], "v_student": []})
     if directional_variance_weight:
         components.update({"directional_variance_penalty": [], "v_direction": []})
+        if per_identity_directional_hinge:
+            components["v_direction_min"] = []
     successful = 0
     for indices in pretraining_indices(schedule_seed):
         if successful == total_steps:
             break
-        prefix_ids, prefix_times = _prefix_inputs(train, transform, "L0_EMA_POOL", indices)
+        prefix_ids, prefix_times = _prefix_inputs(train, transform, recipe, indices)
         target_ids = _tensor_rows(train.target_type_ids, indices, dtype=torch.long)
         target_times = _tensor_rows(target_times_all, indices, dtype=torch.float32)
         optimizer.zero_grad(set_to_none=True)
         _, _, pooled = encoder(prefix_ids, prefix_times, causal=False)
         teacher_blocks, _, _ = teacher(target_ids, target_times, causal=True)
-        target, valid, _ = construct_latent_targets(teacher_blocks, torch.ones_like(target_ids, dtype=torch.bool), "L0_EMA_POOL")
-        prediction = predictor(pooled, "L0_EMA_POOL")
+        target, valid, _ = construct_latent_targets(teacher_blocks, torch.ones_like(target_ids, dtype=torch.bool), recipe)
+        prediction = predictor(pooled, recipe)
         loss, parts = latent_objective(prediction, target, valid)
         if student_variance_weight:
             v_student = pooled.var(dim=0, correction=0).mean()
@@ -133,10 +138,22 @@ def train_l0_decoupled_seeds(
             parts = dict(parts, student_variance_penalty=student_penalty, v_student=v_student)
         if directional_variance_weight:
             unit_prediction = torch.nn.functional.normalize(prediction, dim=-1, eps=1e-8)
-            v_direction = unit_prediction.var(dim=0, correction=0).mean()
-            directional_penalty = directional_variance_weight * torch.clamp(directional_variance_floor - v_direction, min=0.0)
+            directional_variances = unit_prediction.var(dim=0, correction=0)
+            if per_identity_directional_hinge and prediction.ndim > 2:
+                v_direction_by_identity = directional_variances.mean(dim=-1)
+                v_direction = v_direction_by_identity.mean()
+                directional_penalty = directional_variance_weight * torch.clamp(
+                    directional_variance_floor - v_direction_by_identity, min=0.0,
+                ).mean()
+                parts = dict(parts, directional_variance_penalty=directional_penalty,
+                             v_direction=v_direction, v_direction_min=v_direction_by_identity.min())
+            else:
+                v_direction = directional_variances.mean()
+                directional_penalty = directional_variance_weight * torch.clamp(
+                    directional_variance_floor - v_direction, min=0.0,
+                )
+                parts = dict(parts, directional_variance_penalty=directional_penalty, v_direction=v_direction)
             loss = loss + directional_penalty
-            parts = dict(parts, directional_variance_penalty=directional_penalty, v_direction=v_direction)
         _finite_loss(loss)
         loss.backward()
         metadata = teacher.step_and_update(encoder, optimizer)
@@ -149,7 +166,7 @@ def train_l0_decoupled_seeds(
             components[name].append(float(parts[name].detach()))
     if successful != total_steps or teacher.successful_steps != total_steps:
         raise RuntimeError("latent successful-step mismatch")
-    return TrainedCondition("L0_EMA_POOL", encoder, teacher, predictor, {
+    return TrainedCondition(recipe, encoder, teacher, predictor, {
         "attempted_steps": total_steps, "successful_steps": successful,
         "optimizer_steps": successful, "ema_updates": teacher.successful_steps,
         "losses": _loss_summary(totals, components),
@@ -159,4 +176,13 @@ def train_l0_decoupled_seeds(
         "student_variance_floor": student_variance_floor,
         "directional_variance_weight": directional_variance_weight,
         "directional_variance_floor": directional_variance_floor,
+        "recipe": recipe,
+        "per_identity_directional_hinge": per_identity_directional_hinge,
     })
+
+
+def train_l0_decoupled_seeds(train, transform, encoder_seed: int, training_seed: int, **kwargs) -> TrainedCondition:
+    """Backward-compatible L0 wrapper for existing bridge evidence scripts."""
+    return train_recipe_decoupled_seeds(
+        train, transform, "L0_EMA_POOL", encoder_seed, training_seed, **kwargs,
+    )
