@@ -52,6 +52,7 @@ SOURCE_DIGESTS = {
 C0_HEAD_COMPONENT_CODE = 40
 EMA_MOMENTUM = 0.996
 READOUT_RIDGE = 1e-3
+READOUT_NEWTON_DECREMENT_SQUARED_TOLERANCE = 1e-12
 PRODUCTION_PATH_COUNT = 123
 
 
@@ -710,6 +711,16 @@ def fit_deterministic_logistic(
                 accepted = True
                 break
         if not accepted:
+            # A strictly convex Newton iterate can be stationary while every
+            # representable backtracking candidate has the same rounded
+            # objective.  Accept only when the squared Newton decrement gives
+            # a stringent objective-gap witness; otherwise remain fail-closed.
+            decrement_squared = float(np.dot(gradient, step))
+            if math.isfinite(decrement_squared) and \
+               0.0 <= decrement_squared <= READOUT_NEWTON_DECREMENT_SQUARED_TOLERANCE:
+                coefficients = parameters[1:] if intercept else parameters
+                readout_intercept = float(parameters[0]) if intercept else 0.0
+                return ReadoutFit(np.ascontiguousarray(coefficients), readout_intercept, iteration, True)
             raise PrototypeInvariantError("READOUT_INVALID")
     raise PrototypeInvariantError("READOUT_INVALID")
 

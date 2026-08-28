@@ -161,6 +161,85 @@ def test_r2_constant_nearly_constant_and_extreme_readout_fixtures():
     assert fit.converged and np.isfinite(fit.coefficients).all()
 
 
+def test_r2_rounded_objective_stagnation_accepts_only_stationary_newton_iterate(monkeypatch):
+    import clinical_jepa.eval.j04c_v3_r0resid as r0
+
+    rng = np.random.default_rng(5)
+    standardized, _ = fit_standardization(rng.normal(size=(40, 16)))
+    labels = (rng.random(40) < 0.5).astype(np.float64)
+    first = fit_deterministic_logistic(standardized, labels)
+    second = fit_deterministic_logistic(standardized.copy(), labels.copy())
+    assert first.converged and first.iterations == 7
+    assert np.array_equal(first.coefficients, second.coefficients)
+    assert first.intercept == second.intercept
+    parameters = np.concatenate(([first.intercept], first.coefficients))
+    _, gradient, hessian, _ = r0._readout_terms(
+        parameters, standardized, labels, base_logits=None, intercept=True, ridge=r0.READOUT_RIDGE,
+    )
+    step = np.linalg.solve(hessian, gradient)
+    assert np.linalg.norm(gradient, ord=np.inf) > 1e-10
+    assert 0.0 <= float(np.dot(gradient, step)) <= r0.READOUT_NEWTON_DECREMENT_SQUARED_TOLERANCE
+
+    def nonstationary_flat_terms(parameters, X, y, *, base_logits, intercept, ridge):
+        size = parameters.size
+        return 1.0, np.ones(size), np.eye(size), np.zeros(y.size)
+
+    monkeypatch.setattr(r0, "_readout_terms", nonstationary_flat_terms)
+    with pytest.raises(r0.PrototypeInvariantError, match="READOUT_INVALID"):
+        fit_deterministic_logistic(np.zeros((8, 16)), np.array([0.0, 1.0] * 4))
+
+
+def test_r2_newton_decrement_tolerance_boundary_is_exact(monkeypatch):
+    import clinical_jepa.eval.j04c_v3_r0resid as r0
+
+    tolerance = r0.READOUT_NEWTON_DECREMENT_SQUARED_TOLERANCE
+    assert tolerance == 1e-12
+    X = np.zeros((8, 16))
+    y = np.array([0.0, 1.0] * 4)
+
+    def flat_terms(decrement_squared):
+        def terms(parameters, X, y, *, base_logits, intercept, ridge):
+            size = parameters.size
+            gradient = np.zeros(size)
+            gradient[0] = 1.0
+            hessian = np.eye(size)
+            hessian[0, 0] = 1.0 / decrement_squared
+            return 1.0, gradient, hessian, np.zeros(y.size)
+        return terms
+
+    for decrement_squared in (np.nextafter(tolerance, 0.0), tolerance):
+        monkeypatch.setattr(r0, "_readout_terms", flat_terms(decrement_squared))
+        fit = fit_deterministic_logistic(X, y)
+        assert fit.converged and fit.iterations == 0
+
+    monkeypatch.setattr(r0, "_readout_terms", flat_terms(np.nextafter(tolerance, np.inf)))
+    with pytest.raises(r0.PrototypeInvariantError, match="READOUT_INVALID"):
+        fit_deterministic_logistic(X, y)
+
+
+def test_r2_newton_nonfinite_and_singular_terms_remain_invalid(monkeypatch):
+    import clinical_jepa.eval.j04c_v3_r0resid as r0
+
+    X = np.zeros((8, 16))
+    y = np.array([0.0, 1.0] * 4)
+
+    def nonfinite_terms(parameters, X, y, *, base_logits, intercept, ridge):
+        size = parameters.size
+        return np.inf, np.ones(size), np.eye(size), np.zeros(y.size)
+
+    monkeypatch.setattr(r0, "_readout_terms", nonfinite_terms)
+    with pytest.raises(r0.PrototypeInvariantError, match="READOUT_INVALID"):
+        fit_deterministic_logistic(X, y)
+
+    def singular_terms(parameters, X, y, *, base_logits, intercept, ridge):
+        size = parameters.size
+        return 1.0, np.ones(size), np.zeros((size, size)), np.zeros(y.size)
+
+    monkeypatch.setattr(r0, "_readout_terms", singular_terms)
+    with pytest.raises(r0.PrototypeInvariantError, match="READOUT_INVALID"):
+        fit_deterministic_logistic(X, y)
+
+
 def test_r2_nuisance_intervention_and_correspondence_null_exactness():
     split = generate_factor_split(TEST_GENERATOR_SEED, CAL_OOD, 32)
     changed = nuisance_intervention(split, 404)
