@@ -34,6 +34,11 @@ from clinical_jepa.targets.next_event_contract import construct_latent_targets, 
 NAMESPACE = "BP011-J04C-V3-R0RESID-BETA"
 CONTRACT_SHA256 = "c765bfe6e68db25a74f7a3aa7a999a4ac6cba7ac88661b840e99d3db192eabba"
 TARGET_COMMIT = "c27f20d4e7a67b29c8f3e23dc5f2cab45e170f81"
+IMPLEMENTATION_PATHS = (
+    "clinical_jepa/eval/j04c_v3_r0resid.py",
+    "scripts/bp_clinjepa_011_j04c_v3_r0resid_beta.py",
+    "tests/test_bp_clinjepa_011_j04c_v3_r0resid.py",
+)
 SOURCE_DIGESTS = {
     "clinical_jepa/arms/v0f/own_latent.py": "f3cd838225f8099c79d604036961cc64170c98a87b925fd960550846b7c50dfb",
     "clinical_jepa/targets/next_event_contract.py": "7903f587996a2fd82fde5b13316f853cd06b2c1c8c13eca642dedcad7f8c755d",
@@ -80,8 +85,10 @@ class ApprovedSeedEnvelope:
 class BuildProvenance:
     schema: Literal["BP011-J04C-V3-R0RESID-BUILD-PROVENANCE-V1"]
     target_commit: str
+    implementation_commit: str
     clean_tree: bool
     source_digests: dict[str, str]
+    implementation_digests: dict[str, str]
     python_version: str
     numpy_version: str
     torch_version: str
@@ -960,13 +967,22 @@ def approved_envelope_from_dict(value: object) -> ApprovedSeedEnvelope:
 
 
 def build_provenance_from_dict(value: object) -> BuildProvenance:
-    keys = {"schema", "target_commit", "clean_tree", "source_digests", "python_version",
-            "numpy_version", "torch_version", "platform_machine", "platform_system", "blas_fingerprint"}
+    keys = {"schema", "target_commit", "implementation_commit", "clean_tree", "source_digests",
+            "implementation_digests", "python_version", "numpy_version", "torch_version",
+            "platform_machine", "platform_system", "blas_fingerprint"}
     if not isinstance(value, dict) or set(value) != keys or value.get("schema") != "BP011-J04C-V3-R0RESID-BUILD-PROVENANCE-V1":
         raise PrototypeInvariantError("INPUT_SCHEMA")
     if value["target_commit"] != TARGET_COMMIT or value["clean_tree"] is not True:
         raise PrototypeInvariantError("PROVENANCE_CONTENT")
     if value["source_digests"] != SOURCE_DIGESTS:
+        raise PrototypeInvariantError("PROVENANCE_CONTENT")
+    implementation_commit = value["implementation_commit"]
+    implementation_digests = value["implementation_digests"]
+    if not isinstance(implementation_commit, str) or len(implementation_commit) != 40 \
+       or any(character not in "0123456789abcdef" for character in implementation_commit):
+        raise PrototypeInvariantError("PROVENANCE_CONTENT")
+    if not isinstance(implementation_digests, dict) or set(implementation_digests) != set(IMPLEMENTATION_PATHS) \
+       or any(not _is_digest(digest) for digest in implementation_digests.values()):
         raise PrototypeInvariantError("PROVENANCE_CONTENT")
     if any(not isinstance(value[name], str) or not value[name] for name in (
         "python_version", "numpy_version", "torch_version", "platform_machine", "platform_system", "blas_fingerprint"
@@ -1581,8 +1597,10 @@ def run_production_beta(
 
     provenance_output = {
         "build_provenance_sha256": build_provenance_sha256, "target_commit": provenance.target_commit,
-        "clean_tree": provenance.clean_tree, "expected_source_digests": dict(SOURCE_DIGESTS),
+        "implementation_commit": provenance.implementation_commit, "clean_tree": provenance.clean_tree,
+        "expected_source_digests": dict(SOURCE_DIGESTS),
         "verified_actual_source_digests": dict(provenance.source_digests),
+        "implementation_digests": dict(provenance.implementation_digests),
         "python_version": provenance.python_version, "numpy_version": provenance.numpy_version,
         "torch_version": provenance.torch_version, "platform_machine": provenance.platform_machine,
         "platform_system": provenance.platform_system, "blas_fingerprint": provenance.blas_fingerprint,
@@ -1620,13 +1638,21 @@ def _require_mapping_keys(value: object, keys: set[str]) -> dict[str, object]:
 
 def _validate_success_details(value: dict[str, object]) -> None:
     provenance = _require_mapping_keys(value["provenance"], {
-        "build_provenance_sha256", "target_commit", "clean_tree", "expected_source_digests",
-        "verified_actual_source_digests", "python_version", "numpy_version", "torch_version",
-        "platform_machine", "platform_system", "blas_fingerprint",
+        "build_provenance_sha256", "target_commit", "implementation_commit", "clean_tree",
+        "expected_source_digests", "verified_actual_source_digests", "implementation_digests",
+        "python_version", "numpy_version", "torch_version", "platform_machine", "platform_system",
+        "blas_fingerprint",
     })
     if provenance["target_commit"] != TARGET_COMMIT or provenance["clean_tree"] is not True \
        or provenance["expected_source_digests"] != SOURCE_DIGESTS \
        or provenance["verified_actual_source_digests"] != SOURCE_DIGESTS:
+        raise PrototypeInvariantError("SERIALIZATION_INVALID")
+    if not isinstance(provenance["implementation_commit"], str) or len(provenance["implementation_commit"]) != 40 \
+       or any(character not in "0123456789abcdef" for character in provenance["implementation_commit"]):
+        raise PrototypeInvariantError("SERIALIZATION_INVALID")
+    implementation_digests = provenance["implementation_digests"]
+    if not isinstance(implementation_digests, dict) or set(implementation_digests) != set(IMPLEMENTATION_PATHS) \
+       or any(not _is_digest(digest) for digest in implementation_digests.values()):
         raise PrototypeInvariantError("SERIALIZATION_INVALID")
     seed_audit = _require_mapping_keys(value["seed_audit"], {
         "approved_envelope_sha256", "manifest_sha256", "historical_inventory_sha256",

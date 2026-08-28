@@ -369,8 +369,10 @@ def _valid_success_schema_fixture():
         "claim_ceiling": "one-generator directional public-synthetic frozen-R0 residual beta only",
         "provenance": {
             "build_provenance_sha256": digest, "target_commit": r0.TARGET_COMMIT,
-            "clean_tree": True, "expected_source_digests": dict(r0.SOURCE_DIGESTS),
+            "implementation_commit": "1" * 40, "clean_tree": True,
+            "expected_source_digests": dict(r0.SOURCE_DIGESTS),
             "verified_actual_source_digests": dict(r0.SOURCE_DIGESTS),
+            "implementation_digests": {path: digest for path in r0.IMPLEMENTATION_PATHS},
             "python_version": "test", "numpy_version": "test", "torch_version": "test",
             "platform_machine": "test", "platform_system": "test", "blas_fingerprint": "test",
         },
@@ -399,6 +401,26 @@ def _valid_success_schema_fixture():
         },
         "terminal_outcome": "INELIGIBLE",
     }
+
+
+def test_r2_build_provenance_binds_external_implementation_commit_and_digests():
+    import clinical_jepa.eval.j04c_v3_r0resid as r0
+    digest = "0" * 64
+    value = {
+        "schema": "BP011-J04C-V3-R0RESID-BUILD-PROVENANCE-V1",
+        "target_commit": r0.TARGET_COMMIT, "implementation_commit": "1" * 40,
+        "clean_tree": True, "source_digests": dict(r0.SOURCE_DIGESTS),
+        "implementation_digests": {path: digest for path in r0.IMPLEMENTATION_PATHS},
+        "python_version": "test", "numpy_version": "test", "torch_version": "test",
+        "platform_machine": "test", "platform_system": "test", "blas_fingerprint": "test",
+    }
+    parsed = r0.build_provenance_from_dict(value)
+    assert parsed.implementation_commit == "1" * 40
+    assert parsed.implementation_digests == value["implementation_digests"]
+    with pytest.raises(Exception, match="PROVENANCE_CONTENT"):
+        r0.build_provenance_from_dict(dict(value, implementation_commit="not-a-commit"))
+    with pytest.raises(Exception, match="PROVENANCE_CONTENT"):
+        r0.build_provenance_from_dict(dict(value, implementation_digests={r0.IMPLEMENTATION_PATHS[0]: digest}))
 
 
 def test_r2_complete_positive_success_fixture_passes_recursive_schema():
