@@ -2,7 +2,8 @@
 from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
-import hashlib,json,math
+import contextlib,hashlib,io,json,math,platform,subprocess
+from pathlib import Path
 from typing import Callable,Mapping
 import numpy as np
 import torch
@@ -34,8 +35,28 @@ class Envelope:
  schema:str;manifest_sha256:str;historical_inventory_sha256:str;expected_generated_audit_sha256:str;production_path_count:int
 BuildProvenance=access.BuildProvenance
 
+@dataclass(frozen=True)
+class ExecutionEnvironmentVerification:
+ implementation_commit:str;source_digests:Mapping[str,str];implementation_digests:Mapping[str,str];runtime_fingerprint:Mapping[str,str];source_pins:bool
+
 def canonical(v):return access.canonical(v)
 def sha256_hex(v):return access.sha256_hex(v)
+def _command(*args):return subprocess.check_output(args,text=True).strip()
+def _file_sha256(path):return sha256_hex(Path(path).read_bytes())
+def runtime_fingerprint():
+ blas=io.StringIO()
+ with contextlib.redirect_stdout(blas):np.__config__.show()
+ return {"python_version":platform.python_version(),"numpy_version":np.__version__,"torch_version":torch.__version__,"platform_machine":platform.machine(),"platform_system":platform.system(),"blas_fingerprint":"sha256:"+sha256_hex(blas.getvalue().encode())}
+def verify_execution_environment(p):
+ """Verify the live checkout and runtime against supplied provenance immediately before execution."""
+ if _command("git","rev-parse","HEAD")!=p.implementation_commit or _command("git","status","--porcelain"):raise PrototypeInvariantError("PROVENANCE_CONTENT")
+ try:subprocess.check_call(["git","merge-base","--is-ancestor",p.target_commit,p.implementation_commit],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ except subprocess.CalledProcessError as exc:raise PrototypeInvariantError("PROVENANCE_CONTENT") from exc
+ for path,digest in {**p.source_digests,**p.implementation_digests}.items():
+  if _file_sha256(path)!=digest:raise PrototypeInvariantError("PROVENANCE_CONTENT")
+ runtime=runtime_fingerprint()
+ if any(getattr(p,key)!=value for key,value in runtime.items()):raise PrototypeInvariantError("PROVENANCE_CONTENT")
+ return ExecutionEnvironmentVerification(p.implementation_commit,dict(p.source_digests),dict(p.implementation_digests),runtime,True)
 def _r(p,*x):return {"purpose":p,"path":list(x)}
 def _exact(v,keys):return isinstance(v,dict) and set(v)==set(keys)
 def manifest_from_dict(v):
@@ -181,7 +202,9 @@ def validate_success(v):
   if not _exact(m,{"file","dtype","shape","sha256","byte_count"}) or m!={"file":ARRAY_FILES[k],"dtype":dtype,"shape":[n],"sha256":m.get("sha256"),"byte_count":bytes_} or not access._digest(m.get("sha256")):raise PrototypeInvariantError("SERIALIZATION_INVALID")
  full.validate_recursive_output(v);access.delta.prior._validate_digest_fields(v)
 
-def run_beta(m,p,seed,*,build_provenance_sha256,approved_envelope_sha256,phase_callback:Callable[[str],None]|None=None):
+def run_beta(m,p,seed,*,execution_verification,build_provenance_sha256,approved_envelope_sha256,phase_callback:Callable[[str],None]|None=None):
+ if not isinstance(execution_verification,ExecutionEnvironmentVerification) or execution_verification.source_pins is not True or execution_verification.implementation_commit!=p.implementation_commit or dict(execution_verification.source_digests)!=dict(p.source_digests) or dict(execution_verification.implementation_digests)!=dict(p.implementation_digests) or dict(execution_verification.runtime_fingerprint)!=runtime_fingerprint():raise PrototypeInvariantError("PROVENANCE_CONTENT")
+ source_pins=execution_verification.source_pins
  from clinical_jepa.eval.j04c_falsifier import TRAIN,PROBE_FIT,CAL_OOD,fit_stage0_time_transform,generate_factor_split
  from clinical_jepa.eval.j04c_nuisance_bridge import independent_train_nuisance
  from scripts.bp_clinjepa_011_j04c_l1_generator_family import parameterized_split
@@ -198,4 +221,4 @@ def run_beta(m,p,seed,*,build_provenance_sha256,approved_envelope_sha256,phase_c
  if any(r0[k]!=r1[k] for k in ("initial_state_hash","complete_schedule_hash","target_hash","weight_hash","selected_index_hash","class_counts","class_weights")):raise PrototypeInvariantError("READOUT_INVALID")
  notify("CAL");z0c=access.pooled(e0c,cal,transform);z1c=access.pooled(l1,cal,transform);_assert_frozen(e0,l1,frozen);ycal=cal.S[:,0].astype(np.uint8);a0=access.assay(access.predict(p0,z0c),ycal);a1=access.assay(access.predict(p1,z1c),ycal);d=np.ascontiguousarray(a1.pop("row_scores")-a0.pop("row_scores"),dtype="<f8");_assert_frozen(e0,l1,frozen);reference,td=stage1.threshold_reference_report();rows,_=stage1.trained_collapse_diagnostics(l1,cal,transform,reference);constraints=bool(len(rows)==4 and all(x["both_metrics_pass"] for x in rows));_assert_frozen(e0,l1,frozen)
  notify("BOOTSTRAP");centered,stats=bootstrap(d,m.bootstrap_root);_assert_frozen(e0,l1,frozen);out,useful=terminal(a1["balanced_accuracy"],constraints,stats["bounds"]);raw,meta=array_artifacts(selected,d,centered)
- notify("SERIALIZATION");prov={"build_provenance_sha256":build_provenance_sha256,"target_commit":p.target_commit,"implementation_commit":p.implementation_commit,"clean_tree":p.clean_tree,"source_digests":p.source_digests,"implementation_digests":p.implementation_digests,"python_version":p.python_version,"numpy_version":p.numpy_version,"torch_version":p.torch_version,"platform_machine":p.platform_machine,"platform_system":p.platform_system,"blas_fingerprint":p.blas_fingerprint};result={"schema":"BP011-J04C-L1AVG-SAMPLE-EFFICIENCY-N256-RESULT-V1","namespace":NAMESPACE,"contract_sha256":CONTRACT_SHA256,"claim_ceiling":"EXACT_ONE_PAIR_ONE_MODEL_256_LABEL_MATCHED_ACCESSIBILITY_ONLY","provenance":prov,"seed_audit":{"approved_envelope_sha256":approved_envelope_sha256,**dict(seed)},"fixed":fixed(),"checks":{k:True for k in ("source_pins","seed_audit","selection_exact","matched_initialization","e0_immutable","l1_immutable","l1_training_exact","identical_readout_protocol","full_batch_schedule","cal_only_evaluation","paired_bootstrap","retained_arrays","output_allowlist")},"selection":{"rule":"FIRST_128_PER_CLASS_UNION_CANONICAL_ORDER","selected_index_hash":selected_hash,"selected_target_hash":target_hash,"class_counts":[128,128],"shape":[256]},"model":{"state_hashes":{"e0":access.state_hash(e0),"l1_encoder":access.state_hash(l1.encoder),"l1_teacher":access.state_hash(l1.teacher),"l1_predictor":access.state_hash(l1.predictor)},"l1_training":{k:v for k,v in l1.training.items() if k not in {"encoder_seed","predictor_seed","schedule_seed"}},"probe_fits":{"E0":r0,"L1":r1},"cal":{"E0":a0,"L1":a1},"constraints":{"threshold_digest":td,"all_pass":constraints,"rows":rows}},"bootstrap":{"replicates":10000,"quantile_method":"linear",**stats,"useful":useful},"retained_arrays":meta,"valid":True,"terminal_outcome":out};_assert_frozen(e0,l1,frozen);validate_success(result);validate_retained_arrays(result,raw);return result,raw
+ notify("SERIALIZATION");prov={"build_provenance_sha256":build_provenance_sha256,"target_commit":p.target_commit,"implementation_commit":p.implementation_commit,"clean_tree":p.clean_tree,"source_digests":p.source_digests,"implementation_digests":p.implementation_digests,"python_version":p.python_version,"numpy_version":p.numpy_version,"torch_version":p.torch_version,"platform_machine":p.platform_machine,"platform_system":p.platform_system,"blas_fingerprint":p.blas_fingerprint};result={"schema":"BP011-J04C-L1AVG-SAMPLE-EFFICIENCY-N256-RESULT-V1","namespace":NAMESPACE,"contract_sha256":CONTRACT_SHA256,"claim_ceiling":"EXACT_ONE_PAIR_ONE_MODEL_256_LABEL_MATCHED_ACCESSIBILITY_ONLY","provenance":prov,"seed_audit":{"approved_envelope_sha256":approved_envelope_sha256,**dict(seed)},"fixed":fixed(),"checks":{"source_pins":source_pins,**{k:True for k in ("seed_audit","selection_exact","matched_initialization","e0_immutable","l1_immutable","l1_training_exact","identical_readout_protocol","full_batch_schedule","cal_only_evaluation","paired_bootstrap","retained_arrays","output_allowlist")}},"selection":{"rule":"FIRST_128_PER_CLASS_UNION_CANONICAL_ORDER","selected_index_hash":selected_hash,"selected_target_hash":target_hash,"class_counts":[128,128],"shape":[256]},"model":{"state_hashes":{"e0":access.state_hash(e0),"l1_encoder":access.state_hash(l1.encoder),"l1_teacher":access.state_hash(l1.teacher),"l1_predictor":access.state_hash(l1.predictor)},"l1_training":{k:v for k,v in l1.training.items() if k not in {"encoder_seed","predictor_seed","schedule_seed"}},"probe_fits":{"E0":r0,"L1":r1},"cal":{"E0":a0,"L1":a1},"constraints":{"threshold_digest":td,"all_pass":constraints,"rows":rows}},"bootstrap":{"replicates":10000,"quantile_method":"linear",**stats,"useful":useful},"retained_arrays":meta,"valid":True,"terminal_outcome":out};_assert_frozen(e0,l1,frozen);validate_success(result);validate_retained_arrays(result,raw);return result,raw
