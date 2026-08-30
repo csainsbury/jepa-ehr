@@ -22,6 +22,12 @@ def test_uninterrupted_real_probe_short_snapshot_is_byte_exact_accepted():
 def test_tiny_real_encoder_and_probe_seams():
  e0=stage1._fresh_encoder(H+3).eval();e1=stage1._fresh_encoder(H+3).eval();assert a.full._state_dict_bytes(e0)==a.full._state_dict_bytes(e1)
  z=torch.arange(128,dtype=torch.float32).reshape(8,16)/128;y=np.array([0,1]*4,dtype=np.uint8);batch=[np.array([0,1,2,3])]*250;ext=[np.array([4,5,6,7])]*1750;tr,c=a._trajectory(z,y,H+4,batch,ext);assert c['class_counts']==[4,4] and tr[250]['probe_state_bytes']!=tr[2000]['probe_state_bytes']
+@pytest.mark.parametrize('arm',['E0','L1'])
+def test_frozen_encoder_byte_assertion_rejects_perturbation(arm):
+ e0=stage1._fresh_encoder(H+3).eval();l1=stage1.TrainedCondition('L1_AVG',stage1._fresh_encoder(H+3).eval(),None,None,{});stage1.freeze_encoder(stage1.TrainedCondition('E0',e0,None,None,{}));stage1.freeze_encoder(l1);frozen={'E0':a.full._state_dict_bytes(e0),'L1':a.full._state_dict_bytes(l1.encoder)}
+ assert a._assert_frozen_encoder_bytes(e0,l1,frozen)=={'e0_immutable':True,'l1_immutable':True};module=e0 if arm=='E0' else l1.encoder
+ with torch.no_grad():next(module.parameters()).view(-1)[0].add_(1.)
+ with pytest.raises(a.PrototypeInvariantError,match='READOUT_INVALID'):a._assert_frozen_encoder_bytes(e0,l1,frozen)
 def test_simultaneous_bootstrap_golden_and_retained_offline_reproduction():
  base=np.resize(np.array([-1.,0.,1.,2.]),2048);rows=np.vstack((base,base+.25,np.full(2048,.25)));idx=np.tile(np.arange(2048),(9,1));M,q,obs,bounds=a.bootstrap(rows,H+5,replicates=9,supplied_indices=idx);assert np.array_equal(M,np.zeros(9));assert q==0 and np.array_equal(obs,np.array([.5,.75,.25]));assert bounds=={'UCB95_short':.5,'LCB95_long':.75,'UCB95_long':.75,'LCB95_recovery':.25}
  raw,meta=a.array_artifacts(rows,np.zeros(10000));result={'retained_arrays':meta,'bootstrap':{'observed':obs.tolist(),'critical_value':0.,'bounds':bounds}};a.validate_retained_arrays(result,raw);bad=dict(raw);bad['M']=bad['M'][:-8]
