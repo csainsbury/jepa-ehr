@@ -137,18 +137,31 @@ def validate_success(v):
   if m!={"file":ARRAY_FILES[k],"dtype":"<f8","shape":[2048 if k!="M" else 10000],"sha256":m.get("sha256"),"byte_count":16384 if k!="M" else 80000} or not one._digest(m.get("sha256")):raise PrototypeInvariantError("SERIALIZATION_INVALID")
  boot=v.get("bootstrap");
  if not isinstance(boot,dict) or set(boot)!={"replicates","family_size","quantile_method","critical_value","observed","bounds"} or boot["replicates"]!=10000 or boot["family_size"]!=4 or boot["quantile_method"]!="linear" or not one._finite(boot["critical_value"]) or not isinstance(boot["observed"],list) or len(boot["observed"])!=3 or any(not one._finite(x) for x in boot["observed"]) or not isinstance(boot["bounds"],dict) or set(boot["bounds"])!={"UCB95_short","LCB95_long","UCB95_long","LCB95_recovery"} or any(not one._finite(x) for x in boot["bounds"].values()):raise PrototypeInvariantError("SERIALIZATION_INVALID")
+ seed=v.get("seed_audit");sk={"approved_envelope_sha256","manifest_sha256","historical_inventory_sha256","generated_audit_sha256","production_path_count","historical_path_count","path_intersection_count","root_intersection_count"}
+ if not isinstance(seed,dict) or set(seed)!=sk or any(not one._digest(seed[k]) for k in ("approved_envelope_sha256","manifest_sha256","historical_inventory_sha256","generated_audit_sha256")) or any(not one._int(seed[k]) or seed[k]<0 for k in ("production_path_count","historical_path_count","path_intersection_count","root_intersection_count")) or (seed["production_path_count"],seed["path_intersection_count"],seed["root_intersection_count"])!=(291,0,0):raise PrototypeInvariantError("SERIALIZATION_INVALID")
  model=v.get("model")
- if not isinstance(model,dict) or set(model)!={"state_hashes","l1_training","probe_fits","cal","constraints"}:raise PrototypeInvariantError("SERIALIZATION_INVALID")
+ if not isinstance(model,dict) or set(model)!={"state_hashes","l1_training","probe_fits","cal","constraints"} or not isinstance(model["state_hashes"],dict) or set(model["state_hashes"])!={"e0","l1_encoder","l1_teacher","l1_predictor"} or any(not one._digest(x) for x in model["state_hashes"].values()):raise PrototypeInvariantError("SERIALIZATION_INVALID")
  one._validate_l1_training(model["l1_training"]);c=model["constraints"]
  if not isinstance(c,dict) or set(c)!={"threshold_digest","all_pass","rows"} or not one._digest(c["threshold_digest"]) or not isinstance(c["all_pass"],bool) or not one._validate_constraint_rows(c["rows"]) or c["all_pass"] is not all(x["both_metrics_pass"] for x in c["rows"]):raise PrototypeInvariantError("SERIALIZATION_INVALID")
+ commons=[]
  for arm in ("E0","L1"):
   pf=model["probe_fits"].get(arm)
   if not isinstance(pf,dict) or set(pf)!={"common","short","long"}:raise PrototypeInvariantError("SERIALIZATION_INVALID")
-  for n,steps in (("short",250),("long",2000)):
-   s=pf[n]
-   if not isinstance(s,dict) or set(s)!={"probe_state_hash","optimizer_state_hash","complete_schedule_hash","attempted_steps","successful_steps","optimizer_steps","first_100_mean_loss","last_100_mean_loss"} or any(not one._digest(s[k]) for k in ("probe_state_hash","optimizer_state_hash","complete_schedule_hash")) or tuple(s[k] for k in ("attempted_steps","successful_steps","optimizer_steps"))!=(steps,steps,steps):raise PrototypeInvariantError("SERIALIZATION_INVALID")
+  common=pf["common"]
+  if not isinstance(common,dict) or set(common)!={"initial_state_hash","target_hash","weight_hash","class_counts","class_weights"} or any(not one._digest(common[k]) for k in ("initial_state_hash","target_hash","weight_hash")) or not isinstance(common["class_counts"],list) or len(common["class_counts"])!=2 or any(not one._int(x) or x<=0 for x in common["class_counts"]) or sum(common["class_counts"])!=2048 or not isinstance(common["class_weights"],list) or len(common["class_weights"])!=2 or any(not one._finite(x) or x<=0 for x in common["class_weights"]):raise PrototypeInvariantError("SERIALIZATION_INVALID")
+  commons.append(common)
+  for name,steps in (("short",250),("long",2000)):
+   s=pf[name]
+   if not isinstance(s,dict) or set(s)!={"probe_state_hash","optimizer_state_hash","complete_schedule_hash","attempted_steps","successful_steps","optimizer_steps","first_100_mean_loss","last_100_mean_loss"} or any(not one._digest(s[k]) for k in ("probe_state_hash","optimizer_state_hash","complete_schedule_hash")) or tuple(s[k] for k in ("attempted_steps","successful_steps","optimizer_steps"))!=(steps,steps,steps) or not one._finite(s["first_100_mean_loss"]) or not one._finite(s["last_100_mean_loss"]):raise PrototypeInvariantError("SERIALIZATION_INVALID")
+ if commons[0]!=commons[1] or any(model["probe_fits"]["E0"][name]["complete_schedule_hash"]!=model["probe_fits"]["L1"][name]["complete_schedule_hash"] for name in ("short","long")):raise PrototypeInvariantError("SERIALIZATION_INVALID")
+ if not isinstance(model["cal"],dict) or set(model["cal"])!={"short","long"}:raise PrototypeInvariantError("SERIALIZATION_INVALID")
+ target=None
  for t in ("short","long"):
-  for arm in ("E0","L1"):one._validate_assay(model["cal"][t][arm])
+  if not isinstance(model["cal"][t],dict) or set(model["cal"][t])!={"E0","L1"}:raise PrototypeInvariantError("SERIALIZATION_INVALID")
+  for arm in ("E0","L1"):
+   one._validate_assay(model["cal"][t][arm]);current=model["cal"][t][arm]["target_hash"]
+   if target is not None and current!=target:raise PrototypeInvariantError("SERIALIZATION_INVALID")
+   target=current
  if terminal(model["cal"]["long"]["L1"]["balanced_accuracy"],c["all_pass"],boot["bounds"])!=v["terminal_outcome"]:raise PrototypeInvariantError("SERIALIZATION_INVALID")
  full.validate_recursive_output(v);one.delta.prior._validate_digest_fields(v)
 
